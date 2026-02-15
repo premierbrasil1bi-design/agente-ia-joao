@@ -9,18 +9,32 @@ router.post('/webhook/evolution', async (req, res) => {
 
   console.log('[EVOLUTION WEBHOOK] Payload:', JSON.stringify(body));
 
-  const text =
-    body?.data?.message?.conversation ||
-    body?.data?.message?.extendedTextMessage?.text;
+    // Processa apenas mensagens reais
+    if (body?.event !== 'messages.upsert') {
+      return res.status(200).json({ received: true });
+    }
 
-  let number = body?.data?.key?.remoteJid;
-  if (typeof number === 'string' && number.endsWith('@s.whatsapp.net')) {
-    number = number.replace('@s.whatsapp.net', '');
-  }
+    const messageData = Array.isArray(body?.data)
+      ? body.data[0]
+      : body?.data;
 
-  if (!text || !number) {
-    return res.status(200).json({ received: true });
-  }
+    const text =
+      messageData?.message?.conversation ||
+      messageData?.message?.extendedTextMessage?.text;
+
+    let number = messageData?.key?.remoteJid;
+
+    if (typeof number === 'string' && number.endsWith('@s.whatsapp.net')) {
+      number = number.replace('@s.whatsapp.net', '');
+    }
+
+    if (!text || !number) {
+      return res.status(200).json({ received: true });
+    }
+
+    if (number.length < 12) {
+      console.warn('[EVOLUTION WARNING] Número suspeito:', number);
+    }
 
   const { EVOLUTION_URL, EVOLUTION_INSTANCE, EVOLUTION_API_KEY } = process.env;
 
