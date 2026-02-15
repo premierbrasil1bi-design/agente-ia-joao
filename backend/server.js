@@ -36,7 +36,7 @@ process.on('unhandledRejection', (reason, promise) => {
 getPool();
 
 const app = express();
-const PORT = config.port;
+const PORT = process.env.PORT || 3000;
 
 // Middlewares
 app.use(cors());
@@ -151,6 +151,5 @@ app.use((err, req, res, next) => {
 
 // Inicia o servidor
 app.listen(PORT, () => {
-  console.log(`Servidor de backend rodando na porta ${PORT}`);
-  console.log(`Endpoint principal do agente: POST http://localhost:${PORT}/message`);
+  console.log(`Servidor rodando na porta ${PORT}`);
 });
