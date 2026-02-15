@@ -12,7 +12,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "agente-ia-omnicanal": "file:..",
     "axios": "^1.13.5",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
