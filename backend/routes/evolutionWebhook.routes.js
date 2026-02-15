@@ -7,34 +7,44 @@ const router = express.Router();
 router.post('/webhook/evolution', async (req, res) => {
   const body = req.body;
 
+  // Função para normalizar número BR
+  function normalizeBrazilNumber(raw) {
+    let n = String(raw).replace(/\D/g, '');
+    if (n.startsWith('55') && n.length === 12) {
+      // 55 + DDD (2) + 8 dígitos: inserir 9 após DDD
+      n = n.slice(0, 4) + '9' + n.slice(4);
+    }
+    return n;
+  }
+
   console.log('[EVOLUTION WEBHOOK] Payload:', JSON.stringify(body));
 
-    // Processa apenas mensagens reais
-    if (body?.event !== 'messages.upsert') {
-      return res.status(200).json({ received: true });
-    }
+  // Processa apenas mensagens reais
+  if (body?.event !== 'messages.upsert') {
+    return res.status(200).json({ received: true });
+  }
 
-    const messageData = Array.isArray(body?.data)
-      ? body.data[0]
-      : body?.data;
+  const messageData = Array.isArray(body?.data)
+    ? body.data[0]
+    : body?.data;
 
-    const text =
-      messageData?.message?.conversation ||
-      messageData?.message?.extendedTextMessage?.text;
+  const text =
+    messageData?.message?.conversation ||
+    messageData?.message?.extendedTextMessage?.text;
 
-    let number = messageData?.key?.remoteJid;
+  let numberRaw = messageData?.key?.remoteJid;
+  if (typeof numberRaw === 'string' && numberRaw.endsWith('@s.whatsapp.net')) {
+    numberRaw = numberRaw.replace('@s.whatsapp.net', '');
+  }
+  const number = normalizeBrazilNumber(numberRaw);
 
-    if (typeof number === 'string' && number.endsWith('@s.whatsapp.net')) {
-      number = number.replace('@s.whatsapp.net', '');
-    }
+  if (!text || !number) {
+    return res.status(200).json({ received: true });
+  }
 
-    if (!text || !number) {
-      return res.status(200).json({ received: true });
-    }
-
-    if (number.length < 12) {
-      console.warn('[EVOLUTION WARNING] Número suspeito:', number);
-    }
+  if (number.length < 13) {
+    console.warn('[EVOLUTION WARNING] Número suspeito:', numberRaw, '->', number);
+  }
 
   const { EVOLUTION_URL, EVOLUTION_INSTANCE, EVOLUTION_API_KEY } = process.env;
 
@@ -43,8 +53,24 @@ router.post('/webhook/evolution', async (req, res) => {
     return res.status(200).json({ success: true });
   }
 
-  const instance = encodeURIComponent(EVOLUTION_INSTANCE);
-  const evolutionUrl = `${EVOLUTION_URL}/message/sendText/${instance}`;
+  // Garantir encode correto da instância
+  let instance = EVOLUTION_INSTANCE;
+  if (/%[0-9A-Fa-f]{2}/.test(instance)) {
+    try { instance = decodeURIComponent(instance); } catch {}
+  }
+  const instanceEncoded = encodeURIComponent(instance);
+  const evolutionUrl = `${EVOLUTION_URL}/message/sendText/${instanceEncoded}`;
+
+  // Log seguro da apikey
+  const apiKeySafe = EVOLUTION_API_KEY.length > 4 ? `**${EVOLUTION_API_KEY.slice(-4)}` : '***';
+
+  // Logs detalhados
+  console.log('[EVOLUTION DEBUG] Número bruto:', numberRaw);
+  console.log('[EVOLUTION DEBUG] Número normalizado:', number);
+  console.log('[EVOLUTION DEBUG] Instance original:', EVOLUTION_INSTANCE);
+  console.log('[EVOLUTION DEBUG] Instance encoded:', instanceEncoded);
+  console.log('[EVOLUTION DEBUG] URL final:', evolutionUrl);
+  console.log('[EVOLUTION DEBUG] API KEY (final):', apiKeySafe);
 
   let respostaIA = '';
 
@@ -61,7 +87,7 @@ router.post('/webhook/evolution', async (req, res) => {
     respostaIA = agentResponse.data.response;
 
   } catch (err) {
-    console.error('[EVOLUTION ERROR][IA]', err.response?.data || err.message);
+    console.error('[EVOLUTION ERROR][IA]', err.code, err.message, err.response?.status, err.response?.data);
     respostaIA = 'Desculpe, ocorreu um erro temporário. Tente novamente.';
   }
 
@@ -83,7 +109,7 @@ router.post('/webhook/evolution', async (req, res) => {
     );
 
   } catch (err) {
-    console.error('[EVOLUTION ERROR][SEND]', err.response?.data || err.message);
+    console.error('[EVOLUTION ERROR][SEND]', err.code, err.message, err.response?.status, err.response?.data);
   }
 
   return res.status(200).json({ success: true });
