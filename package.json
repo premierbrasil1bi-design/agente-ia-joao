@@ -1,0 +1,10 @@
+{
+  "name": "agente-ia-omnicanal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Agente de IA Omni-Channel",
+  "scripts": {
+    "start": "npm run start --prefix backend",
+    "dev": "npm run dev --prefix backend"
+  }
+}

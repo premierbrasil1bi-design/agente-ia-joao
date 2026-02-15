@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Painel – Agente IA Omni-Channel</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="layout">
+    <nav class="nav">
+      <div class="nav__title">Painel</div>
+      <a href="#dashboard" class="nav__link active" data-section="dashboard">Dashboard</a>
+      <a href="#financeiro" class="nav__link" data-section="financeiro">Financeiro</a>
+      <a href="#canais" class="nav__link" data-section="canais">Canais</a>
+      <a href="#prompts" class="nav__link" data-section="prompts">Prompts</a>
+      <a href="#mensagens" class="nav__link" data-section="mensagens">Mensagens</a>
+    </nav>
+
+    <main class="main">
+      <section id="section-dashboard" class="section active">
+        <h1>Dashboard</h1>
+        <div id="dashboard-cards" class="cards"></div>
+        <div id="dashboard-alertas" class="alertas"></div>
+      </section>
+
+      <section id="section-financeiro" class="section">
+        <h1>Financeiro</h1>
+        <div id="financeiro-content"></div>
+      </section>
+
+      <section id="section-canais" class="section">
+        <h1>Canais do Agente</h1>
+        <div id="canais-content"></div>
+      </section>
+
+      <section id="section-prompts" class="section">
+        <h1>Prompts & Comportamento</h1>
+        <div id="prompts-content"></div>
+      </section>
+
+      <section id="section-mensagens" class="section">
+        <h1>Mensagens & Logs</h1>
+        <div id="mensagens-content"></div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
