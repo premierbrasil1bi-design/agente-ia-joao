@@ -23,7 +23,7 @@ function warnNeonDisconnected() {
  * @returns {pg.Pool | null}
  */
 export function getPool() {
-  const connectionString = config.databaseUrl;
+  const connectionString = config.DATABASE_URL;
   if (!connectionString) {
     warnNeonDisconnected();
     return null;
@@ -54,7 +54,7 @@ export async function query(text, params = []) {
  * @returns {boolean}
  */
 export function isConnected() {
-  return !!config.databaseUrl;
+  return !!config.DATABASE_URL;
 }
 
 /**

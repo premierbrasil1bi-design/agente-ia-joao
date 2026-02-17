@@ -1,28 +1,14 @@
 
-import express from 'express';
-import axios from 'axios';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import { config } from './config/env.js';
-import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
-import { getPool, isDbConnected } from './db/connection.js';
-import inboundRoutes from './routes/inboundRoutes.js';
-import dashboardRoutes from './routes/dashboardRoutes.js';
-import agentsRoutes from './routes/agentsRoutes.js';
-import contextRoutes from './routes/contextRoutes.js';
-import authRoutes from './routes/authRoutes.js';
-import agentAuthRoutes from './routes/agentAuth.routes.js';
-import evolutionWebhookRoutes from './routes/evolutionWebhook.routes.js';
-import { agentOrAdminAuth } from './middleware/agentOrAdminAuth.js';
-import { sendNotFound, sendServerError } from './utils/errorResponses.js';
 
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+import dotenv from 'dotenv';
 dotenv.config();
 
-// Caso precise de __dirname em algum lugar:
-// import { fileURLToPath } from 'url';
-// import { dirname } from 'path';
-// const __filename = fileURLToPath(import.meta.url);
-// const __dirname = dirname(__filename);
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
@@ -150,6 +136,6 @@ app.use((err, req, res, next) => {
 });
 
 // Inicia o servidor
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });

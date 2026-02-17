@@ -5,15 +5,14 @@
  * Executar ANTES do seed: node scripts/seed-dashboard.js
  */
 
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import pg from 'pg';
-import { config } from '../config/env.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const backendRoot = join(__dirname, '..');
-const dbDir = join(backendRoot, 'db');
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const backendRoot = path.join(__dirname, '..');
+const dbDir = path.join(backendRoot, 'db');
 
 /**
  * Divide SQL em statements (respeitando $$ ... $$ para funções).

@@ -4,15 +4,13 @@
  * Sem senha: só cria a tabela. Com senha: cria tabela e insere admin@exemplo.com / senha informada.
  */
 
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import pg from 'pg';
-import bcrypt from 'bcryptjs';
-import { config } from '../config/env.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const dbDir = join(__dirname, '..', 'db');
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const dbDir = path.join(__dirname, '..', 'db');
 
 async function main() {
   if (!config.databaseUrl) {
