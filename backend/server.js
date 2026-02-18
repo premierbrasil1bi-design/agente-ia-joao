@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 import axios from 'axios';
 
 import { config } from './config/env.js';
-import { getPool, isDbConnected } from './db/connection.js';
+import { isDbConnected } from './db/connection.js';
 import { sendNotFound, sendServerError } from './utils/errorResponses.js';
 
 import contextRoutes from './routes/contextRoutes.js';
@@ -26,7 +26,6 @@ import { agentAuth } from './middleware/agentAuth.js';
 dotenv.config();
 
 // =============== APP INIT ================
-getPool();
 const app = express();
 const PORT = config.port || 3000;
 
