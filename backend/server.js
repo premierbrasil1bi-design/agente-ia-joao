@@ -1,7 +1,9 @@
 
 
+
 import path from "path";
 import { fileURLToPath } from "url";
+import cors from "cors";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,7 +27,16 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middlewares
-app.use(cors());
+app.use(cors({
+  origin: [
+    "https://www.omnia1biai.com.br",
+    "https://omnia1biai.com.br"
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+  optionsSuccessStatus: 200
+}));
 app.use(express.json());
 // Evolution Webhook
 app.use('/api', evolutionWebhookRoutes);
