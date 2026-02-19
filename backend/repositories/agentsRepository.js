@@ -3,7 +3,7 @@
  * Multi-agente por cliente.
  */
 
-import { query } from '../db/connection.js';
+import pool from '../db/connection.js';
 
 export async function findAll(clientId = null) {
   if (clientId) {

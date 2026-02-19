@@ -3,6 +3,7 @@
  */
 
 import { query } from '../db/connection.js';
+import pool from '../db/connection.js';
 
 export async function findByEmail(email) {
   const { rows } = await query(

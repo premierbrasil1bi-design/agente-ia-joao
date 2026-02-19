@@ -21,7 +21,7 @@ async function main() {
   }
 
   const password = process.argv[2] || DEFAULT_PASSWORD;
-  const client = new pg.Client({ connectionString: config.databaseUrl });
+  const client = new pg.Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
   try {
     await client.connect();

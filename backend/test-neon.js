@@ -11,7 +11,7 @@ async function testConnection() {
     ssl: {
       rejectUnauthorized: false
     }
-  });
+  }); // Padronizado para usar apenas DATABASE_URL
 
   try {
     await client.connect();

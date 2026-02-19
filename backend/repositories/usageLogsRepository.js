@@ -2,7 +2,7 @@
  * Repositório: usage_logs – registro de uso por canal (mensagens, tokens, custo).
  */
 
-import { query } from '../db/connection.js';
+import pool from '../db/connection.js';
 
 export async function create({
   clientId,
@@ -14,7 +14,7 @@ export async function create({
   tokens = 0,
   estimatedCost = 0,
 }) {
-  const { rows } = await query(
+  const insertResult = await pool.query(
     `INSERT INTO usage_logs (
       client_id, agent_id, channel_id, channel_type,
       messages_sent, messages_received, tokens, estimated_cost
@@ -32,5 +32,5 @@ export async function create({
       estimatedCost,
     ]
   );
-  return rows[0];
+  return insertResult.rows[0];
 }

@@ -3,7 +3,7 @@
  * Canais por agente (WhatsApp, Instagram, Web, API).
  */
 
-import { query } from '../db/connection.js';
+import pool from '../db/connection.js';
 
 export async function findByAgentId(agentId) {
   const { rows } = await query(
@@ -44,7 +44,7 @@ export async function update(id, { name, type, status, isActive }) {
 }
 
 export async function incrementMessageCount(id) {
-  await query('UPDATE channels SET message_count = message_count + 1 WHERE id = $1', [id]);
+  await pool.query('UPDATE channels SET message_count = message_count + 1 WHERE id = $1', [id]);
 }
 
 export async function remove(id) {

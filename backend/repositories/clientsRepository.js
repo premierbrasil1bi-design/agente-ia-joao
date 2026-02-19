@@ -3,7 +3,7 @@
  * Preparação multi-tenant / comercialização.
  */
 
-import { query } from '../db/connection.js';
+import pool from '../db/connection.js';
 
 export async function findAll() {
   const { rows } = await query(
@@ -37,6 +37,7 @@ export async function update(id, { name, slug }) {
 }
 
 export async function remove(id) {
-  const { rowCount } = await query('DELETE FROM clients WHERE id = $1', [id]);
-  return rowCount > 0;
+  // const { rowCount } = await query('DELETE FROM clients WHERE id = $1', [id]); // Removido: duplicado
+  const deleteResult = await pool.query('DELETE FROM clients WHERE id = $1', [id]);
+  return deleteResult.rowCount > 0;
 }

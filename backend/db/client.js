@@ -19,7 +19,7 @@ export function getPool() {
     if (!connectionString) {
       throw new Error('DATABASE_URL não definida no .env (Neon connection string)');
     }
-    pool = new Pool({
+    // ...REMOVIDO: criação de Pool duplicada...
       connectionString,
       ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false,
     });

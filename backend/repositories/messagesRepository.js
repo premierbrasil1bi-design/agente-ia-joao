@@ -3,7 +3,7 @@
  * Histórico de mensagens por agente e canal.
  */
 
-import { query } from '../db/connection.js';
+import pool from '../db/connection.js';
 
 export async function findByAgentId(agentId, { channelId = null, limit = 100, offset = 0 } = {}) {
   if (channelId) {

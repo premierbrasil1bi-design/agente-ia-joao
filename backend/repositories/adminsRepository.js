@@ -6,12 +6,12 @@
 import { query } from '../db/connection.js';
 
 /**
- * Busca admin por email (para login).
+import pool from '../db/connection.js';
  * @param {string} email
  * @returns {Promise<{ id: string, email: string, password_hash: string, name: string } | null>}
  */
 export async function findByEmail(email) {
-  const { rows } = await query(
+  const { rows } = await pool.query(
     'SELECT id, email, password_hash, name, created_at FROM admins WHERE email = $1',
     [email]
   );
@@ -23,7 +23,7 @@ export async function findByEmail(email) {
  * @param {string} id - UUID do admin
  */
 export async function findById(id) {
-  const { rows } = await query(
+  const { rows } = await pool.query(
     'SELECT id, email, name FROM admins WHERE id = $1',
     [id]
   );
