@@ -36,10 +36,16 @@ app.use(cors({
     'https://omnia1biai.com.br'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  optionsSuccessStatus: 200
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'x-channel'
+  ],
+  credentials: true
 }));
+
+// Suporte explícito ao preflight
+app.options('*', cors());
 app.use(express.json());
 
 // =============== HEALTH ===================
