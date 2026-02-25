@@ -63,7 +63,17 @@ app.get('/api/health/db', async (req, res) => {
   }
 });
 
-// Middleware obrigatório para tenant
+
+// ========== CANAL MIDDLEWARES =============
+app.use('/api', channelContext);
+app.use('/api', setChannelActiveHeader);
+
+// =============== ROTAS PÚBLICAS ===============
+// Login de agente NÃO exige requireTenant
+app.use('/api/agent', agentAuthRoutes); // POST /api/agent/auth/login é pública
+
+// =============== ROTAS PROTEGIDAS ===============
+// Todas as demais rotas exigem requireTenant
 app.use(requireTenant);
 
 // Exemplo de rota protegida multi-tenant
@@ -79,6 +89,15 @@ app.get('/agents', async (req, res) => {
     res.status(500).json({ error: 'AGENTS_FETCH_ERROR' });
   }
 });
+
+// Demais rotas protegidas
+app.use('/api', evolutionWebhookRoutes);
+app.use('/api', contextRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/dashboard', agentOrAdminAuth, dashboardRoutes);
+app.use('/api/agents', agentOrAdminAuth, agentsRoutes);
+app.use('/api/agent', inboundRoutes);
+app.use('/', inboundRoutes);
 
 // ========== CANAL MIDDLEWARES =============
 app.use('/api', channelContext);
