@@ -8,6 +8,8 @@ import axios from 'axios';
 
 import { config } from './config/env.js';
 import { isDbConnected } from './db/connection.js';
+import { pool } from './db/pool.js';
+import { requireTenant } from './middleware/requireTenant.js';
 import { sendNotFound, sendServerError } from './utils/errorResponses.js';
 
 import contextRoutes from './routes/contextRoutes.js';
@@ -58,6 +60,23 @@ app.get('/api/health/db', async (req, res) => {
     res.status(200).json({ database: connected ? 'connected' : 'disconnected' });
   } catch {
     res.status(503).json({ database: 'disconnected', error: 'Unavailable' });
+  }
+});
+
+// Middleware obrigatório para tenant
+app.use(requireTenant);
+
+// Exemplo de rota protegida multi-tenant
+app.get('/agents', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM agents WHERE tenant_id = $1',
+      [req.tenantId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'AGENTS_FETCH_ERROR' });
   }
 });
 

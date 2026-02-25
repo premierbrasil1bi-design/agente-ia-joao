@@ -16,6 +16,7 @@ DROP TABLE IF EXISTS admins CASCADE;
 -- 1. Admins (no FK)
 CREATE TABLE IF NOT EXISTS admins (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id     UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   email         VARCHAR(255) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
   name          VARCHAR(255),
@@ -27,6 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_admins_email ON admins(email);
 -- 2. Clients (no FK)
 CREATE TABLE IF NOT EXISTS clients (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id  UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   name       VARCHAR(255) NOT NULL,
   slug       VARCHAR(100) NOT NULL UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -36,6 +38,7 @@ CREATE TABLE IF NOT EXISTS clients (
 -- 3. Agents (FK clients)
 CREATE TABLE IF NOT EXISTS agents (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id  UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   client_id  UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   name       VARCHAR(255) NOT NULL,
   slug       VARCHAR(100) NOT NULL,
@@ -49,6 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_agents_client_id ON agents(client_id);
 -- 4. Channels (FK agents)
 CREATE TABLE IF NOT EXISTS channels (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id     UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   agent_id      UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   name          VARCHAR(100) NOT NULL,
   type          VARCHAR(50) NOT NULL,
@@ -63,6 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_channels_agent_id ON channels(agent_id);
 -- 5. Prompts (FK agents, FK channels)
 CREATE TABLE IF NOT EXISTS prompts (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id  UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   agent_id   UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   channel_id UUID REFERENCES channels(id) ON DELETE CASCADE,
   content    TEXT NOT NULL,
@@ -76,6 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_prompts_channel_id ON prompts(channel_id);
 -- 6. Messages (FK agents, FK channels)
 CREATE TABLE IF NOT EXISTS messages (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id  UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   agent_id   UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
   role       VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant')),
@@ -89,6 +95,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
 -- 7. Costs (FK agents, FK channels)
 CREATE TABLE IF NOT EXISTS costs (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id   UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   agent_id    UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   channel_id  UUID REFERENCES channels(id) ON DELETE SET NULL,
   amount      DECIMAL(12, 4) NOT NULL,

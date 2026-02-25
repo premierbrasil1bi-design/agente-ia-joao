@@ -6,6 +6,7 @@ DROP TABLE IF EXISTS agent_users CASCADE;
 
 CREATE TABLE agent_users (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id  UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   name       TEXT NOT NULL,
   email      TEXT UNIQUE NOT NULL,
   password   TEXT NOT NULL,

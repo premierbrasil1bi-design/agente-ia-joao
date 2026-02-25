@@ -11,6 +11,7 @@ DROP TABLE IF EXISTS plans CASCADE;
 -- Planos (preparação para cobrança por canal/mensagem/agente)
 CREATE TABLE IF NOT EXISTS plans (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id   UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   client_id   UUID REFERENCES clients(id) ON DELETE CASCADE,
   name        VARCHAR(100) NOT NULL,
   slug        VARCHAR(50) NOT NULL,
@@ -24,6 +25,7 @@ CREATE INDEX IF NOT EXISTS idx_plans_client_id ON plans(client_id);
 -- Registro de uso (mensagens, tokens, custo estimado) – para cobrança e métricas
 CREATE TABLE IF NOT EXISTS usage_logs (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id         UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   client_id         UUID REFERENCES clients(id) ON DELETE CASCADE,
   agent_id          UUID REFERENCES agents(id) ON DELETE CASCADE,
   channel_id        UUID REFERENCES channels(id) ON DELETE SET NULL,
@@ -43,6 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_logs_recorded_at ON usage_logs(recorded_at)
 -- Faturamento (ciclos de cobrança)
 CREATE TABLE IF NOT EXISTS billing (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id   UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   client_id   UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   plan_id     UUID REFERENCES plans(id) ON DELETE SET NULL,
   period_start DATE NOT NULL,
