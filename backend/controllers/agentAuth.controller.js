@@ -47,14 +47,25 @@ export async function login(req, res) {
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
+      {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        tenantId: user.tenant_id
+      },
       secret,
       { expiresIn: config.agentJwt.expiresIn || '1d' }
     );
 
     return res.status(200).json({
       token,
-      agent: { id: user.id, name: user.name, email: user.email, role: user.role },
+      agent: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        tenant_id: user.tenant_id
+      },
     });
   } catch (err) {
     const msg = err.message || '';

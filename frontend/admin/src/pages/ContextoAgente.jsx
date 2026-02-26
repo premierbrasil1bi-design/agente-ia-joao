@@ -40,7 +40,7 @@ const styles = {
 
 export function ContextoAgente() {
   const { channel } = useChannel();
-  const { getToken, logout } = useAgentAuth();
+  const { getToken, agent, logout } = useAgentAuth();
   const navigate = useNavigate();
   const [ctx, setCtx] = useState(null);
   const [error, setError] = useState(null);
@@ -51,18 +51,25 @@ export function ContextoAgente() {
   }, [logout, navigate]);
 
   useEffect(() => {
+    if (!agent?.id) return;
+
     let cancelled = false;
+
     const api = createApiClient(() => channel, getToken, onUnauthorized);
+
     api
-      .getContext(null, null)
+      .getContext(null, agent.id)
       .then((data) => {
         if (!cancelled) setCtx(data);
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);
       });
-    return () => { cancelled = true; };
-  }, [channel, getToken, onUnauthorized]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [channel, getToken, onUnauthorized, agent]);
 
   if (error) {
     return (
