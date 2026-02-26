@@ -13,6 +13,8 @@ import * as contextService from '../services/contextService.js';
 import { isConnected } from '../db/connection.js';
 import { sendBadRequest, sendNotFound } from '../utils/errorResponses.js';
 import { sanitizeString } from '../utils/sanitize.js';
+import { requireActiveTenant } from '../middleware/requireActiveTenant.js';
+import { checkAgentLimit } from '../middleware/checkPlanLimits.js';
 
 const PROMPT_BASE_DEFAULT = 'Você é um assistente prestativo. Responda em português de forma clara e objetiva.';
 
@@ -58,7 +60,7 @@ router.get('/', async (req, res) => {
  * slug opcional (gerado a partir de name); slug duplicado gera slug único (slug-1, slug-2...).
  * Retorna 201 com o agente criado; 400 com mensagem clara se faltar campo obrigatório.
  */
-router.post('/', async (req, res) => {
+router.post('/', requireActiveTenant, checkAgentLimit, async (req, res) => {
   const body = req.body || {};
   console.error(`${LOG_PREFIX} POST / body recebido:`, JSON.stringify(body));
 

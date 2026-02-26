@@ -1,10 +1,8 @@
 
-
 // ================= IMPORTS =================
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import axios from 'axios';
 
 import { config } from './config/env.js';
 import { isDbConnected } from './db/connection.js';
@@ -19,10 +17,10 @@ import dashboardRoutes from './routes/dashboardRoutes.js';
 import agentsRoutes from './routes/agentsRoutes.js';
 import agentAuthRoutes from './routes/agentAuth.routes.js';
 import inboundRoutes from './routes/inboundRoutes.js';
-
+import tenantUsageRoutes from './routes/tenantUsage.routes.js';
+import adminTenantRoutes from './routes/admin/tenant.routes.js';
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { agentOrAdminAuth } from './middleware/agentOrAdminAuth.js';
-import { agentAuth } from './middleware/agentAuth.js';
 
 // =============== ENV SETUP ================
 dotenv.config();
@@ -45,15 +43,24 @@ app.use(cors({
   ],
   credentials: true
 }));
-
-// Suporte explícito ao preflight
 app.options('*', cors());
 app.use(express.json());
+
+// =============== ADMIN MASTER TENANTS CRUD ===============
+app.use('/admin/tenants', adminTenantRoutes);
+
+// =============== TENANT USAGE ENDPOINT ===============
+app.use('/api/tenant', tenantUsageRoutes);
+
+// ========== CANAL MIDDLEWARES ============
+app.use('/api', channelContext);
+app.use('/api', setChannelActiveHeader);
 
 // =============== HEALTH ===================
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Backend is running' });
 });
+
 app.get('/api/health/db', async (req, res) => {
   try {
     const connected = await isDbConnected();
@@ -63,20 +70,13 @@ app.get('/api/health/db', async (req, res) => {
   }
 });
 
-
-// ========== CANAL MIDDLEWARES =============
-app.use('/api', channelContext);
-app.use('/api', setChannelActiveHeader);
-
 // =============== ROTAS PÚBLICAS ===============
-// Login de agente NÃO exige requireTenant
-app.use('/api/agent', agentAuthRoutes); // POST /api/agent/auth/login é pública
+app.use('/api/agent', agentAuthRoutes); // login público
 
 // =============== ROTAS PROTEGIDAS ===============
-// Todas as demais rotas exigem requireTenant
 app.use(requireTenant);
 
-// Exemplo de rota protegida multi-tenant
+// Exemplo multi-tenant
 app.get('/agents', async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -96,20 +96,6 @@ app.use('/api', contextRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/dashboard', agentOrAdminAuth, dashboardRoutes);
 app.use('/api/agents', agentOrAdminAuth, agentsRoutes);
-app.use('/api/agent', inboundRoutes);
-app.use('/', inboundRoutes);
-
-// ========== CANAL MIDDLEWARES =============
-app.use('/api', channelContext);
-app.use('/api', setChannelActiveHeader);
-
-// =============== ROUTES ===================
-app.use('/api', evolutionWebhookRoutes);
-app.use('/api', contextRoutes);
-app.use('/api/auth', authRoutes);
-app.use('/api/dashboard', agentOrAdminAuth, dashboardRoutes);
-app.use('/api/agents', agentOrAdminAuth, agentsRoutes);
-app.use('/api/agent', agentAuthRoutes);
 app.use('/api/agent', inboundRoutes);
 app.use('/', inboundRoutes);
 

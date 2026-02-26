@@ -3,6 +3,14 @@
  */
 
 import pool from '../db/connection.js';
+export async function registerMessageUsage(tenantId, quantity = 1) {
+  await pool.query(
+    `UPDATE tenants
+     SET messages_used_current_period = messages_used_current_period + $1
+     WHERE id = $2`,
+    [quantity, tenantId]
+  );
+}
 
 export async function create({
   clientId,

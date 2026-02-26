@@ -8,6 +8,7 @@
     "dev": "npm run dev --prefix backend"
   },
   "dependencies": {
-    "cors": "^2.8.6"
+    "cors": "^2.8.6",
+    "jsonwebtoken": "^9.0.3"
   }
 }
