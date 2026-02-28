@@ -1,9 +1,7 @@
 /**
  * Repositório: usage_logs – registro de uso por canal (mensagens, tokens, custo).
  */
-
-import pool from '../db/connection.js';
-export async function registerMessageUsage(tenantId, quantity = 1) {
+import { pool } from '../db/pool.js';
   await pool.query(
     `UPDATE tenants
      SET messages_used_current_period = messages_used_current_period + $1

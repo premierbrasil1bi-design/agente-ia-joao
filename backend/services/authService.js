@@ -16,7 +16,7 @@ const MOCK_PASSWORD = 'admin123';
 function mockAdminAndToken() {
   const admin = { id: 'mock-admin-id', email: MOCK_EMAIL, name: 'Administrador (mock)' };
   const token = jwt.sign(
-    { sub: admin.id, email: admin.email },
+    { userId: admin.id, role: 'superadmin', isGlobal: true },
     config.jwt.secret,
     { expiresIn: config.jwt.expiresIn }
   );
@@ -46,7 +46,7 @@ export async function login(email, password) {
       const match = await bcrypt.compare(password, admin.password_hash);
       if (match) {
         const token = jwt.sign(
-          { sub: admin.id, email: admin.email },
+          { userId: admin.id, role: 'superadmin', isGlobal: true },
           config.jwt.secret,
           { expiresIn: config.jwt.expiresIn }
         );

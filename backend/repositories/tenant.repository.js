@@ -1,8 +1,9 @@
 
+import { pool } from '../db/pool.js';
 
 export async function createTenant(data) {
   const { name, slug, plan, max_agents, max_messages, status } = data;
-  const result = await query(
+  const result = await pool.query(
     `
     INSERT INTO tenants (name, slug, plan, max_agents, max_messages, status)
     VALUES ($1, $2, $3, $4, $5, $6)
@@ -14,14 +15,14 @@ export async function createTenant(data) {
 }
 
 export async function getAllTenants() {
-  const result = await query(
+  const result = await pool.query(
     'SELECT * FROM tenants ORDER BY created_at DESC'
   );
   return result.rows;
 }
 
 export async function getTenantById(id) {
-  const result = await query(
+  const result = await pool.query(
     'SELECT * FROM tenants WHERE id = $1',
     [id]
   );
@@ -30,7 +31,7 @@ export async function getTenantById(id) {
 
 export async function updateTenant(id, data) {
   const { name, plan, max_agents, max_messages, status } = data;
-  const result = await query(
+  const result = await pool.query(
     `
     UPDATE tenants
     SET name = $1,
@@ -48,7 +49,7 @@ export async function updateTenant(id, data) {
 }
 
 export async function deleteTenant(id) {
-  await query(
+  await pool.query(
     'DELETE FROM tenants WHERE id = $1',
     [id]
   );

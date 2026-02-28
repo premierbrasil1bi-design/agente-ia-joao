@@ -14,7 +14,10 @@ import { isConnected } from '../db/connection.js';
  * Retorna: { token, agent: { id, name, email, role } }
  */
 export async function login(req, res) {
-  const { email, password } = req.body || {};
+  const { email, password, tenant_id } = req.body || {};
+  if (!tenant_id) {
+    return res.status(400).json({ error: 'tenant_id é obrigatório.' });
+  }
   if (!email || !password) {
     return res.status(400).json({ error: 'Email e senha são obrigatórios.' });
   }
@@ -27,6 +30,10 @@ export async function login(req, res) {
     const user = await agentUsersRepo.findByEmail(email);
     if (!user) {
       return res.status(401).json({ error: 'Email ou senha inválidos.' });
+    }
+
+    if (user.tenant_id !== tenant_id) {
+      return res.status(401).json({ error: 'tenant_id inválido para este usuário.' });
     }
 
     const hash = user.password;
@@ -48,10 +55,9 @@ export async function login(req, res) {
 
     const token = jwt.sign(
       {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        tenantId: user.tenant_id
+        userId: user.id,
+        tenantId: user.tenant_id,
+        role: user.role
       },
       secret,
       { expiresIn: config.agentJwt.expiresIn || '1d' }

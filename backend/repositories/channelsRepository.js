@@ -3,10 +3,12 @@
  * Canais por agente (WhatsApp, Instagram, Web, API).
  */
 
-import pool from '../db/connection.js';
+
+import { pool } from '../db/pool.js';
+
 
 export async function findByAgentId(agentId) {
-  const { rows } = await query(
+  const { rows } = await pool.query(
     `SELECT id, agent_id, name, type, status, is_active, message_count, created_at, updated_at
      FROM channels WHERE agent_id = $1 ORDER BY name`,
     [agentId]
@@ -14,24 +16,27 @@ export async function findByAgentId(agentId) {
   return rows;
 }
 
+
 export async function findById(id) {
-  const { rows } = await query(
+  const { rows } = await pool.query(
     'SELECT id, agent_id, name, type, status, is_active, message_count, created_at, updated_at FROM channels WHERE id = $1',
     [id]
   );
   return rows[0] ?? null;
 }
 
-export async function create({ agentId, name, type, status = 'offline', isActive = true }) {
-  const { rows } = await query(
+
+export async function create({ agentId, name, type, status, isActive }) {
+  const { rows } = await pool.query(
     'INSERT INTO channels (agent_id, name, type, status, is_active) VALUES ($1, $2, $3, $4, $5) RETURNING id, agent_id, name, type, status, is_active, message_count, created_at, updated_at',
     [agentId, name, type, status, isActive]
   );
   return rows[0];
 }
 
+
 export async function update(id, { name, type, status, isActive }) {
-  const { rows } = await query(
+  const { rows } = await pool.query(
     `UPDATE channels SET
       name = COALESCE($2, name),
       type = COALESCE($3, type),
@@ -43,11 +48,13 @@ export async function update(id, { name, type, status, isActive }) {
   return rows[0] ?? null;
 }
 
+
 export async function incrementMessageCount(id) {
   await pool.query('UPDATE channels SET message_count = message_count + 1 WHERE id = $1', [id]);
 }
 
+
 export async function remove(id) {
-  const { rowCount } = await query('DELETE FROM channels WHERE id = $1', [id]);
+  const { rowCount } = await pool.query('DELETE FROM channels WHERE id = $1', [id]);
   return rowCount > 0;
 }

@@ -3,10 +3,10 @@
  * Prompts versionados: base (channel_id NULL) e por canal.
  */
 
-import pool from '../db/connection.js';
+import { pool } from '../db/pool.js';
 
 export async function findByAgentId(agentId) {
-  const { rows } = await query(
+  const { rows } = await pool.query(
      `SELECT id, agent_id, channel_id, content, version, created_at, updated_at
      FROM prompts WHERE agent_id = $1 ORDER BY channel_id NULLS FIRST, version DESC`,
     [agentId]
@@ -15,7 +15,7 @@ export async function findByAgentId(agentId) {
 }
 
 export async function findBaseByAgentId(agentId) {
-  const { rows } = await query(
+  const { rows } = await pool.query(
      'SELECT id, agent_id, channel_id, content, version, created_at, updated_at FROM prompts WHERE agent_id = $1 AND channel_id IS NULL ORDER BY version DESC LIMIT 1',
     [agentId]
   );
@@ -23,7 +23,7 @@ export async function findBaseByAgentId(agentId) {
 }
 
 export async function findByChannelId(agentId, channelId) {
-  const { rows } = await query(
+  const { rows } = await pool.query(
      'SELECT id, agent_id, channel_id, content, version, created_at, updated_at FROM prompts WHERE agent_id = $1 AND channel_id = $2 ORDER BY version DESC LIMIT 1',
     [agentId, channelId]
   );
@@ -31,7 +31,7 @@ export async function findByChannelId(agentId, channelId) {
 }
 
 export async function create({ agentId, channelId, content, version = 1 }) {
-  const { rows } = await query(
+  const { rows } = await pool.query(
      'INSERT INTO prompts (agent_id, channel_id, content, version) VALUES ($1, $2, $3, $4) RETURNING id, agent_id, channel_id, content, version, created_at, updated_at',
     [agentId, channelId ?? null, content, version]
   );
@@ -39,7 +39,7 @@ export async function create({ agentId, channelId, content, version = 1 }) {
 }
 
 export async function findById(id) {
-  const { rows } = await query(
+  const { rows } = await pool.query(
      'SELECT id, agent_id, channel_id, content, version, created_at, updated_at FROM prompts WHERE id = $1',
     [id]
   );
@@ -47,7 +47,7 @@ export async function findById(id) {
 }
 
 export async function update(id, { content, version }) {
-  const { rows } = await query(
+  const { rows } = await pool.query(
      'UPDATE prompts SET content = COALESCE($2, content), version = COALESCE($3, version) WHERE id = $1 RETURNING id, agent_id, channel_id, content, version, created_at, updated_at',
     [id, content ?? null, version ?? null]
   );
@@ -55,6 +55,6 @@ export async function update(id, { content, version }) {
 }
 
 export async function remove(id) {
-  const { rowCount } = await query('DELETE FROM prompts WHERE id = $1', [id]);
+  const { rowCount } = await pool.query('DELETE FROM prompts WHERE id = $1', [id]);
     return rowCount > 0;
 }

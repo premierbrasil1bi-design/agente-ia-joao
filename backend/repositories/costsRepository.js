@@ -3,7 +3,7 @@
  * Custos por agente/canal e período (dia/semana/mês).
  */
 
-import pool from '../db/connection.js';
+import { pool } from '../db/pool.js';
 
 export async function findByAgentId(agentId, { channelId = null, period = null, from = null, to = null } = {}) {
   let sql = 'SELECT id, agent_id, channel_id, amount, period, recorded_at, created_at FROM costs WHERE agent_id = $1';
