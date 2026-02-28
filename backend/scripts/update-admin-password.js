@@ -1,36 +1,38 @@
-/**
- * Atualiza a senha do admin no banco (Neon).
- * Uso: node scripts/update-admin-password.js [senha]
- * Padrão: admin123
- * Execute após run-schema.js se o login retornar "Email ou senha inválidos".
- */
-
+import 'dotenv/config';
 import bcrypt from 'bcryptjs';
-import { config } from '../config/env.js';
-import { query, getPool } from '../db/connection.js';
+import { query } from '../db/connection.js';
 
-const password = process.argv[2] || 'admin123';
-const email = 'admin@exemplo.com';
+async function updatePassword() {
+  try {
+    const email = process.argv[2];
+    const password = process.argv[3];
 
-async function run() {
-  const pool = getPool();
-  if (!pool) {
-    console.error('[update-admin-password] DATABASE_URL não definida no .env.');
+    if (!email || !password) {
+      console.log('Uso correto:');
+      console.log('node scripts/update-admin-password.js email novaSenha');
+      process.exit(1);
+    }
+
+    console.log('Gerando hash bcrypt...');
+    const hash = await bcrypt.hash(password, 10);
+
+    const result = await query(
+      'UPDATE global_admins SET password_hash = $1 WHERE email = $2 RETURNING id, email',
+      [hash, email]
+    );
+
+    if (result.rowCount === 0) {
+      console.log('Admin não encontrado.');
+      process.exit(1);
+    }
+
+    console.log('Senha atualizada com sucesso para:', result.rows[0].email);
+    process.exit(0);
+
+  } catch (error) {
+    console.error('Erro ao atualizar senha:', error);
     process.exit(1);
   }
-  const hash = await bcrypt.hash(password, 10);
-  const { rowCount } = await query(
-    "UPDATE admins SET password_hash = $1 WHERE email = $2",
-    [hash, email]
-  );
-  if (rowCount === 0) {
-    console.error('[update-admin-password] Nenhum admin com email', email, '- rode run-schema.js antes.');
-    process.exit(1);
-  }
-  console.log('[update-admin-password] Senha do admin atualizada. Use', email, '/', password, 'para login.');
 }
 
-run().catch((err) => {
-  console.error(err.message);
-  process.exit(1);
-});
+updatePassword();
