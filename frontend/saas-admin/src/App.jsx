@@ -1,10 +1,8 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthContext";
 import ProtectedRoute from "./auth/ProtectedRoute";
-import ProtectedGlobalAdminRoute from "./auth/ProtectedGlobalAdminRoute";
 import Layout from "./components/Layout";
-import GlobalAdminLogin from "./pages/GlobalAdminLogin";
-import GlobalAdminDashboard from "./pages/GlobalAdminDashboard";
+import Login from "./pages/Login";
 import Tenants from "./pages/Tenants";
 import TenantNew from "./pages/TenantNew";
 import TenantDetail from "./pages/TenantDetail";
@@ -16,8 +14,7 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/login" element={<GlobalAdminLogin />} />
-          <Route path="/dashboard" element={<ProtectedGlobalAdminRoute><GlobalAdminDashboard /></ProtectedGlobalAdminRoute>} />
+          <Route path="/login" element={<Login />} />
           <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route path="/tenants" element={<Tenants />} />
             <Route path="/tenants/new" element={<TenantNew />} />
@@ -25,8 +22,7 @@ export default function App() {
             <Route path="/tenants/:id/users" element={<TenantUsers />} />
             <Route path="/plans" element={<Plans />} />
           </Route>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="*" element={<Navigate to="/login" replace />} />
+          <Route path="*" element={<Login />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

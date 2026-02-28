@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { globalAdminApi } from "../services/globalAdminApi";
+import { request } from "../api/http";
 import { Link } from "react-router-dom";
 
 export default function Tenants() {
@@ -7,10 +7,16 @@ export default function Tenants() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    globalAdminApi.getTenants()
-      .then((data) => setTenants(Array.isArray(data) ? data : []))
-      .catch(() => setTenants([]))
-      .finally(() => setLoading(false));
+    async function fetchTenants() {
+      const res = await request("/api/platform/tenants");
+      if (res && res.ok) {
+        setTenants(await res.json());
+      } else {
+        setTenants([]);
+      }
+      setLoading(false);
+    }
+    fetchTenants();
   }, []);
 
   return (
