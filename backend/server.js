@@ -33,10 +33,15 @@ const PORT = config.port || 3000;
 ========================================================= */
 
 app.use(cors({
-  origin: [
-    'https://www.omnia1biai.com.br',
-    'https://omnia1biai.com.br'
-  ],
+  origin: 'https://admin.omnia1biai.com.br',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-channel'],
+  credentials: true
+}));
+
+// Garantir tratamento de OPTIONS globalmente
+app.options('*', cors({
+  origin: 'https://admin.omnia1biai.com.br',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-channel'],
   credentials: true
