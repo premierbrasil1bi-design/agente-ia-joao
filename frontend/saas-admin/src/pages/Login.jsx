@@ -26,26 +26,31 @@ export default function Login() {
   }
 
   return (
-    <div className="login-page">
-      <form onSubmit={handleSubmit}>
-        <h2>Login Admin Global</h2>
-        <input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={e => setEmail(e.target.value)}
-          required
-        />
-        <input
-          type="password"
-          placeholder="Senha"
-          value={password}
-          onChange={e => setPassword(e.target.value)}
-          required
-        />
-        <button type="submit">Entrar</button>
-        {error && <div className="error">{error}</div>}
-      </form>
+    <div className="login-container">
+      <div className="login-left">
+        <form onSubmit={handleSubmit}>
+          <h2>Login Admin Global</h2>
+          <input
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            required
+          />
+          <input
+            type="password"
+            placeholder="Senha"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+          />
+          <button type="submit">Entrar</button>
+          {error && <div className="error">{error}</div>}
+        </form>
+      </div>
+      <div className="login-right">
+        {/* Conteúdo adicional ou imagem pode ser colocado aqui */}
+      </div>
     </div>
   );
 }
