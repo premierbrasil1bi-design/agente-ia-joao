@@ -1,35 +1,43 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider } from "./auth/AuthContext";
+import ProtectedRoute from "./auth/ProtectedRoute";
+import AdminLayout from "./layout/AdminLayout";
+import Login from "./pages/Login";
+import DashboardPage from "./pages/DashboardPage";
+import TenantsListPage from "./pages/TenantsListPage";
+import TenantDetailPage from "./pages/TenantDetailPage";
+import TenantNew from "./pages/TenantNew";
+import TenantUsers from "./pages/TenantUsers";
+import PlansPage from "./pages/PlansPage";
+import UsagePage from "./pages/UsagePage";
+import BillingPage from "./pages/BillingPage";
+import LogsPage from "./pages/LogsPage";
+import AdminsPage from "./pages/AdminsPage";
+import SettingsPage from "./pages/SettingsPage";
 
-function App() {
-  const [count, setCount] = useState(0)
-
+export default function App() {
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/tenants" element={<TenantsListPage />} />
+            <Route path="/tenants/new" element={<TenantNew />} />
+            <Route path="/tenants/:tenantId" element={<TenantDetailPage />} />
+            <Route path="/tenants/:id/users" element={<TenantUsers />} />
+            <Route path="/plans" element={<PlansPage />} />
+            <Route path="/usage" element={<UsagePage />} />
+            <Route path="/billing" element={<BillingPage />} />
+            <Route path="/logs" element={<LogsPage />} />
+            <Route path="/admins" element={<AdminsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Route>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
+  );
 }
-
-export default App

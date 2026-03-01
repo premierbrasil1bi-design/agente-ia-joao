@@ -1,0 +1,78 @@
+.page {
+  width: 100%;
+}
+
+.title {
+  margin: 0 0 var(--space-1);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.subtitle {
+  margin: 0 0 var(--space-6);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.cardLabel {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: var(--space-1);
+}
+
+.cardValue {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.chartPlaceholder {
+  margin-bottom: var(--space-6);
+}
+
+.chartBox {
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-overlay);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.alertsCard {
+  margin-bottom: var(--space-4);
+}
+
+.alertList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.alertItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.875rem;
+}
+
+.alertItem:last-of-type {
+  border-bottom: none;
+}
+
+.alertBtn {
+  margin-top: var(--space-3);
+}

@@ -10,25 +10,27 @@ export default function TenantUsers() {
 
   useEffect(() => {
     async function fetchUsers() {
-      const res = await request(`/api/platform/tenants/${id}/users`);
-      if (res && res.ok) setUsers(await res.json());
-      else setUsers([]);
+      try {
+        const data = await request(`/api/platform/tenants/${id}/users`);
+        setUsers(Array.isArray(data) ? data : []);
+      } catch {
+        setUsers([]);
+      }
     }
-    fetchUsers();
+    if (id) fetchUsers();
   }, [id]);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
     try {
-      const res = await request(`/api/platform/tenants/${id}/users`, {
+      await request(`/api/platform/tenants/${id}/users`, {
         method: "POST",
-        body: JSON.stringify({ ...form, role: "admin" }),
+        body: { ...form, role: "admin" },
       });
-      if (!res.ok) throw new Error("Erro ao criar admin");
       setForm({ name: "", email: "", password: "" });
     } catch (err) {
-      setError(err.message);
+      setError(err.message ?? "Erro ao criar admin");
     }
   }
 

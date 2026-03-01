@@ -26,14 +26,13 @@ export default function TenantNew() {
       return;
     }
     try {
-      const res = await request("/api/platform/tenants", {
+      await request("/api/platform/tenants", {
         method: "POST",
-        body: JSON.stringify(form),
+        body: form,
       });
-      if (!res.ok) throw new Error("Erro ao criar tenant");
       navigate("/tenants");
     } catch (err) {
-      setError(err.message);
+      setError(err.message ?? "Erro ao criar tenant");
     }
   }
 

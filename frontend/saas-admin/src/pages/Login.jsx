@@ -1,56 +1,66 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
-import { request } from "../api/http";
+import { adminApi } from "../api/admin";
+import { Button, Input } from "../components/ui";
+import styles from "./Login.module.css";
 
 export default function Login() {
-  const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const { login } = useAuth();
+  const navigate = useNavigate();
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
+    setLoading(true);
     try {
-      const res = await request("/api/platform/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ email, password }),
-      });
-      if (!res.ok) throw new Error("Login inválido");
-      const data = await res.json();
+      const data = await adminApi.login(email, password);
       login(data.token, data.admin);
-      window.location = "/tenants";
+      navigate("/dashboard", { replace: true });
     } catch (err) {
-      setError(err.message);
+      setError(err.message ?? "Credenciais inválidas");
+    } finally {
+      setLoading(false);
     }
   }
 
   return (
-    <div className="login-container">
-      <div className="login-left">
-        <form onSubmit={handleSubmit}>
-          <h2>Login Admin Global</h2>
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={e => setEmail(e.target.value)}
-            required
-          />
-          <input
-            type="password"
-            placeholder="Senha"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            required
-          />
-          <button type="submit">Entrar</button>
-          {error && <div className="error">{error}</div>}
-        </form>
+    <div className={styles.container}>
+      <div className={styles.left}>
+        <div className={styles.card}>
+          <h1 className={styles.brand}>OMNIA AI</h1>
+          <p className={styles.subtitle}>Admin Global</p>
+          <p className={styles.hint}>Entre com suas credenciais para acessar o painel.</p>
+
+          <form onSubmit={handleSubmit} className={styles.form}>
+            <Input
+              label="Email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="admin@exemplo.com"
+              required
+            />
+            <Input
+              label="Senha"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+            />
+            {error && <p className={styles.error}>{error}</p>}
+            <Button type="submit" disabled={loading} className={styles.submit}>
+              {loading ? "Entrando…" : "Entrar"}
+            </Button>
+          </form>
+        </div>
       </div>
-      <div className="login-right">
-        {/* Conteúdo adicional ou imagem pode ser colocado aqui */}
-      </div>
+      <div className={styles.right} />
     </div>
   );
 }
