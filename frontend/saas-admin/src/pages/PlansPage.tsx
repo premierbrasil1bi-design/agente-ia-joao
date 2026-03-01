@@ -86,7 +86,7 @@ export default function PlansPage() {
                 <TableRow key={p.id}>
                   <td>{p.name}</td>
                   <td>{p.slug}</td>
-                  <td>R$ {(p.price ?? 0).toLocaleString("pt-BR")}</td>
+                  <td>R$ {Number(p?.price ?? 0).toLocaleString("pt-BR")}</td>
                   <td>{p.description ?? "-"}</td>
                   <td>
                     <Button variant="ghost" onClick={() => openEdit(p)}>

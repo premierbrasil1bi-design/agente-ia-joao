@@ -73,11 +73,11 @@ export default function TenantDetailPage() {
               <dt>Max agentes</dt>
               <dd>{tenant.max_agents ?? "-"}</dd>
               <dt>Max mensagens</dt>
-              <dd>{(tenant.max_messages ?? 0).toLocaleString("pt-BR")}</dd>
+              <dd>{Number(tenant?.max_messages ?? 0).toLocaleString("pt-BR")}</dd>
               <dt>Agentes no período</dt>
               <dd>{tenant.agents_used_current_period ?? 0}</dd>
               <dt>Mensagens no período</dt>
-              <dd>{(tenant.messages_used_current_period ?? 0).toLocaleString("pt-BR")}</dd>
+              <dd>{Number(tenant?.messages_used_current_period ?? 0).toLocaleString("pt-BR")}</dd>
               <dt>Início do ciclo</dt>
               <dd>{tenant.billing_cycle_start?.slice(0, 10) ?? "-"}</dd>
             </dl>

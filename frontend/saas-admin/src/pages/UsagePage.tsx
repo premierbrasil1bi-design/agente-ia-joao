@@ -53,7 +53,7 @@ export default function UsagePage() {
                       {u.agents_used} / {u.limits_agents}
                     </td>
                     <td>
-                      {u.messages_used.toLocaleString("pt-BR")} / {u.limits_messages.toLocaleString("pt-BR")}
+                      {Number(u?.messages_used ?? 0).toLocaleString("pt-BR")} / {Number(u?.limits_messages ?? 0).toLocaleString("pt-BR")}
                     </td>
                     <td>
                       <Badge variant={status}>

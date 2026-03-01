@@ -71,7 +71,7 @@ export default function LogsPage() {
             <TableBody>
               {filtered.map((l) => (
                 <TableRow key={l.id}>
-                  <td>{new Date(l.timestamp).toLocaleString("pt-BR")}</td>
+                  <td>{l?.timestamp ? new Date(l.timestamp).toLocaleString("pt-BR") : "-"}</td>
                   <td>
                     <Badge variant={levelVariant(l.level)}>{l.level}</Badge>
                   </td>

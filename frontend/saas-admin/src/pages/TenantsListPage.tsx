@@ -83,7 +83,7 @@ export default function TenantsListPage() {
                     {t.agents_used_current_period ?? 0} / {t.max_agents ?? "-"}
                   </td>
                   <td>
-                    {(t.messages_used_current_period ?? 0).toLocaleString("pt-BR")} / {(t.max_messages ?? 0).toLocaleString("pt-BR")}
+                    {Number(t?.messages_used_current_period ?? 0).toLocaleString("pt-BR")} / {Number(t?.max_messages ?? 0).toLocaleString("pt-BR")}
                   </td>
                   <td>{t.billing_cycle_start?.slice(0, 10) ?? "-"}</td>
                   <td>
