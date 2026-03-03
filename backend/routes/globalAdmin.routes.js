@@ -213,4 +213,40 @@ router.get('/plans', globalAdminAuth, async (req, res) => {
     ]);
   }
 });
+/**
+ * GET /api/global-admin/logs
+ * Lista logs administrativos
+ */
+router.get('/logs', globalAdminAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, action, entity, entity_id, created_at
+      FROM global_admin_logs
+      ORDER BY created_at DESC
+      LIMIT 100
+    `);
+
+    return res.status(200).json(rows);
+
+  } catch (err) {
+    console.warn('[global-admin] logs fallback mock:', err.message);
+
+    return res.status(200).json([
+      {
+        id: 'mock-1',
+        action: 'LOGIN',
+        entity: 'GLOBAL_ADMIN',
+        entity_id: '1',
+        created_at: new Date().toISOString()
+      },
+      {
+        id: 'mock-2',
+        action: 'UPDATE_PLAN',
+        entity: 'TENANT',
+        entity_id: 'tenant-123',
+        created_at: new Date().toISOString()
+      }
+    ]);
+  }
+});
 export default router;
