@@ -1,6 +1,6 @@
 // ================= IMPORTS =================
 import express from 'express';
-const cors = require('cors');
+import cors from 'cors';
 import dotenv from 'dotenv';
 
 import { config } from './config/env.js';
@@ -25,8 +25,26 @@ import { agentOrAdminAuth } from './middleware/agentOrAdminAuth.js';
 
 dotenv.config();
 
+
 const app = express();
 const PORT = config.port || 3000;
+
+const allowedOrigins = [
+  'https://admin.omnia1biai.com.br',
+  'https://app.omnia1biai.com.br'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS: ' + origin));
+    }
+  },
+  credentials: true
+}));
 
 /* =========================================================
    GLOBAL MIDDLEWARES
