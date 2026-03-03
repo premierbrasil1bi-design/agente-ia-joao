@@ -1,6 +1,6 @@
 // ================= IMPORTS =================
 import express from 'express';
-import cors from 'cors';
+const cors = require('cors');
 import dotenv from 'dotenv';
 
 import { config } from './config/env.js';
@@ -32,18 +32,21 @@ const PORT = config.port || 3000;
    GLOBAL MIDDLEWARES
 ========================================================= */
 
-app.use(cors({
-  origin: 'https://admin.omnia1biai.com.br',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-channel'],
-  credentials: true
-}));
 
-// Garantir tratamento de OPTIONS globalmente
-app.options('*', cors({
-  origin: 'https://admin.omnia1biai.com.br',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-channel'],
+const allowedOrigins = [
+  'https://admin.omnia1biai.com.br',
+  'https://app.omnia1biai.com.br'
+];
+
+app.use(cors({
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true); // permite chamadas server-to-server ou curl
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS: ' + origin));
+    }
+  },
   credentials: true
 }));
 
