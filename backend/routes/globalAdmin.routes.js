@@ -128,4 +128,52 @@ router.get('/tenants', globalAdminAuth, async (req, res) => {
   }
 });
 
+// Plans
+router.get('/plans', globalAdminAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, name, price, max_agents, max_messages
+      FROM plans
+      ORDER BY price ASC
+    `);
+
+    const plans = result.rows.map(p => ({
+      id: p.id,
+      name: p.name,
+      price: Number(p.price ?? 0),
+      max_agents: p.max_agents ?? 0,
+      max_messages: p.max_messages ?? 0
+    }));
+
+    return res.status(200).json(plans);
+
+  } catch (err) {
+    console.error('[global-admin] plans:', err.message);
+
+    // Fallback temporário caso tabela não exista
+    return res.status(200).json([
+      {
+        id: 'free',
+        name: 'Free',
+        price: 0,
+        max_agents: 1,
+        max_messages: 1000
+      },
+      {
+        id: 'pro',
+        name: 'Pro',
+        price: 97,
+        max_agents: 5,
+        max_messages: 10000
+      },
+      {
+        id: 'enterprise',
+        name: 'Enterprise',
+        price: 497,
+        max_agents: 50,
+        max_messages: 100000
+      }
+    ]);
+  }
+});
 export default router;
