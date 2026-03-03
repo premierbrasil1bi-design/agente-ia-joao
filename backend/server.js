@@ -20,6 +20,7 @@ import inboundRoutes from './routes/inboundRoutes.js';
 import tenantUsageRoutes from './routes/tenantUsage.routes.js';
 import adminTenantRoutes from './routes/admin/tenant.routes.js';
 import globalAdminRoutes from './routes/globalAdmin.routes.js';
+import platformTenantsRoutes from './routes/platformTenants.routes.js';
 
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { agentOrAdminAuth } from './middleware/agentOrAdminAuth.js';
@@ -81,6 +82,12 @@ app.get('/api/health/db', async (req, res) => {
 ========================================================= */
 
 app.use('/api/global-admin', globalAdminRoutes);
+
+/* =========================================================
+   PLATFORM TENANTS (GLOBAL ADMIN, SEM TENANT)
+========================================================= */
+
+app.use('/api/platform', platformTenantsRoutes);
 
 /* =========================================================
    ADMIN MASTER TENANTS (GLOBAL)
