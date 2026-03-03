@@ -1,4 +1,5 @@
 // ================= IMPORTS =================
+
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -26,6 +27,7 @@ import { agentOrAdminAuth } from './middleware/agentOrAdminAuth.js';
 dotenv.config();
 
 
+
 const app = express();
 const PORT = config.port || 3000;
 
@@ -46,29 +48,16 @@ app.use(cors({
   credentials: true
 }));
 
+app.options('*', cors());
+
+app.use(express.json());
+
 /* =========================================================
    GLOBAL MIDDLEWARES
 ========================================================= */
 
 
-const allowedOrigins = [
-  'https://admin.omnia1biai.com.br',
-  'https://app.omnia1biai.com.br'
-];
-
-app.use(cors({
-  origin: function(origin, callback) {
-    if (!origin) return callback(null, true); // permite chamadas server-to-server ou curl
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS: ' + origin));
-    }
-  },
-  credentials: true
-}));
-
-app.use(express.json());
+// ...existing code...
 
 /* =========================================================
    HEALTH CHECK (GLOBAL)
