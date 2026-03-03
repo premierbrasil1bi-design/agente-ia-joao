@@ -1,24 +1,44 @@
 
 import { pool } from '../db/pool.js';
+import { toTenantApiRow } from '../utils/tenantMapper.js';
 
 export async function createTenant(data) {
-  const { name, slug, plan, max_agents, max_messages, status } = data;
+  const {
+    nome_empresa,
+    name,
+    slug,
+    plan,
+    max_agents,
+    max_messages,
+    status,
+    active,
+  } = data;
+
+  const nomeEmpresaFinal = nome_empresa ?? name;
+  const statusFinal =
+    status ??
+    (typeof active === 'boolean'
+      ? active
+        ? 'Ativo'
+        : 'Inativo'
+      : 'Ativo');
+
   const result = await pool.query(
     `
-    INSERT INTO tenants (name, slug, plan, max_agents, max_messages, status)
+    INSERT INTO tenants (nome_empresa, slug, plan, max_agents, max_messages, status)
     VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING *
     `,
-    [name, slug, plan, max_agents, max_messages, status]
+    [nomeEmpresaFinal, slug, plan, max_agents, max_messages, statusFinal]
   );
-  return result.rows[0];
+  return toTenantApiRow(result.rows[0]);
 }
 
 export async function getAllTenants() {
   const result = await pool.query(
     'SELECT * FROM tenants ORDER BY created_at DESC'
   );
-  return result.rows;
+  return result.rows.map((row) => toTenantApiRow(row));
 }
 
 export async function getTenantById(id) {
@@ -26,26 +46,44 @@ export async function getTenantById(id) {
     'SELECT * FROM tenants WHERE id = $1',
     [id]
   );
-  return result.rows[0];
+  return toTenantApiRow(result.rows[0]);
 }
 
 export async function updateTenant(id, data) {
-  const { name, plan, max_agents, max_messages, status } = data;
+  const {
+    nome_empresa,
+    name,
+    plan,
+    max_agents,
+    max_messages,
+    status,
+    active,
+  } = data;
+
+  const nomeEmpresaFinal = nome_empresa ?? name;
+  const statusFinal =
+    status ??
+    (typeof active === 'boolean'
+      ? active
+        ? 'Ativo'
+        : 'Inativo'
+      : undefined);
+
   const result = await pool.query(
     `
     UPDATE tenants
-    SET name = $1,
-        plan = $2,
-        max_agents = $3,
-        max_messages = $4,
-        status = $5,
+    SET nome_empresa = COALESCE($1, nome_empresa),
+        plan = COALESCE($2, plan),
+        max_agents = COALESCE($3, max_agents),
+        max_messages = COALESCE($4, max_messages),
+        status = COALESCE($5, status),
         updated_at = now()
     WHERE id = $6
     RETURNING *
     `,
-    [name, plan, max_agents, max_messages, status, id]
+    [nomeEmpresaFinal ?? null, plan ?? null, max_agents ?? null, max_messages ?? null, statusFinal ?? null, id]
   );
-  return result.rows[0];
+  return toTenantApiRow(result.rows[0]);
 }
 
 export async function deleteTenant(id) {

@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { sendUnauthorized, sendServerError } from '../utils/errorResponses.js';
 import { config } from '../config/env.js';
 import { pool } from '../db/pool.js';
+import { toTenantApiRow } from '../utils/tenantMapper.js';
 import globalAdminAuth from '../middlewares/globalAdminAuth.js';
 import globalAdminRateLimit from '../middlewares/globalAdminRateLimit.js';
 
@@ -82,10 +83,13 @@ router.get('/usage', globalAdminAuth, async (req, res) => {
     const { rows } = await pool.query(`
       SELECT 
         t.id,
-        t.name,
+        t.nome_empresa,
         t.slug,
         t.max_messages,
-        0 AS messages_used_current_period
+        0 AS messages_used_current_period,
+        (t.status ILIKE 'ativo') AS active,
+        t.status,
+        t.nome_empresa AS name
       FROM tenants t
       ORDER BY t.created_at DESC
     `).catch(() => ({ rows: [] }));
@@ -143,22 +147,54 @@ router.get('/stats', globalAdminAuth, async (req, res) => {
 router.get('/tenants', globalAdminAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, name, slug, plan, status, max_agents, max_messages, created_at, updated_at
-       FROM tenants ORDER BY created_at DESC`
+      `
+      SELECT
+        t.id,
+        t.nome_empresa,
+        t.slug,
+        t.status,
+        t.plan_id,
+        t.max_agents,
+        t.max_messages,
+        t.agents_used_current_period,
+        t.messages_used_current_period,
+        t.billing_cycle_start,
+        t.created_at,
+        (t.status ILIKE 'ativo') AS active,
+        t.nome_empresa AS name
+      FROM tenants t
+      ORDER BY t.created_at DESC
+      `
     );
-    const list = rows.map((t) => ({
-      id: t.id,
-      nome_empresa: t.name,
-      slug: t.slug,
-      plan: t.plan || 'free',
-      status: t.status || 'ativo',
-      max_agents: t.max_agents ?? 0,
-      max_messages: t.max_messages ?? 0,
-      agents_used_current_period: 0,
-      messages_used_current_period: 0,
-      billing_cycle_start: t.created_at?.slice(0, 10),
-    }));
-    res.status(200).json(list);
+    const list = rows.map((t) =>
+      toTenantApiRow({
+        ...t,
+        // Garantia de defaults sem tocar no banco
+        status: t.status || 'ativo',
+        max_agents: t.max_agents ?? 0,
+        max_messages: t.max_messages ?? 0,
+        agents_used_current_period: t.agents_used_current_period ?? 0,
+        messages_used_current_period: t.messages_used_current_period ?? 0,
+      })
+    );
+    res.status(200).json(
+      list.map((t) => ({
+        id: t.id,
+        nome_empresa: t.nome_empresa,
+        slug: t.slug,
+        plan_id: t.plan_id ?? null,
+        plan: t.plan ?? 'free',
+        status: t.status,
+        active: t.active,
+        name: t.name,
+        max_agents: t.max_agents,
+        max_messages: t.max_messages,
+        agents_used_current_period: t.agents_used_current_period,
+        messages_used_current_period: t.messages_used_current_period,
+        billing_cycle_start: t.billing_cycle_start,
+        created_at: t.created_at,
+      }))
+    );
   } catch (err) {
     console.error('[global-admin] tenants:', err.message);
     res.status(500).json([]);
