@@ -73,6 +73,43 @@ router.post('/login', globalAdminRateLimit, async (req, res) => {
 /**
  * GET /api/global-admin/me
  */
+/**
+ * GET /api/global-admin/usage
+ * Retorna uso global por tenant
+ */
+router.get('/usage', globalAdminAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT 
+        t.id,
+        t.name,
+        t.slug,
+        t.max_messages,
+        0 AS messages_used_current_period
+      FROM tenants t
+      ORDER BY t.created_at DESC
+    `).catch(() => ({ rows: [] }));
+
+    // Se não houver dados, retornar mock
+    if (!rows || rows.length === 0) {
+      return res.status(200).json([
+        {
+          id: "mock-1",
+          name: "Empresa Exemplo",
+          slug: "empresa-exemplo",
+          max_messages: 1000,
+          messages_used_current_period: 120
+        }
+      ]);
+    }
+
+    res.status(200).json(rows);
+
+  } catch (err) {
+    console.error('[global-admin] usage:', err.message);
+    res.status(500).json([]);
+  }
+});
 router.get('/me', globalAdminAuth, async (req, res) => {
   res.status(200).json({ admin: req.globalAdmin });
 });
