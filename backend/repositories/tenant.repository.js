@@ -1,96 +1,98 @@
 
 import { pool } from '../db/pool.js';
-import { toTenantApiRow } from '../utils/tenantMapper.js';
 
-export async function createTenant(data) {
+export const createTenant = async (data) => {
   const {
-    nome_empresa,
     name,
     slug,
-    plan,
+    plan_id,
     max_agents,
     max_messages,
-    status,
     active,
   } = data;
 
-  const nomeEmpresaFinal = nome_empresa ?? name;
-  const statusFinal =
-    status ??
-    (typeof active === 'boolean'
-      ? active
-        ? 'Ativo'
-        : 'Inativo'
-      : 'Ativo');
-
   const result = await pool.query(
     `
-    INSERT INTO tenants (nome_empresa, slug, plan, max_agents, max_messages, status)
-    VALUES ($1, $2, $3, $4, $5, $6)
-    RETURNING *
+    INSERT INTO tenants (
+      id,
+      name,
+      slug,
+      plan_id,
+      max_agents,
+      max_messages,
+      active
+    )
+    VALUES (
+      gen_random_uuid(),
+      $1,
+      $2,
+      $3,
+      $4,
+      $5,
+      $6
+    )
+    RETURNING *;
     `,
-    [nomeEmpresaFinal, slug, plan, max_agents, max_messages, statusFinal]
+    [name, slug, plan_id, max_agents, max_messages, active]
   );
-  return toTenantApiRow(result.rows[0]);
-}
 
-export async function getAllTenants() {
+  return result.rows[0];
+};
+
+export const getAllTenants = async () => {
   const result = await pool.query(
     'SELECT * FROM tenants ORDER BY created_at DESC'
   );
-  return result.rows.map((row) => toTenantApiRow(row));
-}
+  return result.rows;
+};
 
-export async function getTenantById(id) {
+export const getTenantById = async (id) => {
   const result = await pool.query(
     'SELECT * FROM tenants WHERE id = $1',
     [id]
   );
-  return toTenantApiRow(result.rows[0]);
-}
+  return result.rows[0] ?? null;
+};
 
-export async function updateTenant(id, data) {
+export const updateTenant = async (id, data) => {
   const {
-    nome_empresa,
     name,
-    plan,
+    plan_id,
     max_agents,
     max_messages,
-    status,
     active,
   } = data;
-
-  const nomeEmpresaFinal = nome_empresa ?? name;
-  const statusFinal =
-    status ??
-    (typeof active === 'boolean'
-      ? active
-        ? 'Ativo'
-        : 'Inativo'
-      : undefined);
 
   const result = await pool.query(
     `
     UPDATE tenants
-    SET nome_empresa = COALESCE($1, nome_empresa),
-        plan = COALESCE($2, plan),
-        max_agents = COALESCE($3, max_agents),
-        max_messages = COALESCE($4, max_messages),
-        status = COALESCE($5, status),
-        updated_at = now()
+    SET
+      name = COALESCE($1, name),
+      plan_id = COALESCE($2, plan_id),
+      max_agents = COALESCE($3, max_agents),
+      max_messages = COALESCE($4, max_messages),
+      active = COALESCE($5, active),
+      updated_at = now()
     WHERE id = $6
-    RETURNING *
+    RETURNING *;
     `,
-    [nomeEmpresaFinal ?? null, plan ?? null, max_agents ?? null, max_messages ?? null, statusFinal ?? null, id]
+    [
+      name ?? null,
+      plan_id ?? null,
+      max_agents ?? null,
+      max_messages ?? null,
+      active ?? null,
+      id,
+    ]
   );
-  return toTenantApiRow(result.rows[0]);
-}
 
-export async function deleteTenant(id) {
+  return result.rows[0] ?? null;
+};
+
+export const deleteTenant = async (id) => {
   await pool.query(
     'DELETE FROM tenants WHERE id = $1',
     [id]
   );
-}
-
+};
 
