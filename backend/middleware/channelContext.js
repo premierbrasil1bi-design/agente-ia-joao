@@ -34,7 +34,12 @@ export function channelContext(req, res, next) {
     agent_id: agentId ?? null,
   };
 
-  console.log(`[Canal ativo: ${channel}] ${req.method} ${req.path}`);
+  console.log(`[Canal ativo: ${channel}] ${req.method} ${req.path}`, {
+    ip: req.ip,
+    userAgent: req.headers['user-agent'],
+    bodyKeys: Object.keys(req.body || {}),
+    timestamp: new Date().toISOString()
+  });
   next();
 }
 
