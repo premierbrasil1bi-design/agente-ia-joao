@@ -1,8 +1,8 @@
 // ================= IMPORTS =================
 
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 
 import { config } from './config/env.js';
 import { isDbConnected } from './db/connection.js';
@@ -24,10 +24,6 @@ import platformTenantsRoutes from './routes/platformTenants.routes.js';
 
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { agentOrAdminAuth } from './middleware/agentOrAdminAuth.js';
-
-dotenv.config();
-
-
 
 const app = express();
 const PORT = config.port || 3000;
