@@ -22,12 +22,33 @@ export async function findByAgentId(agentId, { channelId = null, limit = 100, of
   return rows;
 }
 
-export async function create({ agentId, channelId, role, content }) {
+export async function create({ agentId, channelId, role, content, senderId = null }) {
   const { rows } = await pool.query(
-    'INSERT INTO messages (agent_id, channel_id, role, content) VALUES ($1, $2, $3, $4) RETURNING id, agent_id, channel_id, role, content, created_at',
-    [agentId, channelId ?? null, role, content]
+    `INSERT INTO messages (agent_id, channel_id, role, content, sender_id)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id, agent_id, channel_id, role, content, created_at`,
+    [agentId, channelId ?? null, role, content, senderId ?? null]
   );
   return rows[0];
+}
+
+/**
+ * Last N messages for a conversation (agent + channel + sender), newest first.
+ * Used by conversationMemoryService for AI context.
+ */
+export async function findRecentForConversation(agentId, channelId, senderId, limit = 10) {
+  if (!agentId || senderId == null || String(senderId).trim() === '') {
+    return [];
+  }
+  const { rows } = await pool.query(
+    `SELECT id, agent_id, channel_id, role, content, created_at
+     FROM messages
+     WHERE agent_id = $1 AND sender_id = $2
+       AND (channel_id = $3 OR ($3::uuid IS NULL AND channel_id IS NULL))
+     ORDER BY created_at DESC
+     LIMIT $4`,
+    [agentId, String(senderId).trim(), channelId ?? null, Math.min(Math.max(1, limit), 50)]
+  );
+  return rows;
 }
 
 export async function countByAgentId(agentId, channelId = null) {

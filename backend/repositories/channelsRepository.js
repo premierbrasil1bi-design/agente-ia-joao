@@ -16,6 +16,22 @@ export async function findByAgentId(agentId) {
   return rows;
 }
 
+/**
+ * Find channel by type and instance (for agent router – instance → agent resolution).
+ * Requires channels.instance column (migration 001_add_channels_instance.sql).
+ */
+export async function findByTypeAndInstance(type, instance) {
+  if (!type || instance == null || instance === '') {
+    return null;
+  }
+  const { rows } = await pool.query(
+    `SELECT id, agent_id, name, type, status, is_active, instance
+     FROM channels WHERE type = $1 AND instance = $2 AND is_active = true LIMIT 1`,
+    [String(type).toLowerCase().trim(), String(instance).trim()]
+  );
+  return rows[0] ?? null;
+}
+
 
 export async function findById(id) {
   const { rows } = await pool.query(

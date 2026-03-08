@@ -1,7 +1,121 @@
-
 import express from 'express';
 import axios from 'axios';
+import { processIncomingMessage } from '../services/messagePipeline.js';
+import * as evolutionService from '../services/evolutionService.js';
+import { resolveAgentForChannel } from '../services/agentRouter.js';
+import { enqueueConversationTask } from '../services/conversationQueueService.js';
+
 const router = express.Router();
+
+function normalizeBrazilNumber(raw) {
+  if (raw == null) return '';
+  let n = String(raw).replace(/\D/g, '');
+  if (n.startsWith('55') && n.length === 12) {
+    n = n.slice(0, 4) + '9' + n.slice(4);
+  }
+  return n;
+}
+
+// POST /agents/webhook – Evolution API → agent router → message pipeline → Evolution send
+router.post('/agents/webhook', async (req, res) => {
+  try {
+    const payload = req.body;
+
+    console.log('========== WEBHOOK RECEIVED ==========');
+    console.log(JSON.stringify(payload, null, 2));
+
+    if (payload?.event === 'messages.upsert') {
+      const data = Array.isArray(payload.data) ? payload.data[0] : payload.data;
+
+      const sender =
+        data?.key?.remoteJid ||
+        data?.key?.participant ||
+        null;
+
+      const messageText =
+        data?.message?.conversation ||
+        data?.message?.extendedTextMessage?.text ||
+        null;
+
+      const fromMe = data?.key?.fromMe || false;
+
+      const instance =
+        payload?.instance ??
+        payload?.instanceName ??
+        req.query?.instance ??
+        payload?.data?.instance ??
+        process.env.EVOLUTION_INSTANCE ??
+        null;
+
+      if (!fromMe && messageText && sender) {
+        console.log('========== NEW MESSAGE ==========');
+        console.log('Sender:', sender);
+        console.log('Message:', messageText);
+        console.log('Instance:', instance);
+
+        let agentId = null;
+        let clientId = null;
+        let channelId = null;
+
+        if (instance) {
+          const agentInfo = await resolveAgentForChannel('whatsapp', instance);
+          if (agentInfo) {
+            agentId = agentInfo.agentId;
+            clientId = agentInfo.clientId;
+            channelId = agentInfo.channelId;
+            console.log('[WEBHOOK] Agent resolved:', { agentId, clientId, channelId });
+          } else {
+            console.warn('[WEBHOOK] No agent found for instance:', instance, '- using env fallback');
+          }
+        }
+
+        if (agentId == null) {
+          agentId = process.env.EVOLUTION_AGENT_ID || process.env.DEFAULT_AGENT_ID || null;
+        }
+
+        const instanceForSend = instance || process.env.EVOLUTION_INSTANCE;
+        let number = sender;
+        if (typeof number === 'string' && number.endsWith('@s.whatsapp.net')) {
+          number = number.replace('@s.whatsapp.net', '');
+        }
+        number = normalizeBrazilNumber(number) || number;
+
+        const conversationKey = `whatsapp:${sender}:${agentId ?? 'null'}`;
+
+        enqueueConversationTask(conversationKey, async () => {
+          const result = await processIncomingMessage({
+            channel: 'whatsapp',
+            senderId: sender,
+            messageText,
+            timestamp: data?.messageTimestamp ?? Date.now(),
+            metadata: {
+              ...payload,
+              agentId,
+              clientId,
+              channelId,
+            },
+          });
+
+          if (result?.replyText && instanceForSend) {
+            try {
+              await evolutionService.sendText(instanceForSend, number, result.replyText);
+              console.log('[WEBHOOK] Reply sent to', number);
+            } catch (sendErr) {
+              console.error('[WEBHOOK] evolutionService.sendText error:', sendErr.message);
+            }
+          }
+        });
+
+        return res.status(200).json({ status: 'queued' });
+      }
+    }
+
+    res.status(200).json({ status: 'webhook_received' });
+  } catch (error) {
+    console.error('[WEBHOOK] Error:', error);
+    res.status(200).json({ status: 'error_handled' });
+  }
+});
 
 // POST /webhook/evolution
 router.post('/webhook/evolution', async (req, res) => {
