@@ -23,19 +23,23 @@ export async function agentOrAdminAuth(req, res, next) {
     return sendUnauthorized(res, 'Token ausente. Faça login.');
   }
 
-  const userId = (d) => d.id || d.sub;
+  const userId = (d) => d.userId ?? d.id ?? d.sub;
 
   try {
     const agentDecoded = jwt.verify(token, config.agentJwt.secret);
     if (agentDecoded && userId(agentDecoded)) {
+      const uid = userId(agentDecoded);
+      const tenantId = agentDecoded.tenantId ?? null;
+      req.user = { id: uid, tenantId, email: agentDecoded.email, name: agentDecoded.name };
       if (isConnected()) {
-        const user = await agentUsersRepo.findById(userId(agentDecoded));
+        const user = await agentUsersRepo.findById(uid);
         if (user) {
           req.admin = { id: user.id, email: user.email, name: user.name };
+          if (tenantId) req.user.tenantId = tenantId;
           return next();
         }
       } else {
-        req.admin = { id: userId(agentDecoded), email: agentDecoded.email, name: agentDecoded.name || 'Agente' };
+        req.admin = { id: uid, email: agentDecoded.email, name: agentDecoded.name || 'Agente' };
         return next();
       }
     }

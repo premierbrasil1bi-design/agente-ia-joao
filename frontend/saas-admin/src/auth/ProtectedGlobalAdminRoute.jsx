@@ -3,13 +3,14 @@ import { useAuth } from "./AuthContext";
 
 /**
  * Protege rotas que exigem Global Admin autenticado.
- * Redireciona para /login se não houver token.
+ * Redireciona para /login só quando loading terminou e não há token.
  */
 export default function ProtectedGlobalAdminRoute({ children }) {
-  const { getToken } = useAuth();
+  const { getToken, loading } = useAuth();
   const location = useLocation();
   const token = getToken();
 
+  if (loading) return null;
   if (!token) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }

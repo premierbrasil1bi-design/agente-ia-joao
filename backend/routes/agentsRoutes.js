@@ -56,6 +56,7 @@ router.get('/', async (req, res) => {
 
 /**
  * POST /api/agents – criar agente.
+ * Auth: agentOrAdminAuth (server.js) roda antes e popula req.user; em seguida requireActiveTenant.
  * Body: { client_id (ou client), name, slug?, channel? }. channel em query (?channel=) ou body.
  * slug opcional (gerado a partir de name); slug duplicado gera slug único (slug-1, slug-2...).
  * Retorna 201 com o agente criado; 400 com mensagem clara se faltar campo obrigatório.

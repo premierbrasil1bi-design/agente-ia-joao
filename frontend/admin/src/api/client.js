@@ -5,7 +5,9 @@
  * Não envia requisição protegida se o token estiver ausente ou expirado (evita 401).
  */
 
+
 import { getApiBaseUrl } from '../config/env.js';
+import { AGENT_ID } from '../config/agent.js';
 
 const getBaseUrl = getApiBaseUrl;
 
@@ -117,7 +119,6 @@ export function createApiClient(getChannel, getToken = null, onUnauthorized = nu
     },
     getPrompts: () => request(`/api/dashboard/prompts?agent_id=${AGENT_ID}`),
     getClients: () => request(`/api/dashboard/clients?agent_id=${AGENT_ID}`),
-    import { AGENT_ID } from '../config/agent.js';
     listAgents: (clientId) =>
       request(`/api/agents${clientId ? `?client_id=${clientId}` : ''}`),
     createAgent: (body) =>

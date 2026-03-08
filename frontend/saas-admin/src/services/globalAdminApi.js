@@ -4,25 +4,25 @@
  */
 
 const BASE = () => import.meta.env.VITE_API_BASE_URL || '';
-const TOKEN_KEY = 'platform_token';
+
+import { getAuthToken } from "../api/http";
+
 const USER_KEY = 'platform_user';
 
-function getToken() {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
 async function request(path, options = {}) {
-  const token = getToken();
+  const token = getAuthToken();
   const url = `${BASE()}${path}`;
   const headers = {
     'Content-Type': 'application/json',
     ...(options.headers || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
-  if (token) headers.Authorization = `Bearer ${token}`;
 
   const res = await fetch(url, { ...options, headers });
   if (res.status === 401) {
-    localStorage.removeItem(TOKEN_KEY);
+    for (const key of ["adminToken", "token", "accessToken", "platform_token"]) {
+      localStorage.removeItem(key);
+    }
     localStorage.removeItem(USER_KEY);
     window.location.href = '/login';
     throw new Error('Sessão expirada. Faça login novamente.');

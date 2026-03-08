@@ -1,4 +1,4 @@
-import { request, getToken } from "./http";
+import { request, getAuthToken } from "./http";
 
 export interface Tenant {
   id: string;
@@ -86,7 +86,7 @@ const MOCK_PLANS: Plan[] = [
 
 async function withFallback<T>(fn: () => Promise<T>, mock: T): Promise<T> {
   try {
-    if (!getToken()) return mock;
+    if (!getAuthToken()) return mock;
     return await fn();
   } catch {
     return mock;
@@ -95,15 +95,10 @@ async function withFallback<T>(fn: () => Promise<T>, mock: T): Promise<T> {
 
 export const adminApi = {
   async login(email: string, password: string): Promise<{ token: string; admin: { email: string } }> {
-    const base = import.meta.env.VITE_API_BASE_URL ?? "https://api.omnia1biai.com.br";
-    const res = await fetch(`${base.replace(/\/$/, "")}/api/global-admin/login`, {
+    return request<{ token: string; admin: { email: string } }>("/api/global-admin/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: { email, password },
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error((data as { error?: string }).error ?? "Credenciais inválidas");
-    return data as { token: string; admin: { email: string } };
   },
 
   async getStats(): Promise<DashboardStats> {
