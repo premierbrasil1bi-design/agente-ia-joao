@@ -32,7 +32,7 @@ export async function requireTenant(req, res, next) {
       });
     }
     const { rows } = await pool.query(
-      "SELECT id, status FROM tenants WHERE id = $1 LIMIT 1",
+      "SELECT id, active FROM tenants WHERE id = $1 LIMIT 1",
       [tenantId]
     );
     if (rows.length === 0) {
@@ -40,7 +40,7 @@ export async function requireTenant(req, res, next) {
         error: "TENANT_NOT_FOUND"
       });
     }
-    if (rows[0].status && rows[0].status !== "ativo") {
+    if (rows[0].active !== true) {
       return res.status(403).json({
         error: "TENANT_INACTIVE"
       });

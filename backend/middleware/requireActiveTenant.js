@@ -9,11 +9,11 @@ export async function requireActiveTenant(req, res, next) {
     }
 
     const { rows } = await pool.query(
-      'SELECT status FROM tenants WHERE id = $1',
+      'SELECT active FROM tenants WHERE id = $1',
       [tenantId]
     );
 
-    if (!rows.length || rows[0].status !== 'ativo') {
+    if (!rows.length || rows[0].active !== true) {
       return res.status(403).json({
         error: 'Tenant inativo ou suspenso'
       });
