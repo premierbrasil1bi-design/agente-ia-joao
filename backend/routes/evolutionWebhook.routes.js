@@ -19,6 +19,18 @@ function normalizeBrazilNumber(raw) {
 // POST /agents/webhook – Evolution API → agent router → message pipeline → Evolution send
 router.post('/agents/webhook', async (req, res) => {
   try {
+    console.log('[WEBHOOK DEBUG]', {
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+      bodyKeys: Object.keys(req.body || {}),
+      time: new Date().toISOString()
+    });
+
+    if (!req.body || Object.keys(req.body).length === 0) {
+      console.log('[WEBHOOK] Ignored empty webhook call');
+      return res.status(200).json({ status: 'ignored_empty_webhook' });
+    }
+
     const payload = req.body;
 
     console.log('========== WEBHOOK RECEIVED ==========');
