@@ -2,7 +2,7 @@ import { pool } from '../db/pool.js';
 
 export async function requireActiveTenant(req, res, next) {
   try {
-    const tenantId = req.user?.tenantId;
+    const tenantId = req.tenantId ?? req.user?.tenantId;
 
     if (!tenantId) {
       return res.status(401).json({ error: 'Tenant não identificado' });

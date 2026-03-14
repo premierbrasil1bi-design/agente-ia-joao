@@ -4,7 +4,8 @@ import { ChannelIndicator } from './components/ChannelIndicator';
 import { Dashboard } from './pages/Dashboard';
 import { ContextoAgente } from './pages/ContextoAgente';
 import { Prompts } from './pages/Prompts';
-import { Agentes } from './pages/Agentes';
+import { Agents } from './pages/Agents';
+import { Channels } from './pages/Channels';
 import { Login } from './pages/Login';
 import { useAgentAuth } from './context/AgentAuthContext';
 
@@ -28,8 +29,8 @@ function Layout({ children }) {
             <Link to="/" style={linkStyle}>Dashboard</Link>
             <Link to="/contexto" style={linkStyle}>Contexto do Agente</Link>
             <Link to="/prompts" style={linkStyle}>Prompts</Link>
-            <Link to="/agentes" style={linkStyle}>Agentes</Link>
-            <Link to="/canais" style={linkStyle}>Canais</Link>
+            <Link to="/agents" style={linkStyle}>Agents</Link>
+            <Link to="/channels" style={linkStyle}>Channels</Link>
           </nav>
           <div style={{ padding: '1rem 1rem 0', borderTop: '1px solid var(--border)', marginTop: '0.5rem' }}>
             <ChannelIndicator compact />
@@ -74,8 +75,8 @@ export default function App() {
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/contexto" element={<ContextoAgente />} />
                 <Route path="/prompts" element={<Prompts />} />
-                <Route path="/agentes" element={<Agentes />} />
-                <Route path="/canais" element={<div><h2>Canais</h2><p>Lista e status dos canais (em evolução).</p></div>} />
+                <Route path="/agents" element={<Agents />} />
+                <Route path="/channels" element={<Channels />} />
               </Routes>
             </Layout>
           </RequireAuth>

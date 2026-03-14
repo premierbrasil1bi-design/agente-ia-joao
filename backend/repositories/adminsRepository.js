@@ -41,3 +41,22 @@ export async function findByTenantId(tenantId) {
   );
   return rows;
 }
+
+/**
+ * Cria usuário (admin) do tenant. Global Admin only.
+ * @param {string} tenantId
+ * @param {{ email: string, password: string, name?: string }} data
+ * @param {string} passwordHash - bcrypt hash da senha
+ */
+export async function create(tenantId, data, passwordHash) {
+  const email = String(data.email || '').trim().toLowerCase();
+  const name = data.name != null ? String(data.name).trim() : email.split('@')[0] || 'User';
+  if (!email) return null;
+  const { rows } = await pool.query(
+    `INSERT INTO admins (tenant_id, email, password_hash, name)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, tenant_id, email, name, created_at, updated_at`,
+    [tenantId, email, passwordHash, name]
+  );
+  return rows[0];
+}

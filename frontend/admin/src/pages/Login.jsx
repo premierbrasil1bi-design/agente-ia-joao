@@ -11,7 +11,7 @@ import { agentApi } from '../services/agentApi';
 export function Login() {
   const { isAuthenticated, login } = useAgentAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState('admin@exemplo.com');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -145,12 +145,6 @@ export function Login() {
         >
           {loading ? 'Entrando...' : 'Entrar'}
         </button>
-
-        <p style={{ marginTop: '1rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-          Email: <strong>admin@exemplo.com</strong> — Senha: a definida ao rodar no backend
-          <br />
-          <code style={{ fontSize: '0.7rem' }}>node scripts/seed-agent-user.js admin123</code>
-        </p>
       </form>
     </div>
   );
