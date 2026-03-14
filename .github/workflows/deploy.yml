@@ -19,13 +19,19 @@ jobs:
             cd ~/agente-ia-joao
             git pull origin main
 
+            # Update backend
             cd backend
             npm install
             pm2 restart agente-backend
 
+            # Build frontend
             cd ../frontend/saas-admin
             npm install
             npm run build
+
+            # Publish frontend
+            rm -rf /var/www/saas-admin/*
             cp -r dist/* /var/www/saas-admin/
 
+            # Reload nginx
             systemctl reload nginx
