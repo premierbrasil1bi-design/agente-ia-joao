@@ -27,8 +27,17 @@ export async function findByEmail(email) {
 
 export async function findById(id) {
   const { rows } = await pool.query(
-    'SELECT id, email, name FROM admins WHERE id = $1',
+    'SELECT id, tenant_id, email, name, created_at FROM admins WHERE id = $1',
     [id]
   );
   return rows[0] ?? null;
+}
+
+/** List admins (users) by tenant_id (SaaS admin). */
+export async function findByTenantId(tenantId) {
+  const { rows } = await pool.query(
+    'SELECT id, tenant_id, email, name, created_at, updated_at FROM admins WHERE tenant_id = $1 ORDER BY name, email',
+    [tenantId]
+  );
+  return rows;
 }

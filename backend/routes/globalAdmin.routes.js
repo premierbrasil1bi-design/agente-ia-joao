@@ -7,6 +7,10 @@ import { pool } from '../db/pool.js';
 import { toTenantApiRow } from '../utils/tenantMapper.js';
 import globalAdminAuth from '../middlewares/globalAdminAuth.js';
 import globalAdminRateLimit from '../middlewares/globalAdminRateLimit.js';
+import * as agentsCtrl from '../controllers/globalAdmin.agents.controller.js';
+import * as channelsCtrl from '../controllers/globalAdmin.channels.controller.js';
+import * as tenantScopedCtrl from '../controllers/globalAdmin.tenantScoped.controller.js';
+import * as tenantCtrl from '../controllers/globalAdmin.tenant.controller.js';
 
 const router = Router();
 
@@ -189,6 +193,23 @@ router.get('/tenants', globalAdminAuth, async (req, res) => {
     res.status(500).json([]);
   }
 });
+
+// ---------- Tenant-scoped routes (must be before /tenants/:id) ----------
+router.get('/tenants/:tenantId/agents', globalAdminAuth, agentsCtrl.listAgents);
+router.post('/tenants/:tenantId/agents', globalAdminAuth, agentsCtrl.createAgent);
+router.get('/tenants/:tenantId/channels', globalAdminAuth, channelsCtrl.listChannels);
+router.post('/tenants/:tenantId/channels', globalAdminAuth, channelsCtrl.createChannel);
+router.get('/tenants/:tenantId/users', globalAdminAuth, tenantScopedCtrl.listUsers);
+router.get('/tenants/:tenantId/usage', globalAdminAuth, tenantScopedCtrl.getUsage);
+router.get('/tenants/:tenantId/logs', globalAdminAuth, tenantScopedCtrl.getLogs);
+router.get('/tenants/:tenantId/billing', globalAdminAuth, tenantScopedCtrl.getBilling);
+router.patch('/tenants/:tenantId', globalAdminAuth, tenantCtrl.updateTenantHandler);
+router.patch('/tenants/:tenantId/suspend', globalAdminAuth, tenantCtrl.suspendTenantHandler);
+
+router.patch('/agents/:agentId', globalAdminAuth, agentsCtrl.updateAgent);
+router.delete('/agents/:agentId', globalAdminAuth, agentsCtrl.deleteAgent);
+router.patch('/channels/:channelId', globalAdminAuth, channelsCtrl.updateChannel);
+router.delete('/channels/:channelId', globalAdminAuth, channelsCtrl.deleteChannel);
 
 /**
  * GET /api/global-admin/tenants/:id

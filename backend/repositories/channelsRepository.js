@@ -9,11 +9,31 @@ import { pool } from '../db/pool.js';
 
 export async function findByAgentId(agentId) {
   const { rows } = await pool.query(
-    `SELECT id, agent_id, name, type, status, is_active, message_count, created_at, updated_at
+    `SELECT id, tenant_id, agent_id, name, type, status, is_active, message_count, config, created_at, updated_at
      FROM channels WHERE agent_id = $1 ORDER BY name`,
     [agentId]
   );
   return rows;
+}
+
+/** List channels by tenant_id (SaaS admin). */
+export async function findByTenantId(tenantId) {
+  const { rows } = await pool.query(
+    `SELECT id, tenant_id, agent_id, name, type, status, is_active, message_count, config, created_at, updated_at
+     FROM channels WHERE tenant_id = $1 ORDER BY name`,
+    [tenantId]
+  );
+  return rows;
+}
+
+/** Find by id and tenant_id (ensure tenant scope). */
+export async function findByIdAndTenantId(id, tenantId) {
+  const { rows } = await pool.query(
+    `SELECT id, tenant_id, agent_id, name, type, status, is_active, message_count, config, created_at, updated_at
+     FROM channels WHERE id = $1 AND tenant_id = $2`,
+    [id, tenantId]
+  );
+  return rows[0] ?? null;
 }
 
 /**
@@ -35,31 +55,39 @@ export async function findByTypeAndInstance(type, instance) {
 
 export async function findById(id) {
   const { rows } = await pool.query(
-    'SELECT id, agent_id, name, type, status, is_active, message_count, created_at, updated_at FROM channels WHERE id = $1',
+    'SELECT id, tenant_id, agent_id, name, type, status, is_active, message_count, config, created_at, updated_at FROM channels WHERE id = $1',
     [id]
   );
   return rows[0] ?? null;
 }
 
 
-export async function create({ agentId, name, type, status, isActive }) {
+export async function create({ tenantId, agentId, name, type, status, isActive, config }) {
+  let tid = tenantId;
+  if (tid == null && agentId) {
+    const agentRow = await pool.query('SELECT tenant_id FROM agents WHERE id = $1', [agentId]).then(r => r.rows[0]);
+    tid = agentRow?.tenant_id ?? null;
+  }
   const { rows } = await pool.query(
-    'INSERT INTO channels (agent_id, name, type, status, is_active) VALUES ($1, $2, $3, $4, $5) RETURNING id, agent_id, name, type, status, is_active, message_count, created_at, updated_at',
-    [agentId, name, type, status, isActive]
+    `INSERT INTO channels (tenant_id, agent_id, name, type, status, is_active, config)
+     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::jsonb, '{}'))
+     RETURNING id, tenant_id, agent_id, name, type, status, is_active, message_count, config, created_at, updated_at`,
+    [tid, agentId, name, type, status ?? 'offline', isActive !== false, config ? JSON.stringify(config) : null]
   );
   return rows[0];
 }
 
 
-export async function update(id, { name, type, status, isActive }) {
+export async function update(id, { name, type, status, isActive, config }) {
+  const updates = ['name = COALESCE($2, name)', 'type = COALESCE($3, type)', 'status = COALESCE($4, status)', 'is_active = COALESCE($5, is_active)'];
+  const values = [id, name ?? null, type ?? null, status ?? null, isActive ?? null];
+  if (config !== undefined) {
+    updates.push('config = COALESCE($6::jsonb, config)');
+    values.push(config ? JSON.stringify(config) : null);
+  }
   const { rows } = await pool.query(
-    `UPDATE channels SET
-      name = COALESCE($2, name),
-      type = COALESCE($3, type),
-      status = COALESCE($4, status),
-      is_active = COALESCE($5, is_active)
-    WHERE id = $1 RETURNING id, agent_id, name, type, status, is_active, message_count, created_at, updated_at`,
-    [id, name ?? null, type ?? null, status ?? null, isActive ?? null]
+    `UPDATE channels SET ${updates.join(', ')} WHERE id = $1 RETURNING id, tenant_id, agent_id, name, type, status, is_active, message_count, config, created_at, updated_at`,
+    values
   );
   return rows[0] ?? null;
 }

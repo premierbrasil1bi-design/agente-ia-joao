@@ -9,27 +9,48 @@ import { pool } from '../db/pool.js';
 
 export async function findAll() {
   const { rows } = await pool.query(
-    'SELECT id, name, slug, created_at, updated_at FROM clients ORDER BY name'
+    'SELECT id, tenant_id, name, slug, created_at, updated_at FROM clients ORDER BY name'
   );
   return rows;
+}
+
+export async function findByTenantId(tenantId) {
+  const { rows } = await pool.query(
+    'SELECT id, tenant_id, name, slug, created_at, updated_at FROM clients WHERE tenant_id = $1 ORDER BY name',
+    [tenantId]
+  );
+  return rows;
+}
+
+export async function findFirstByTenantId(tenantId) {
+  const { rows } = await pool.query(
+    'SELECT id, tenant_id, name, slug, created_at, updated_at FROM clients WHERE tenant_id = $1 ORDER BY created_at LIMIT 1',
+    [tenantId]
+  );
+  return rows[0] ?? null;
 }
 
 
 export async function findById(id) {
   const { rows } = await pool.query(
-    'SELECT id, name, slug, created_at, updated_at FROM clients WHERE id = $1',
+    'SELECT id, tenant_id, name, slug, created_at, updated_at FROM clients WHERE id = $1',
     [id]
   );
   return rows[0] ?? null;
 }
 
 
-export async function create({ name, slug }) {
+export async function create({ name, slug, tenantId }) {
   const { rows } = await pool.query(
-    'INSERT INTO clients (name, slug) VALUES ($1, $2) RETURNING id, name, slug, created_at, updated_at',
-    [name, slug]
+    'INSERT INTO clients (tenant_id, name, slug) VALUES ($1, $2, $3) RETURNING id, tenant_id, name, slug, created_at, updated_at',
+    [tenantId, name, slug]
   );
   return rows[0];
+}
+
+/** Create with tenant_id (for SaaS admin). */
+export async function createForTenant(tenantId, { name, slug }) {
+  return create({ name, slug, tenantId });
 }
 
 

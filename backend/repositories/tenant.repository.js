@@ -44,26 +44,42 @@ export const getTenantById = async (id) => {
 
 export const updateTenant = async (id, data) => {
   const name = data?.name != null ? String(data.name).trim() : null;
+  const slug = data?.slug != null ? String(data.slug).trim() : null;
   const plan = data?.plan ?? data?.plan_id ?? null;
   const max_agents = data?.max_agents ?? null;
   const max_messages = data?.max_messages ?? null;
-  const active = data?.active !== undefined ? data.active : null;
+  let active = data?.active;
+  if (data?.status !== undefined && data?.status !== null) {
+    const s = String(data.status).toLowerCase();
+    active = s === 'ativo' || s === 'active' || s === '1' || s === 'true';
+  }
+  if (active === undefined) active = null;
 
   const result = await pool.query(
     `
     UPDATE tenants
     SET
       name = COALESCE($1, name),
-      plan = COALESCE($2, plan),
-      max_agents = COALESCE($3, max_agents),
-      max_messages = COALESCE($4, max_messages),
-      active = COALESCE($5, active)
-    WHERE id = $6
+      slug = COALESCE($2, slug),
+      plan = COALESCE($3, plan),
+      max_agents = COALESCE($4, max_agents),
+      max_messages = COALESCE($5, max_messages),
+      active = COALESCE($6, active)
+    WHERE id = $7
     RETURNING *;
     `,
-    [name || null, plan ?? null, max_agents ?? null, max_messages ?? null, active ?? null, id]
+    [name || null, slug ?? null, plan ?? null, max_agents ?? null, max_messages ?? null, active ?? null, id]
   );
 
+  return result.rows[0] ?? null;
+};
+
+/** Set tenant to suspended (active = false). */
+export const suspendTenant = async (id) => {
+  const result = await pool.query(
+    `UPDATE tenants SET active = false WHERE id = $1 RETURNING *`,
+    [id]
+  );
   return result.rows[0] ?? null;
 };
 
