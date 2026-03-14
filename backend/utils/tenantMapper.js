@@ -3,14 +3,16 @@ export function toTenantApiRow(dbRow) {
 
   const rawStatus = dbRow.status ?? '';
   const statusStr = typeof rawStatus === 'string' ? rawStatus : String(rawStatus || '');
-  const isActive = statusStr.toLowerCase() === 'ativo';
+  const isActive = dbRow.active !== undefined && dbRow.active !== null
+    ? Boolean(dbRow.active)
+    : statusStr.toLowerCase() === 'ativo';
 
-  const nomeEmpresa = dbRow.nome_empresa ?? dbRow.name ?? null;
+  const nomeEmpresa = dbRow.name ?? null;
 
   return {
     ...dbRow,
     nome_empresa: nomeEmpresa,
-    status: statusStr || null,
+    status: statusStr || (isActive ? 'ativo' : 'inativo'),
     name: nomeEmpresa,
     active: isActive,
   };

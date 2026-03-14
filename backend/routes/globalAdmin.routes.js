@@ -83,13 +83,11 @@ router.get('/usage', globalAdminAuth, async (req, res) => {
     const { rows } = await pool.query(`
       SELECT 
         t.id,
-        t.nome_empresa,
+        t.name,
         t.slug,
         t.max_messages,
         0 AS messages_used_current_period,
-        (t.status ILIKE 'ativo') AS active,
-        t.status,
-        t.nome_empresa AS name
+        t.active
       FROM tenants t
       ORDER BY t.created_at DESC
     `).catch(() => ({ rows: [] }));
@@ -107,7 +105,7 @@ router.get('/usage', globalAdminAuth, async (req, res) => {
       ]);
     }
 
-    res.status(200).json(rows);
+    res.status(200).json(rows.map((r) => toTenantApiRow(r)));
 
   } catch (err) {
     console.error('[global-admin] usage:', err.message);
@@ -150,18 +148,13 @@ router.get('/tenants', globalAdminAuth, async (req, res) => {
       `
       SELECT
         t.id,
-        t.nome_empresa,
+        t.name,
         t.slug,
-        t.status,
-        t.plan_id,
+        t.plan,
         t.max_agents,
         t.max_messages,
-        t.agents_used_current_period,
-        t.messages_used_current_period,
-        t.billing_cycle_start,
-        t.created_at,
-        (t.status ILIKE 'ativo') AS active,
-        t.nome_empresa AS name
+        t.active,
+        t.created_at
       FROM tenants t
       ORDER BY t.created_at DESC
       `
@@ -169,12 +162,8 @@ router.get('/tenants', globalAdminAuth, async (req, res) => {
     const list = rows.map((t) =>
       toTenantApiRow({
         ...t,
-        // Garantia de defaults sem tocar no banco
-        status: t.status || 'ativo',
         max_agents: t.max_agents ?? 0,
         max_messages: t.max_messages ?? 0,
-        agents_used_current_period: t.agents_used_current_period ?? 0,
-        messages_used_current_period: t.messages_used_current_period ?? 0,
       })
     );
     res.status(200).json(
@@ -182,16 +171,16 @@ router.get('/tenants', globalAdminAuth, async (req, res) => {
         id: t.id,
         nome_empresa: t.nome_empresa,
         slug: t.slug,
-        plan_id: t.plan_id ?? null,
+        plan_id: t.plan ?? null,
         plan: t.plan ?? 'free',
         status: t.status,
         active: t.active,
         name: t.name,
         max_agents: t.max_agents,
         max_messages: t.max_messages,
-        agents_used_current_period: t.agents_used_current_period,
-        messages_used_current_period: t.messages_used_current_period,
-        billing_cycle_start: t.billing_cycle_start,
+        agents_used_current_period: t.agents_used_current_period ?? 0,
+        messages_used_current_period: t.messages_used_current_period ?? 0,
+        billing_cycle_start: t.billing_cycle_start ?? null,
         created_at: t.created_at,
       }))
     );
