@@ -50,6 +50,76 @@ export interface LogEntry {
   action?: string;
 }
 
+export interface TenantAgent {
+  id: string;
+  tenant_id: string;
+  client_id?: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  status: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TenantChannel {
+  id: string;
+  tenant_id: string;
+  agent_id: string;
+  type: string;
+  name: string;
+  config?: Record<string, unknown>;
+  status: string;
+  is_active?: boolean;
+  message_count?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TenantUser {
+  id: string;
+  tenant_id: string;
+  email: string;
+  name?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TenantUsage {
+  messages_count: number;
+  agents_count: number;
+  channels_count: number;
+  current_plan_limit: {
+    max_agents: number;
+    max_messages: number;
+    plan: string;
+  };
+}
+
+export interface TenantLogRow {
+  id?: string;
+  tenant_id?: string;
+  agent_id?: string;
+  channel_id?: string;
+  channel_type?: string;
+  messages_sent?: number;
+  messages_received?: number;
+  tokens?: number;
+  estimated_cost?: number;
+  recorded_at?: string;
+  created_at?: string;
+}
+
+export interface TenantBilling {
+  tenant_id: string;
+  plan: string;
+  max_agents: number;
+  max_messages: number;
+  messages_count: number;
+  agents_count: number;
+  active: boolean;
+}
+
 /* Mocks for when API is not available */
 const MOCK_TENANTS: Tenant[] = [
   {
@@ -157,5 +227,29 @@ export const adminApi = {
         { id: "2", timestamp: new Date().toISOString(), level: "info", message: "Tenant criado", tenant_id: "1", action: "tenant.create" },
       ]
     );
+  },
+
+  getTenantAgents(tenantId: string): Promise<TenantAgent[]> {
+    return request<TenantAgent[]>(`/api/global-admin/tenants/${tenantId}/agents`);
+  },
+
+  getTenantChannels(tenantId: string): Promise<TenantChannel[]> {
+    return request<TenantChannel[]>(`/api/global-admin/tenants/${tenantId}/channels`);
+  },
+
+  getTenantUsers(tenantId: string): Promise<TenantUser[]> {
+    return request<TenantUser[]>(`/api/global-admin/tenants/${tenantId}/users`);
+  },
+
+  getTenantUsage(tenantId: string): Promise<TenantUsage> {
+    return request<TenantUsage>(`/api/global-admin/tenants/${tenantId}/usage`);
+  },
+
+  getTenantLogs(tenantId: string): Promise<TenantLogRow[]> {
+    return request<TenantLogRow[]>(`/api/global-admin/tenants/${tenantId}/logs`);
+  },
+
+  getTenantBilling(tenantId: string): Promise<TenantBilling> {
+    return request<TenantBilling>(`/api/global-admin/tenants/${tenantId}/billing`);
   },
 };
