@@ -8,6 +8,7 @@ const BASE = () => import.meta.env.VITE_API_BASE_URL || '';
 import { getAuthToken } from "../api/http";
 
 const USER_KEY = 'platform_user';
+const TOKEN_KEY = 'platform_token';
 
 async function request(path, options = {}) {
   const token = getAuthToken();
@@ -20,7 +21,7 @@ async function request(path, options = {}) {
 
   const res = await fetch(url, { ...options, headers });
   if (res.status === 401) {
-    for (const key of ["adminToken", "token", "accessToken", "platform_token"]) {
+    for (const key of ["platform_token", "adminToken", "token", "accessToken"]) {
       localStorage.removeItem(key);
     }
     localStorage.removeItem(USER_KEY);
@@ -35,7 +36,7 @@ async function request(path, options = {}) {
 }
 
 export const globalAdminApi = {
-  getToken,
+  getToken: getAuthToken,
 
   async login(email, password) {
     const url = `${BASE()}/api/global-admin/login`;

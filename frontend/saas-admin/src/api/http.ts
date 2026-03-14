@@ -1,6 +1,6 @@
 const BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || "";
 
-const TOKEN_KEYS = ["adminToken", "token", "accessToken"] as const;
+const TOKEN_KEYS = ["platform_token", "adminToken", "token", "accessToken"] as const;
 
 export function getAuthToken(): string | null {
   for (const key of TOKEN_KEYS) {
@@ -62,6 +62,10 @@ export async function request<T = any>(
     headers,
     body,
   });
+
+  if (resp.status === 401) {
+    console.warn("Token inválido ou expirado");
+  }
 
   if (!resp.ok) {
     let message = `HTTP ${resp.status}`;
