@@ -190,6 +190,47 @@ router.get('/tenants', globalAdminAuth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/global-admin/tenants/:id
+ * Detalhe de um tenant (mesmo formato da listagem)
+ */
+router.get('/tenants/:id', globalAdminAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, slug, plan, max_agents, max_messages, active, created_at FROM tenants WHERE id = $1`,
+      [req.params.id]
+    );
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ error: 'Tenant não encontrado' });
+    }
+    const t = toTenantApiRow({
+      ...row,
+      max_agents: row.max_agents ?? 0,
+      max_messages: row.max_messages ?? 0,
+    });
+    res.status(200).json({
+      id: t.id,
+      nome_empresa: t.nome_empresa,
+      slug: t.slug,
+      plan_id: t.plan ?? null,
+      plan: t.plan ?? 'free',
+      status: t.status,
+      active: t.active,
+      name: t.name,
+      max_agents: t.max_agents,
+      max_messages: t.max_messages,
+      agents_used_current_period: t.agents_used_current_period ?? 0,
+      messages_used_current_period: t.messages_used_current_period ?? 0,
+      billing_cycle_start: t.billing_cycle_start ?? null,
+      created_at: t.created_at,
+    });
+  } catch (err) {
+    console.error('[global-admin] tenants/:id:', err.message);
+    res.status(500).json({ error: 'Erro ao buscar tenant' });
+  }
+});
+
 // Plans
 router.get('/plans', globalAdminAuth, async (req, res) => {
   try {
