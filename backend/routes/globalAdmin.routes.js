@@ -194,6 +194,33 @@ router.get('/tenants', globalAdminAuth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/global-admin/tenant-users
+ * Lista usuários de clientes (admins com tenant_id) com nome do tenant.
+ */
+router.get('/tenant-users', globalAdminAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT a.id, a.tenant_id, a.email, a.name, a.created_at, t.name AS tenant_name, t.slug AS tenant_slug
+      FROM admins a
+      LEFT JOIN tenants t ON t.id = a.tenant_id
+      WHERE a.tenant_id IS NOT NULL
+      ORDER BY a.created_at DESC
+    `);
+    res.status(200).json(rows.map((r) => ({
+      id: r.id,
+      tenant_id: r.tenant_id,
+      email: r.email,
+      name: r.name ?? r.email,
+      created_at: r.created_at,
+      tenant_name: r.tenant_name ?? r.tenant_slug ?? r.tenant_id,
+    })));
+  } catch (err) {
+    console.error('[global-admin] tenant-users:', err.message);
+    res.status(500).json([]);
+  }
+});
+
 // ---------- Tenant-scoped routes (must be before /tenants/:id) ----------
 router.get('/tenants/:tenantId/agents', globalAdminAuth, agentsCtrl.listAgents);
 router.post('/tenants/:tenantId/agents', globalAdminAuth, agentsCtrl.createAgent);
@@ -307,33 +334,14 @@ router.get('/plans', globalAdminAuth, async (req, res) => {
 router.get('/logs', globalAdminAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT id, action, entity, entity_id, created_at
+      SELECT id, created_at
       FROM global_admin_logs
       ORDER BY created_at DESC
       LIMIT 100
     `);
-
-    return res.status(200).json(rows);
-
+    return res.status(200).json(rows.map((r) => ({ id: r.id, action: 'LOG', created_at: r.created_at })));
   } catch (err) {
-    console.warn('[global-admin] logs fallback mock:', err.message);
-
-    return res.status(200).json([
-      {
-        id: 'mock-1',
-        action: 'LOGIN',
-        entity: 'GLOBAL_ADMIN',
-        entity_id: '1',
-        created_at: new Date().toISOString()
-      },
-      {
-        id: 'mock-2',
-        action: 'UPDATE_PLAN',
-        entity: 'TENANT',
-        entity_id: 'tenant-123',
-        created_at: new Date().toISOString()
-      }
-    ]);
+    return res.status(200).json([]);
   }
 });
 export default router;

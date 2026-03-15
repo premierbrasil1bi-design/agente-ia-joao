@@ -6,6 +6,7 @@ export type NavItem = { to: string; label: string; icon: string };
 const NAV_ITEMS: NavItem[] = [
   { to: "/dashboard", label: "Dashboard", icon: "◉" },
   { to: "/tenants", label: "Tenants", icon: "▣" },
+  { to: "/tenant-users", label: "Usuários de Clientes", icon: "👥" },
   { to: "/plans", label: "Planos", icon: "◇" },
   { to: "/usage", label: "Uso", icon: "▤" },
   { to: "/billing", label: "Billing", icon: "◎" },

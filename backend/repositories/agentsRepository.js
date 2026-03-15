@@ -11,13 +11,13 @@ import { findFirstByTenantId, createForTenant as createClientForTenant } from '.
 export async function findAll(clientId) {
   if (clientId) {
     const { rows } = await pool.query(
-      'SELECT id, tenant_id, client_id, name, slug, description, status, created_at, updated_at FROM agents WHERE client_id = $1 ORDER BY name',
+      'SELECT id, tenant_id, client_id, name, slug, status, created_at, updated_at FROM agents WHERE client_id = $1 ORDER BY name',
       [clientId]
     );
     return rows;
   }
   const { rows } = await pool.query(
-    'SELECT id, tenant_id, client_id, name, slug, description, status, created_at, updated_at FROM agents ORDER BY name'
+    'SELECT id, tenant_id, client_id, name, slug, status, created_at, updated_at FROM agents ORDER BY name'
   );
   return rows;
 }
@@ -25,7 +25,7 @@ export async function findAll(clientId) {
 /** List agents by tenant_id (SaaS admin). */
 export async function findByTenantId(tenantId) {
   const { rows } = await pool.query(
-    `SELECT id, tenant_id, client_id, name, slug, description, status, created_at, updated_at
+    `SELECT id, tenant_id, client_id, name, slug, status, created_at, updated_at
      FROM agents WHERE tenant_id = $1 ORDER BY name`,
     [tenantId]
   );
@@ -35,7 +35,7 @@ export async function findByTenantId(tenantId) {
 
 export async function findById(id) {
   const { rows } = await pool.query(
-    'SELECT id, tenant_id, client_id, name, slug, description, status, created_at, updated_at FROM agents WHERE id = $1',
+    'SELECT id, tenant_id, client_id, name, slug, status, created_at, updated_at FROM agents WHERE id = $1',
     [id]
   );
   return rows[0] ?? null;
@@ -44,7 +44,7 @@ export async function findById(id) {
 /** Find by id and tenant_id (ensure tenant scope). */
 export async function findByIdAndTenantId(id, tenantId) {
   const { rows } = await pool.query(
-    'SELECT id, tenant_id, client_id, name, slug, description, status, created_at, updated_at FROM agents WHERE id = $1 AND tenant_id = $2',
+    'SELECT id, tenant_id, client_id, name, slug, status, created_at, updated_at FROM agents WHERE id = $1 AND tenant_id = $2',
     [id, tenantId]
   );
   return rows[0] ?? null;
@@ -65,10 +65,10 @@ export async function existsByClientIdAndSlug(clientId, slug) {
 
 export async function create({ clientId, tenantId, name, slug, description, status }) {
   const { rows } = await pool.query(
-    `INSERT INTO agents (tenant_id, client_id, name, slug, description, status)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, tenant_id, client_id, name, slug, description, status, created_at, updated_at`,
-    [tenantId ?? null, clientId, name, slug, description ?? null, status ?? 'ativo']
+    `INSERT INTO agents (tenant_id, client_id, name, slug, status)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, tenant_id, client_id, name, slug, status, created_at, updated_at`,
+    [tenantId ?? null, clientId, name, slug, status ?? 'ativo']
   );
   return rows[0];
 }
@@ -95,10 +95,9 @@ export async function update(id, { name, slug, description, status }) {
     `UPDATE agents SET
       name = COALESCE($2, name),
       slug = COALESCE($3, slug),
-      description = COALESCE($4, description),
-      status = COALESCE($5, status)
-    WHERE id = $1 RETURNING id, tenant_id, client_id, name, slug, description, status, created_at, updated_at`,
-    [id, name ?? null, slug ?? null, description ?? null, status ?? null]
+      status = COALESCE($4, status)
+    WHERE id = $1 RETURNING id, tenant_id, client_id, name, slug, status, created_at, updated_at`,
+    [id, name ?? null, slug ?? null, status ?? null]
   );
   return rows[0] ?? null;
 }

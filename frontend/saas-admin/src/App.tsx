@@ -8,6 +8,7 @@ import TenantsListPage from "./pages/TenantsListPage";
 import TenantDetailPage from "./pages/TenantDetailPage";
 import TenantNew from "./pages/TenantNew";
 import TenantUsers from "./pages/TenantUsers";
+import TenantUsersList from "./pages/TenantUsersList";
 import PlansPage from "./pages/PlansPage";
 import UsagePage from "./pages/UsagePage";
 import BillingPage from "./pages/BillingPage";
@@ -27,6 +28,7 @@ export default function App() {
             <Route path="/tenants/new" element={<TenantNew />} />
             <Route path="/tenants/:tenantId" element={<TenantDetailPage />} />
             <Route path="/tenants/:id/users" element={<TenantUsers />} />
+            <Route path="/tenant-users" element={<TenantUsersList />} />
             <Route path="/plans" element={<PlansPage />} />
             <Route path="/usage" element={<UsagePage />} />
             <Route path="/billing" element={<BillingPage />} />
