@@ -123,6 +123,10 @@ agentRouter.use(inboundRoutes);
 
 apiRouter.use('/agent', agentRouter);
 
+/* ---------- ROTAS /api/agents e /api/channels (Client App, com auth) ---------- */
+apiRouter.use('/agents', agentAuth, requireTenant, agentsRoutes);
+apiRouter.use('/channels', agentAuth, requireTenant, channelsRoutes);
+
 /* ---------- OUTRAS ROTAS DA API ---------- */
 apiRouter.use('/', evolutionWebhookRoutes);
 apiRouter.use('/auth', authRoutes);
