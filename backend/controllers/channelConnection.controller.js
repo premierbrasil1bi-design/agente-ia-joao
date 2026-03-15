@@ -26,6 +26,7 @@ export async function connectChannel(req, res) {
     const channel = await getChannelFromReq(req, res);
     if (!channel) return;
 
+    console.log('[CONNECT_CHANNEL] channelId:', channel.id, 'tenantId:', channel.tenant_id);
     const instanceName = await channelConnectionService.connectWhatsAppChannel(channel);
 
     res.status(200).json({
@@ -46,10 +47,12 @@ export async function getQrCode(req, res) {
     const channel = await getChannelFromReq(req, res);
     if (!channel) return;
 
+    console.log('[GET_QRCODE] channelId:', channel.id);
     const qr = await channelConnectionService.getChannelQrCode(channel);
+    const qrcode = typeof qr === 'string' ? qr : (qr?.base64 ?? qr?.qrcode ?? qr?.code ?? '');
     res.status(200).json({
       success: true,
-      qrcode: qr,
+      qrcode,
     });
   } catch (err) {
     console.error('[channelConnection] getQrCode:', err.message);
@@ -65,6 +68,7 @@ export async function getStatus(req, res) {
     const channel = await getChannelFromReq(req, res);
     if (!channel) return;
 
+    console.log('[CHECK_STATUS] channelId:', channel.id);
     const { state, channel: updatedChannel } = await channelConnectionService.getChannelStatus(channel);
 
     res.status(200).json({
@@ -86,6 +90,7 @@ export async function disconnectChannel(req, res) {
     const channel = await getChannelFromReq(req, res);
     if (!channel) return;
 
+    console.log('[DISCONNECT_CHANNEL] channelId:', channel.id);
     await channelConnectionService.disconnectChannel(channel);
 
     res.status(200).json({

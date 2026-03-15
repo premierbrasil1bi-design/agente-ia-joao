@@ -1,6 +1,7 @@
 /**
- * Channels page – full CRUD for tenant-scoped channels (Client App).
- * Channels are linked to an agent. GET/POST/PUT/DELETE /api/channels.
+ * Channels page – full CRUD + WhatsApp connection controls (Client App).
+ * Served at app.omnia1biai.com.br/channels.
+ * CRUD: /api/agent/channels. Connection: /api/channels/:id/connect|qrcode|status|disconnect.
  */
 
 import { useCallback, useEffect, useState } from 'react';
