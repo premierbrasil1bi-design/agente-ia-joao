@@ -14,7 +14,8 @@ import pool from '../db/connection.js';
 
 export async function findByEmail(email) {
   const { rows } = await pool.query(
-    'SELECT id, email, password_hash, name, created_at FROM admins WHERE email = $1',
+    `SELECT id, email, password_hash, name, created_at, tenant_id, active
+     FROM admins WHERE email = $1`,
     [email]
   );
   return rows[0] ?? null;
