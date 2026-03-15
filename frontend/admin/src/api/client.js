@@ -1,100 +1,47 @@
 /**
- * Cliente API – envia canal ativo e JWT em todas as requisições.
- * Query: ?channel=X  |  Header: x-channel  |  Fallback: web
- * Em 401: chama onUnauthorized (ex.: logout + redirect /login) e lança erro.
- * Não envia requisição protegida se o token estiver ausente ou expirado (evita 401).
+ * Cliente API – todas as requisições passam por agentApi (Authorization: Bearer <token>).
+ * Adiciona canal ativo: query ?channel=X e header x-channel.
  */
 
-
-import { getApiBaseUrl } from '../config/env.js';
+import { agentApi } from '../services/agentApi.js';
 import { AGENT_ID } from '../config/agent.js';
-
-const getBaseUrl = getApiBaseUrl;
-
-/** Retorna true se o JWT estiver expirado (lê payload sem verificar assinatura). */
-function isTokenExpired(token) {
-  if (!token || typeof token !== 'string') return true;
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return true;
-    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const payload = JSON.parse(atob(b64));
-    if (payload.exp == null) return false;
-    return payload.exp * 1000 <= Date.now();
-  } catch {
-    return true;
-  }
-}
 
 /**
  * @param {() => string} getChannel - canal ativo (web, api, whatsapp, instagram)
- * @param {() => string | null} [getToken] - token JWT do admin (para rotas protegidas)
- * @param {() => void} [onUnauthorized] - chamado quando a API retorna 401 (redirecionar para /login)
+ * @param {() => string | null} [getToken] - mantido por compatibilidade; token vem de agentApi
+ * @param {() => void} [onUnauthorized] - mantido por compatibilidade; 401 tratado em agentApi
  */
 export function createApiClient(getChannel, getToken = null, onUnauthorized = null) {
   const channel = () => (typeof getChannel === 'function' ? getChannel() : getChannel) || 'web';
-  const token = () => (typeof getToken === 'function' ? getToken() : getToken) || null;
 
-  const isProtectedPath = (path) => /^\/api\/(dashboard|agents)/.test(path);
-
-  function ensureAuth(path) {
-    const t = token();
-    if (isProtectedPath(path) && (!t || isTokenExpired(t))) {
-      if (onUnauthorized) onUnauthorized();
-      throw new Error('Sessão inválida ou expirada. Faça login novamente.');
-    }
-  }
-
-  function buildHeaders(options = {}) {
+  function pathWithChannel(path) {
     const ch = channel();
-    const headers = {
-      'Content-Type': 'application/json',
-      'x-channel': ch,
-      ...options.headers,
-    };
-    const t = token();
-    if (t) headers.Authorization = `Bearer ${t}`;
-    return headers;
+    const sep = path.includes('?') ? '&' : '?';
+    return `${path}${sep}channel=${encodeURIComponent(ch)}`;
   }
 
-  function handleResponse(res, data) {
-    if (res.status === 401) {
-      if (onUnauthorized) onUnauthorized();
-      throw new Error(data.error || data.message || 'Sessão inválida. Faça login novamente.');
-    }
-    if (!res.ok) {
-      throw new Error(data.error || data.message || `Erro ${res.status}`);
-    }
+  function headersWithChannel(options = {}) {
+    return {
+      ...options.headers,
+      'x-channel': channel(),
+    };
   }
 
   async function request(path, options = {}) {
-    ensureAuth(path);
-    const url = `${getBaseUrl()}${path}`;
-    const ch = channel();
-    const urlObj = new URL(url, window.location.origin);
-    urlObj.searchParams.set('channel', ch);
-    const headers = buildHeaders(options);
-
-    console.log(`[API] Canal: ${ch.toUpperCase()} | Endpoint: ${path}`);
-    const res = await fetch(urlObj.toString(), { ...options, headers });
-    const data = await res.json().catch(() => ({}));
-    handleResponse(res, data);
-    return data;
+    const pathWithQuery = pathWithChannel(path);
+    return agentApi.request(pathWithQuery, {
+      ...options,
+      headers: headersWithChannel(options),
+    });
   }
 
   async function requestWithHeaders(path, options = {}) {
-    ensureAuth(path);
-    const url = `${getBaseUrl()}${path}`;
-    const ch = channel();
-    const urlObj = new URL(url, window.location.origin);
-    urlObj.searchParams.set('channel', ch);
-    const headers = buildHeaders(options);
-
-    console.log(`[API] Canal: ${ch.toUpperCase()} | Endpoint: ${path}`);
-    const res = await fetch(urlObj.toString(), { ...options, headers });
-    const data = await res.json().catch(() => ({}));
-    const xChannelActive = res.headers.get('x-channel-active') || res.headers.get('X-Channel-Active') || '';
-    handleResponse(res, data);
+    const pathWithQuery = pathWithChannel(path);
+    const { data, response } = await agentApi.requestWithResponse(pathWithQuery, {
+      ...options,
+      headers: headersWithChannel(options),
+    });
+    const xChannelActive = response.headers.get('x-channel-active') || response.headers.get('X-Channel-Active') || '';
     return { data, headers: { 'x-channel-active': xChannelActive } };
   }
 

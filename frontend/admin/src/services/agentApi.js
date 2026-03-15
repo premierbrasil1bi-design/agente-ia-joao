@@ -48,8 +48,35 @@ async function request(path, options = {}) {
   return data;
 }
 
+/** Igual a request(), mas retorna { data, response } para leitura de headers (ex.: x-channel-active). */
+async function requestWithResponse(path, options = {}) {
+  const token = getToken();
+  if (!token) {
+    clearAndRedirectLogin();
+    throw new Error('Sessão expirada. Faça login novamente.');
+  }
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+    ...options.headers,
+  };
+  const url = `${BASE()}${path}`;
+  const res = await fetch(url, { ...options, headers });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    clearAndRedirectLogin();
+    throw new Error(data.error || 'Sessão inválida. Faça login novamente.');
+  }
+  if (!res.ok) {
+    throw new Error(data.error || data.message || `Erro ${res.status}`);
+  }
+  return { data, response: res };
+}
+
 export const agentApi = {
   getToken,
+  request,
+  requestWithResponse,
   getAgent() {
     try {
       const s = localStorage.getItem(AGENT_USER);
