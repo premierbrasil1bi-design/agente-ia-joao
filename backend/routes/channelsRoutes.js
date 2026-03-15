@@ -14,8 +14,24 @@ const router = Router();
 router.use(agentAuth);
 
 /**
- * GET /api/channels
+ * Garante que cada canal tenha o campo "type" no JSON (contrato do frontend).
+ * Se o banco não retornar type, usa provider === 'evolution' → 'whatsapp', senão 'api'.
+ */
+function normalizeChannelForApi(ch) {
+  if (!ch || typeof ch !== 'object') return ch;
+  const type =
+    ch.type != null && String(ch.type).trim() !== ''
+      ? String(ch.type).trim().toLowerCase()
+      : ch.provider === 'evolution'
+        ? 'whatsapp'
+        : 'api';
+  return { ...ch, type };
+}
+
+/**
+ * GET /api/channels (e GET /api/agent/channels – mesma rota)
  * Retorna todos os canais do tenant do usuário logado.
+ * Garante que cada item inclua o campo "type" para o frontend exibir os botões WhatsApp.
  */
 router.get('/', requireActiveTenant, async (req, res) => {
   try {
@@ -24,7 +40,8 @@ router.get('/', requireActiveTenant, async (req, res) => {
       return res.status(401).json({ error: 'Tenant não identificado.' });
     }
     const list = await channelRepo.findAllByTenant(tenantId);
-    res.status(200).json(list);
+    const normalized = Array.isArray(list) ? list.map(normalizeChannelForApi) : [];
+    res.status(200).json(normalized);
   } catch (err) {
     console.error('[channels] GET /:', err.message);
     res.status(500).json({ error: 'Erro ao listar canais.' });
@@ -33,6 +50,7 @@ router.get('/', requireActiveTenant, async (req, res) => {
 
 /**
  * GET /api/channels/:id
+ * Retorna o canal com o campo "type" garantido (contrato do frontend).
  */
 router.get('/:id', requireActiveTenant, async (req, res) => {
   try {
@@ -44,7 +62,7 @@ router.get('/:id', requireActiveTenant, async (req, res) => {
     if (!channel) {
       return sendNotFound(res, 'Canal não encontrado.');
     }
-    res.status(200).json(channel);
+    res.status(200).json(normalizeChannelForApi(channel));
   } catch (err) {
     console.error('[channels] GET /:id:', err.message);
     res.status(500).json({ error: 'Erro ao buscar canal.' });
