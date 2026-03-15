@@ -1,17 +1,17 @@
 /**
- * Contexto de autenticação AGENTE IA OMNICANAL – exclusivo: agent_token e agent_user no LocalStorage.
- * Isolado do SIS-ACOLHE. Usado para RequireAuth e exibição do usuário.
+ * Contexto de autenticação Client App (OMNIA AI).
+ * Token em localStorage.getItem('token'); usado para RequireAuth e exibição do usuário.
  */
 
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 
-const AGENT_TOKEN = 'agent_token';
+const TOKEN_KEY = 'token';
 const AGENT_USER = 'agent_user';
 
 const AgentAuthContext = createContext(null);
 
 export function AgentAuthProvider({ children }) {
-  const [token, setToken] = useState(() => localStorage.getItem(AGENT_TOKEN));
+  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY));
   const [agent, setAgent] = useState(() => {
     try {
       const s = localStorage.getItem(AGENT_USER);
@@ -22,21 +22,21 @@ export function AgentAuthProvider({ children }) {
   });
 
   const login = useCallback((newToken, agentData) => {
-    localStorage.setItem(AGENT_TOKEN, newToken);
+    localStorage.setItem(TOKEN_KEY, newToken);
     localStorage.setItem(AGENT_USER, JSON.stringify(agentData || {}));
     setToken(newToken);
     setAgent(agentData || null);
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem(AGENT_TOKEN);
+    localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(AGENT_USER);
     setToken(null);
     setAgent(null);
   }, []);
 
   useEffect(() => {
-    const t = localStorage.getItem(AGENT_TOKEN);
+    const t = localStorage.getItem(TOKEN_KEY);
     const a = localStorage.getItem(AGENT_USER);
     if (t !== token) setToken(t);
     if (a) {
@@ -47,7 +47,7 @@ export function AgentAuthProvider({ children }) {
     } else if (agent) setAgent(null);
   }, []);
 
-  const getToken = useCallback(() => token || localStorage.getItem(AGENT_TOKEN), [token]);
+  const getToken = useCallback(() => token || localStorage.getItem(TOKEN_KEY), [token]);
 
   const value = {
     token,

@@ -1,6 +1,6 @@
 /**
- * Login AGENTE IA OMNICANAL – POST /api/agent/auth/login.
- * Salva SOMENTE: agent_token e agent_user no LocalStorage (isolado do SIS-ACOLHE).
+ * Login Client App (OMNIA AI) – POST /api/agent/auth/login.
+ * Salva token em localStorage('token') e dados do usuário em agent_user.
  */
 
 import { useState } from 'react';
@@ -26,7 +26,7 @@ export function Login() {
     setLoading(true);
     try {
       const { token, agent } = await agentApi.login(email, password);
-      localStorage.setItem('agent_token', token);
+      localStorage.setItem('token', token);
       localStorage.setItem('agent_user', JSON.stringify(agent));
       login(token, agent);
       setTimeout(() => navigate('/', { replace: true }), 0);

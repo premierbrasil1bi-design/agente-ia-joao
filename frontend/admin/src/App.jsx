@@ -52,7 +52,7 @@ const linkStyle = {
   fontSize: '0.9rem',
 };
 
-/** Redireciona para /login se agent_token não existir (AGENTE IA OMNICANAL). */
+/** Redireciona para /login se não houver token (Client App OMNIA AI). */
 function RequireAuth({ children }) {
   const { isAuthenticated } = useAgentAuth();
   const location = useLocation();

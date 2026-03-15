@@ -1,53 +1,45 @@
 /**
- * Middleware: autenticação AGENTE IA OMNICANAL (JWT exclusivo, isolado do SIS-ACOLHE).
- * Lê header Authorization: Bearer TOKEN. Se inválido → 401. Se válido → req.agent = decoded.
+ * Middleware: autenticação das rotas /api/agent/* (Client App OMNIA AI).
+ * Lê Authorization: Bearer <token>, valida JWT com AGENT_JWT_SECRET e anexa req.user e req.tenantId.
  */
 
 import jwt from 'jsonwebtoken';
 import { config } from '../config/env.js';
-import * as agentUsersRepo from '../repositories/agentUsersRepository.js';
-import { isConnected } from '../db/connection.js';
-
-function getTokenFromRequest(req) {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.slice(7);
-  }
-  return null;
-}
 
 export async function agentAuth(req, res, next) {
-  const token = getTokenFromRequest(req);
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Token não fornecido' });
+  }
+
+  const token = authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7)
+    : authHeader;
+
   if (!token) {
-    return res.status(401).json({ error: 'Token ausente. Faça login.' });
+    return res.status(401).json({ error: 'Token não fornecido' });
+  }
+
+  const secret = config.agentJwt?.secret;
+  if (!secret) {
+    console.error('[agentAuth] AGENT_JWT_SECRET não definido');
+    return res.status(500).json({ error: 'Configuração do servidor incompleta.' });
   }
 
   let decoded;
   try {
-    decoded = jwt.verify(token, config.agentJwt.secret);
-  } catch {
+    decoded = jwt.verify(token, secret);
+  } catch (err) {
     return res.status(401).json({ error: 'Token inválido ou expirado.' });
   }
 
-  if (!decoded.id && !decoded.sub) {
+  const userId = decoded.userId || decoded.id || decoded.sub;
+  if (!userId) {
     return res.status(401).json({ error: 'Token inválido.' });
   }
 
-  const userId = decoded.id || decoded.sub;
-  if (isConnected()) {
-    try {
-      const user = await agentUsersRepo.findById(userId);
-      if (!user) {
-        return res.status(401).json({ error: 'Usuário não encontrado. Faça login novamente.' });
-      }
-      req.agent = { id: user.id, name: user.name, email: user.email, role: user.role };
-    } catch (err) {
-      console.error('[agentAuth] Falha ao validar usuário:', err.message);
-      return res.status(401).json({ error: 'Não foi possível validar a sessão. Faça login novamente.' });
-    }
-  } else {
-    req.agent = { id: decoded.id || decoded.sub, email: decoded.email, name: decoded.name || 'Agente', role: decoded.role || 'admin' };
-  }
+  req.user = decoded;
+  req.tenantId = decoded.tenantId ?? decoded.tenant_id ?? null;
 
   next();
 }

@@ -1,6 +1,6 @@
 /**
- * Dashboard AGENTE IA OMNICANAL – GET /api/agent/dashboard/summary.
- * Se agent_token não existir → redirect /login. Caso contrário carrega summary.
+ * Dashboard Client App – GET /api/agent/dashboard/summary.
+ * Sem token → redirect /login. Requisição envia automaticamente Authorization: Bearer <token>.
  */
 
 import { useEffect, useState } from 'react';

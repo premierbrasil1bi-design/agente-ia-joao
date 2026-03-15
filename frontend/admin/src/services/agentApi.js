@@ -1,22 +1,22 @@
 /**
- * API cliente AGENTE IA OMNICANAL – LocalStorage exclusivo: agent_token, agent_user.
- * Todas as requisições protegidas enviam Authorization: Bearer agent_token.
- * Em 401: limpa agent_token e agent_user e redireciona para /login.
+ * API cliente Client App (OMNIA AI).
+ * Token em localStorage.getItem('token'); todas as requisições protegidas enviam Authorization: Bearer <token>.
+ * Em 401 ou sem token: limpa token e redireciona para /login.
  */
 
 import { getApiBaseUrl } from '../config/env.js';
 
 const BASE = getApiBaseUrl;
 
-const AGENT_TOKEN = 'agent_token';
+const TOKEN_KEY = 'token';
 const AGENT_USER = 'agent_user';
 
 function getToken() {
-  return localStorage.getItem(AGENT_TOKEN);
+  return localStorage.getItem(TOKEN_KEY);
 }
 
 function clearAndRedirectLogin() {
-  localStorage.removeItem(AGENT_TOKEN);
+  localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(AGENT_USER);
   const base = typeof window !== 'undefined' ? window.location.origin : '';
   if (typeof window !== 'undefined') window.location.href = `${base}/login`;
@@ -24,11 +24,15 @@ function clearAndRedirectLogin() {
 
 async function request(path, options = {}) {
   const token = getToken();
+  if (!token) {
+    clearAndRedirectLogin();
+    throw new Error('Sessão expirada. Faça login novamente.');
+  }
   const headers = {
     'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
     ...options.headers,
   };
-  if (token) headers.Authorization = `Bearer ${token}`;
 
   const url = `${BASE()}${path}`;
   const res = await fetch(url, { ...options, headers });
