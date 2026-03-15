@@ -15,15 +15,16 @@ router.use(agentAuth);
 
 /**
  * Garante que cada canal tenha o campo "type" no JSON (contrato do frontend).
- * Se o banco não retornar type, usa provider === 'evolution' → 'whatsapp', senão 'api'.
+ * Canais Evolution (provider === 'evolution') retornam sempre type: "whatsapp" para os botões aparecerem.
  */
 function normalizeChannelForApi(ch) {
   if (!ch || typeof ch !== 'object') return ch;
+  const isEvolution = String(ch.provider || '').toLowerCase() === 'evolution';
   const type =
-    ch.type != null && String(ch.type).trim() !== ''
-      ? String(ch.type).trim().toLowerCase()
-      : ch.provider === 'evolution'
-        ? 'whatsapp'
+    isEvolution
+      ? 'whatsapp'
+      : (ch.type != null && String(ch.type).trim() !== '')
+        ? String(ch.type).trim().toLowerCase()
         : 'api';
   return { ...ch, type };
 }

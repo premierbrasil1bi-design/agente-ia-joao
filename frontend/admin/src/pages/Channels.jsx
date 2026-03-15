@@ -166,14 +166,11 @@ function StatusBadge({ channel }) {
 
 function ConnectionBadge({ evolutionStatus }) {
   if (evolutionStatus === undefined || evolutionStatus === null) return null;
-  const map = { open: 'Connected', close: 'Disconnected', connecting: 'Connecting...' };
+  const map = { open: 'Connected', close: 'Disconnected', connecting: 'Connecting...', connected: 'Connected', disconnected: 'Disconnected' };
   const label = map[evolutionStatus] || String(evolutionStatus);
-  const style =
-    evolutionStatus === 'open'
-      ? { ...styles.badge, ...styles.badgeAtivo }
-      : evolutionStatus === 'connecting'
-        ? { ...styles.badge, ...styles.badgeConnecting }
-        : { ...styles.badge, ...styles.badgeDisconnected };
+  const isConnected = evolutionStatus === 'open' || evolutionStatus === 'connected';
+  const isConnecting = evolutionStatus === 'connecting';
+  const style = isConnected ? { ...styles.badge, ...styles.badgeAtivo } : isConnecting ? { ...styles.badge, ...styles.badgeConnecting } : { ...styles.badge, ...styles.badgeDisconnected };
   return <span style={style}>{label}</span>;
 }
 
@@ -270,8 +267,9 @@ export function Channels() {
 
         setConnectionStatusMap((prev) => ({ ...prev, [qrChannelId]: state ?? prev[qrChannelId] }));
 
-        if (state === 'open') {
-          setConnectionStatusMap((prev) => ({ ...prev, [qrChannelId]: 'open' }));
+        const isConnected = state === 'open' || state === 'connected';
+        if (isConnected) {
+          setConnectionStatusMap((prev) => ({ ...prev, [qrChannelId]: state }));
           setQrChannelId(null);
           setShowQrModal(false);
           setToast('WhatsApp conectado com sucesso');
@@ -452,7 +450,7 @@ export function Channels() {
       });
       const status = data.status ?? data?.channel?.status ?? null;
       setConnectionStatusMap((prev) => ({ ...prev, [channelId]: status }));
-      const label = status === 'open' ? 'Connected' : status === 'close' ? 'Disconnected' : status === 'connecting' ? 'Connecting' : String(status || '—');
+      const label = (status === 'open' || status === 'connected') ? 'Connected' : (status === 'close' || status === 'disconnected') ? 'Disconnected' : status === 'connecting' ? 'Connecting' : String(status || '—');
       setToast(`Status: ${label}`);
     } catch (err) {
       console.error(err);

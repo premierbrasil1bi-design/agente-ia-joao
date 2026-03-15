@@ -69,11 +69,11 @@ export async function getStatus(req, res) {
     if (!channel) return;
 
     console.log('[CHECK_STATUS] channelId:', channel.id);
-    const { state, channel: updatedChannel } = await channelConnectionService.getChannelStatus(channel);
+    const { normalizedStatus, channel: updatedChannel } = await channelConnectionService.getChannelStatus(channel);
 
     res.status(200).json({
       success: true,
-      status: state?.state ?? state?.instance?.state ?? null,
+      status: normalizedStatus,
       channel: updatedChannel,
     });
   } catch (err) {

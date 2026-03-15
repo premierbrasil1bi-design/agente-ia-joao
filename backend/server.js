@@ -25,8 +25,10 @@ import globalAdminRoutes from './routes/globalAdmin.routes.js';
 import tenantUsersRoutes from './routes/tenantUsers.routes.js';
 import platformTenantsRoutes from './routes/platformTenants.routes.js';
 import agentContextRoutes from './routes/agentContext.routes.js';
+import webhooksRoutes from './routes/webhooks.routes.js';
 
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
+import { startChannelMonitor } from './services/channelMonitor.service.js';
 import { agentAuth } from './middleware/agentAuth.js';
 
 const app = express();
@@ -138,6 +140,9 @@ apiRouter.use('/auth', authRoutes);
 
 app.use('/api', apiRouter);
 
+/* ---------- WEBHOOKS (Evolution) ---------- */
+app.use('/webhooks', webhooksRoutes);
+
 /* =========================================================
    ROOT INBOUND (SE NECESSÁRIO)
 ========================================================= */
@@ -172,4 +177,5 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor rodando na porta ${PORT}`);
+  startChannelMonitor();
 });

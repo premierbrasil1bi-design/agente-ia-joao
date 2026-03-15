@@ -1,12 +1,14 @@
 /**
  * Serviço de conexão de canais WhatsApp via Evolution API.
  * Orquestra criação de instância, QR, status e desconexão.
- * Nome da instância: tenantSlug_agentSlug_channelId (contexto tenant + agent).
+ * Criação idempotente (409 = instância já existe).
  */
 
 import * as evolutionService from './evolutionService.js';
 import * as channelRepo from '../repositories/channel.repository.js';
 import { pool } from '../db/pool.js';
+import { normalizeEvolutionState } from '../utils/evolutionState.js';
+import { logger } from '../utils/logger.js';
 
 /** Sanitiza string para nome de instância (apenas alfanumérico e _). */
 function sanitizeInstancePart(s) {
@@ -66,8 +68,8 @@ async function instanceNameForChannel(channel) {
 }
 
 /**
- * Inicia conexão WhatsApp: cria instância na Evolution e persiste estado.
- * Usa channel.instance (slug) como nome quando preenchido; senão tenantSlug_agentSlug_channelId.
+ * Inicia conexão WhatsApp: cria instância (idempotente) e inicia conexão (gera QR).
+ * Se a instância já existir (409), ignora e segue para connectInstance.
  * @param {object} channel - canal com id, tenant_id, instance?
  * @returns {Promise<{ instanceName: string }>}
  */
@@ -77,7 +79,12 @@ export async function connectWhatsAppChannel(channel) {
     channel?.external_id ||
     (await instanceNameForChannel(channel));
 
-  await evolutionService.createInstance(instanceName);
+  try {
+    await evolutionService.createInstance(instanceName);
+  } catch (err) {
+    if (err.response?.status !== 409) throw err;
+  }
+  await evolutionService.connectInstance(instanceName);
 
   await channelRepo.updateConnection(channel.id, channel.tenant_id, {
     external_id: instanceName,
@@ -85,7 +92,7 @@ export async function connectWhatsAppChannel(channel) {
     status: 'connecting',
   });
 
-  console.log('[channelConnection] Instance created:', instanceName, 'channel:', channel.id);
+  logger.instanceCreated(instanceName, channel.id);
   return instanceName;
 }
 
@@ -102,26 +109,29 @@ export async function getChannelQrCode(channel) {
 }
 
 /**
- * Obtém status na Evolution e atualiza banco se status = "open".
- * Usa external_id ou slug do campo instance.
+ * Obtém status na Evolution e atualiza banco com status normalizado (connected/disconnected/connecting).
  */
 export async function getChannelStatus(channel) {
   const instanceName = getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
   if (!instanceName) {
-    return { state: null, channel };
+    return { normalizedStatus: 'unknown', channel };
   }
 
   const state = await evolutionService.getInstanceStatus(instanceName);
+  const rawState = state?.state ?? state?.instance?.state ?? null;
+  const normalizedStatus = normalizeEvolutionState(rawState);
 
-  if (state?.state === 'open' || state?.instance?.state === 'open') {
-    await channelRepo.updateConnection(channel.id, channel.tenant_id, {
-      status: 'connected',
-      connected_at: new Date(),
-      last_error: null,
-    });
+  const previousStatus = channel.status ?? null;
+  if (normalizedStatus !== previousStatus) {
+    logger.statusChange(instanceName, channel.id, previousStatus, normalizedStatus);
   }
 
-  return { state, channel };
+  await channelRepo.updateConnection(channel.id, channel.tenant_id, {
+    status: normalizedStatus,
+    ...(normalizedStatus === 'connected' ? { connected_at: new Date(), last_error: null } : {}),
+  });
+
+  return { normalizedStatus, state, channel };
 }
 
 /**
@@ -145,5 +155,5 @@ export async function disconnectChannel(channel) {
     external_id: null,
     connected_at: null,
   });
-  console.log('[channelConnection] Disconnected channel:', channel.id);
+  logger.statusChange(instanceName, channel.id, channel.status, 'disconnected');
 }

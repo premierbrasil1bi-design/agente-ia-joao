@@ -1,10 +1,14 @@
 /**
- * Evolution API – send messages to WhatsApp e gestão de instâncias.
- * Reusable channel sender for the message pipeline.
- * Headers: apikey (EVOLUTION_API_KEY) em todas as chamadas.
+ * Evolution API 2.2.x – serviço centralizado para WhatsApp (WHATSAPP-BAILEYS).
+ * Headers: apikey (EVOLUTION_API_KEY) e Content-Type em todas as chamadas.
+ * Retry: máx 3 tentativas, delay 500ms.
  */
 
 import axios from 'axios';
+import { logger } from '../utils/logger.js';
+
+const RETRY_MAX = 3;
+const RETRY_DELAY_MS = 500;
 
 const getBaseUrl = () => {
   const url = process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL;
@@ -12,68 +16,113 @@ const getBaseUrl = () => {
   return url.replace(/\/$/, '');
 };
 
-const getApiKey = () => process.env.EVOLUTION_API_KEY || '';
+const getHeaders = () => ({
+  apikey: process.env.EVOLUTION_API_KEY || '',
+  'Content-Type': 'application/json',
+});
 
-const evolutionHeaders = () => {
-  const apikey = getApiKey();
-  const headers = { 'Content-Type': 'application/json' };
-  if (apikey) headers.apikey = apikey;
-  return headers;
-};
+const opts = () => ({ timeout: 15000, headers: getHeaders() });
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
- * Cria uma instância na Evolution API.
+ * Executa request com retry (máx 3 tentativas, delay 500ms).
+ */
+async function withRetry(fn, operation, instanceName) {
+  let lastErr;
+  for (let attempt = 1; attempt <= RETRY_MAX; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      logger.apiError(operation, instanceName, err.message || err.response?.data?.message || String(err));
+      if (attempt < RETRY_MAX) await sleep(RETRY_DELAY_MS);
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Cria uma instância na Evolution API 2.2.x.
  * POST /instance/create
- * Body: { instanceName, qrcode: true }
+ * Body: { instanceName, integration: "WHATSAPP-BAILEYS" }
  */
 export async function createInstance(instanceName) {
   const baseUrl = getBaseUrl();
-  const { data } = await axios.post(
-    `${baseUrl}/instance/create`,
-    { instanceName, qrcode: true },
-    { timeout: 15000, headers: evolutionHeaders() }
+  return withRetry(
+    () =>
+      axios.post(
+        `${baseUrl}/instance/create`,
+        { instanceName, integration: 'WHATSAPP-BAILEYS' },
+        opts()
+      ).then((r) => r.data),
+    'createInstance',
+    instanceName
   );
-  return data;
 }
 
 /**
- * Obtém QR Code para conexão.
- * GET /instance/connect/{instanceName}
- * Resposta retorna QR Code base64.
+ * Inicia conexão e gera QR Code.
+ * GET /instance/connect/:instance
+ */
+export async function connectInstance(instanceName) {
+  const baseUrl = getBaseUrl();
+  return withRetry(
+    () =>
+      axios.get(`${baseUrl}/instance/connect/${encodeURIComponent(instanceName)}`, opts()).then((r) => r.data),
+    'connectInstance',
+    instanceName
+  );
+}
+
+/**
+ * Alias para connectInstance (compatibilidade).
  */
 export async function getQrCode(instanceName) {
-  const baseUrl = getBaseUrl();
-  const { data } = await axios.get(
-    `${baseUrl}/instance/connect/${encodeURIComponent(instanceName)}`,
-    { timeout: 15000, headers: evolutionHeaders() }
-  );
-  return data;
+  return connectInstance(instanceName);
 }
 
 /**
- * Obtém estado da conexão da instância.
- * GET /instance/connectionState/{instanceName}
+ * Estado da conexão da instância.
+ * GET /instance/connectionState/:instance
+ */
+export async function getConnectionStatus(instanceName) {
+  const baseUrl = getBaseUrl();
+  return withRetry(
+    () =>
+      axios.get(
+        `${baseUrl}/instance/connectionState/${encodeURIComponent(instanceName)}`,
+        opts()
+      ).then((r) => r.data),
+    'getConnectionStatus',
+    instanceName
+  );
+}
+
+/**
+ * Alias para getConnectionStatus (compatibilidade).
  */
 export async function getInstanceStatus(instanceName) {
-  const baseUrl = getBaseUrl();
-  const { data } = await axios.get(
-    `${baseUrl}/instance/connectionState/${encodeURIComponent(instanceName)}`,
-    { timeout: 15000, headers: evolutionHeaders() }
-  );
-  return data;
+  return getConnectionStatus(instanceName);
 }
 
 /**
- * Remove/desconecta instância.
- * DELETE /instance/delete/{instanceName}
+ * Desconecta a sessão (logout) – Evolution 2.2.x.
+ * DELETE /instance/logout/:instance
  */
 export async function disconnectInstance(instanceName) {
   const baseUrl = getBaseUrl();
-  const { data } = await axios.delete(
-    `${baseUrl}/instance/delete/${encodeURIComponent(instanceName)}`,
-    { timeout: 15000, headers: evolutionHeaders() }
+  return withRetry(
+    () =>
+      axios.delete(
+        `${baseUrl}/instance/logout/${encodeURIComponent(instanceName)}`,
+        opts()
+      ).then((r) => r.data),
+    'disconnectInstance',
+    instanceName
   );
-  return data;
 }
 
 /**
