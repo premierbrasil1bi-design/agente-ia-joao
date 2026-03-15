@@ -4,8 +4,12 @@ import { processIncomingMessage } from '../services/messagePipeline.js';
 import * as evolutionService from '../services/evolutionService.js';
 import { resolveAgentForChannel } from '../services/agentRouter.js';
 import { enqueueConversationTask } from '../services/conversationQueueService.js';
+import * as evolutionWebhookController from '../controllers/evolutionWebhook.controller.js';
 
 const router = express.Router();
+
+// POST /api/webhooks/whatsapp/evolution – Evolution → canal por external_id → pipeline
+router.post('/webhooks/whatsapp/evolution', evolutionWebhookController.handleEvolutionWhatsApp);
 
 function normalizeBrazilNumber(raw) {
   if (raw == null) return '';

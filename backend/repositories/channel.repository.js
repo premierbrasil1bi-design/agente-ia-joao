@@ -5,12 +5,13 @@
 
 import { pool } from '../db/pool.js';
 
+const CHANNEL_SELECT = `id, tenant_id, agent_id, type, instance, is_active AS active,
+  provider, config, external_id, connected_at, last_error, status,
+  created_at, updated_at`;
+
 export async function findAllByTenant(tenantId) {
   const { rows } = await pool.query(
-    `SELECT id, tenant_id, agent_id, type, instance, is_active AS active, created_at, updated_at
-     FROM channels
-     WHERE tenant_id = $1
-     ORDER BY created_at DESC`,
+    `SELECT ${CHANNEL_SELECT} FROM channels WHERE tenant_id = $1 ORDER BY created_at DESC`,
     [tenantId]
   );
   return rows;
@@ -18,9 +19,7 @@ export async function findAllByTenant(tenantId) {
 
 export async function findById(id, tenantId) {
   const { rows } = await pool.query(
-    `SELECT id, tenant_id, agent_id, type, instance, is_active AS active, created_at, updated_at
-     FROM channels
-     WHERE id = $1 AND tenant_id = $2`,
+    `SELECT ${CHANNEL_SELECT} FROM channels WHERE id = $1 AND tenant_id = $2`,
     [id, tenantId]
   );
   return rows[0] ?? null;
@@ -87,6 +86,55 @@ export async function update(id, tenantId, data) {
      SET ${updates.join(', ')}, updated_at = now()
      WHERE id = $${pos} AND tenant_id = $${pos + 1}
      RETURNING id, tenant_id, agent_id, type, instance, is_active AS active, created_at, updated_at`,
+    values
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Atualiza apenas campos de conexão (Evolution etc.).
+ * @param {Object} data - { provider?, external_id?, status?, connected_at?, last_error?, config? }
+ */
+export async function updateConnection(id, tenantId, data) {
+  const updates = [];
+  const values = [];
+  let pos = 1;
+  if (data.provider !== undefined) {
+    updates.push(`provider = $${pos}`);
+    values.push(data.provider != null ? String(data.provider) : null);
+    pos += 1;
+  }
+  if (data.external_id !== undefined) {
+    updates.push(`external_id = $${pos}`);
+    values.push(data.external_id != null ? String(data.external_id) : null);
+    pos += 1;
+  }
+  if (data.status !== undefined) {
+    updates.push(`status = $${pos}`);
+    values.push(data.status != null ? String(data.status) : null);
+    pos += 1;
+  }
+  if (data.connected_at !== undefined) {
+    updates.push(`connected_at = $${pos}`);
+    values.push(data.connected_at);
+    pos += 1;
+  }
+  if (data.last_error !== undefined) {
+    updates.push(`last_error = $${pos}`);
+    values.push(data.last_error != null ? String(data.last_error) : null);
+    pos += 1;
+  }
+  if (data.config !== undefined) {
+    updates.push(`config = $${pos}::jsonb`);
+    values.push(JSON.stringify(data.config || {}));
+    pos += 1;
+  }
+  if (updates.length === 0) return findById(id, tenantId);
+  values.push(id, tenantId);
+  const { rows } = await pool.query(
+    `UPDATE channels SET ${updates.join(', ')}, updated_at = now()
+     WHERE id = $${pos} AND tenant_id = $${pos + 1}
+     RETURNING ${CHANNEL_SELECT}`,
     values
   );
   return rows[0] ?? null;

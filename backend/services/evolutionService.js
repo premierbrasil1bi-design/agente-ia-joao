@@ -1,9 +1,68 @@
 /**
- * Evolution API – send messages to WhatsApp.
+ * Evolution API – send messages to WhatsApp e gestão de instâncias.
  * Reusable channel sender for the message pipeline.
  */
 
 import axios from 'axios';
+
+const getBaseUrl = () => {
+  const url = process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL;
+  if (!url) throw new Error('EVOLUTION_API_URL ou EVOLUTION_URL deve estar definida.');
+  return url.replace(/\/$/, '');
+};
+
+/**
+ * Cria uma instância na Evolution API.
+ * POST /instance/create
+ */
+export async function createInstance(instanceName) {
+  const baseUrl = getBaseUrl();
+  const { data } = await axios.post(
+    `${baseUrl}/instance/create`,
+    { instanceName },
+    { timeout: 15000 }
+  );
+  return data;
+}
+
+/**
+ * Obtém QR Code para conexão.
+ * GET /instance/connect/{instanceName}
+ */
+export async function getQrCode(instanceName) {
+  const baseUrl = getBaseUrl();
+  const { data } = await axios.get(
+    `${baseUrl}/instance/connect/${encodeURIComponent(instanceName)}`,
+    { timeout: 15000 }
+  );
+  return data;
+}
+
+/**
+ * Obtém estado da conexão da instância.
+ * GET /instance/connectionState/{instanceName}
+ */
+export async function getInstanceStatus(instanceName) {
+  const baseUrl = getBaseUrl();
+  const { data } = await axios.get(
+    `${baseUrl}/instance/connectionState/${encodeURIComponent(instanceName)}`,
+    { timeout: 15000 }
+  );
+  return data;
+}
+
+/**
+ * Remove/desconecta instância.
+ * DELETE /instance/delete/{instanceName}
+ */
+export async function disconnectInstance(instanceName) {
+  const baseUrl = getBaseUrl();
+  const { data } = await axios.delete(
+    `${baseUrl}/instance/delete/${encodeURIComponent(instanceName)}`,
+    { timeout: 15000 }
+  );
+  return data;
+}
 
 /**
  * Send a text message via Evolution API.

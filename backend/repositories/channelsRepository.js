@@ -61,6 +61,20 @@ export async function findById(id) {
   return rows[0] ?? null;
 }
 
+/**
+ * Find channel by external_id (ex: Evolution instance name).
+ * Usado pelo webhook Evolution para resolver agent_id a partir do instance.
+ */
+export async function findByExternalId(externalId) {
+  if (!externalId || String(externalId).trim() === '') return null;
+  const { rows } = await pool.query(
+    `SELECT id, tenant_id, agent_id, name, type, status, is_active, instance, external_id
+     FROM channels WHERE external_id = $1 LIMIT 1`,
+    [String(externalId).trim()]
+  );
+  return rows[0] ?? null;
+}
+
 
 export async function create({ tenantId, agentId, name, type, status, isActive, config }) {
   let tid = tenantId;

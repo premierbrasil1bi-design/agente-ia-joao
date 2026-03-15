@@ -16,6 +16,7 @@ import authRoutes from './routes/authRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import agentsRoutes from './routes/agentsRoutes.js';
 import channelsRoutes from './routes/channelsRoutes.js';
+import channelConnectionRoutes from './routes/channelConnection.routes.js';
 import agentAuthRoutes from './routes/agentAuth.routes.js';
 import inboundRoutes from './routes/inboundRoutes.js';
 import tenantUsageRoutes from './routes/tenantUsage.routes.js';
@@ -126,6 +127,8 @@ apiRouter.use('/agent', agentRouter);
 
 /* ---------- ROTAS /api/agents, /api/channels, /api/context (Client App, com auth) ---------- */
 apiRouter.use('/agents', agentAuth, requireTenant, agentsRoutes);
+/* Conexão WhatsApp (Evolution): /channels/:id/connect, qrcode, status, disconnect – antes das rotas CRUD */
+apiRouter.use('/channels', agentAuth, requireTenant, channelConnectionRoutes);
 apiRouter.use('/channels', agentAuth, requireTenant, channelsRoutes);
 apiRouter.use('/context', agentAuth, requireTenant, agentContextRoutes);
 
