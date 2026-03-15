@@ -1,15 +1,16 @@
 /**
- * Rotas do painel administrativo (Dashboard).
- * Erro de dados/banco NUNCA retorna 500: sempre 200 com fallback (zerado ou vazio).
- * Erro de autenticação é tratado pelo middleware requireAdminAuth (401/403).
+ * Rotas do painel administrativo (Dashboard) – Client App.
+ * Protegidas por agentAuth (JWT do Client App); req.user e req.tenantId disponíveis.
  */
 
 import { Router } from 'express';
+import { agentAuth } from '../middleware/agentAuth.js';
 import { hasDatabaseUrl } from '../config/env.js';
 import * as dashboardService from '../services/dashboardService.js';
 import * as clientsRepo from '../repositories/clientsRepository.js';
 
 const router = Router();
+router.use(agentAuth);
 const LOG_PREFIX = '[dashboard]';
 
 function safeJson(res, data) {

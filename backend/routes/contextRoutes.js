@@ -1,12 +1,14 @@
 /**
- * Rotas de contexto – canal ativo, prompt em uso.
- * GET /api/context – canal do middleware. Nunca retorna 500: em erro retorna contexto mínimo (200).
+ * Rotas de contexto – canal ativo, prompt em uso (Client App).
+ * Protegidas por agentAuth; req.user e req.tenantId disponíveis.
  */
 
 import { Router } from 'express';
+import { agentAuth } from '../middleware/agentAuth.js';
 import * as contextService from '../services/contextService.js';
 
 const router = Router();
+router.use(agentAuth);
 
 function minimalContext(req) {
   const ch = (req.context?.channel || 'WEB').toString().toUpperCase();

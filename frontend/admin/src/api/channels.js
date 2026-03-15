@@ -15,12 +15,12 @@ export function createChannelsApi(getToken, onUnauthorized = null) {
   }
 
   return {
-    getChannels: () => request('/api/channels'),
-    getChannel: (id) => request(`/api/channels/${id}`),
+    getChannels: () => request('/api/agent/channels'),
+    getChannel: (id) => request(`/api/agent/channels/${id}`),
     createChannel: (data) =>
-      request('/api/channels', { method: 'POST', body: JSON.stringify(data) }),
+      request('/api/agent/channels', { method: 'POST', body: JSON.stringify(data) }),
     updateChannel: (id, data) =>
-      request(`/api/channels/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-    deleteChannel: (id) => request(`/api/channels/${id}`, { method: 'DELETE' }),
+      request(`/api/agent/channels/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    deleteChannel: (id) => request(`/api/agent/channels/${id}`, { method: 'DELETE' }),
   };
 }

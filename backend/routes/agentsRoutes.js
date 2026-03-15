@@ -1,10 +1,10 @@
 /**
- * Rotas CRUD de agentes – painel Admin.
- * Todas as rotas exigem requireAdminAuth.
- * Nenhuma rota retorna 500 por tabela vazia ou erro previsível.
+ * Rotas CRUD de agentes – Client App (painel Admin).
+ * Protegidas por agentAuth (JWT do Client App); req.user e req.tenantId disponíveis.
  */
 
 import { Router } from 'express';
+import { agentAuth } from '../middleware/agentAuth.js';
 import * as agentsRepo from '../repositories/agentsRepository.js';
 import * as clientsRepo from '../repositories/clientsRepository.js';
 import * as channelsRepo from '../repositories/channelsRepository.js';
@@ -19,6 +19,7 @@ import { checkAgentLimit } from '../middleware/checkPlanLimits.js';
 const PROMPT_BASE_DEFAULT = 'Você é um assistente prestativo. Responda em português de forma clara e objetiva.';
 
 const router = Router();
+router.use(agentAuth);
 const LOG_PREFIX = '[agents]';
 
 const NAME_MAX = 255;

@@ -25,7 +25,7 @@ import tenantUsersRoutes from './routes/tenantUsers.routes.js';
 import platformTenantsRoutes from './routes/platformTenants.routes.js';
 
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
-import { agentOrAdminAuth } from './middleware/agentOrAdminAuth.js';
+import { agentAuth } from './middleware/agentAuth.js';
 
 const app = express();
 const PORT = config.port || 3000;
@@ -110,34 +110,22 @@ const apiRouter = express.Router();
 apiRouter.use(channelContext);
 apiRouter.use(setChannelActiveHeader);
 
-/* ---------- LOGIN DE AGENT (PÚBLICO DENTRO DA API) ---------- */
-apiRouter.use('/agent', agentAuthRoutes);
+/* ---------- CLIENT APP: todas as rotas autenticadas sob /api/agent/* ---------- */
+const agentRouter = express.Router();
+agentRouter.use('/auth', agentAuthRoutes);
+agentRouter.use(agentAuth);
+agentRouter.use(requireTenant);
+agentRouter.use('/dashboard', dashboardRoutes);
+agentRouter.use('/channels', channelsRoutes);
+agentRouter.use('/agents', agentsRoutes);
+agentRouter.use(contextRoutes);
+agentRouter.use(inboundRoutes);
 
-/* ---------- TENANT PROTECTION ---------- */
-apiRouter.use(requireTenant);
+apiRouter.use('/agent', agentRouter);
 
-/* ---------- ROTAS MULTI-TENANT ---------- */
-
-apiRouter.get('/agents', async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      'SELECT * FROM agents WHERE tenant_id = $1',
-      [req.tenantId]
-    );
-    res.json(rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'AGENTS_FETCH_ERROR' });
-  }
-});
-
+/* ---------- OUTRAS ROTAS DA API ---------- */
 apiRouter.use('/', evolutionWebhookRoutes);
-apiRouter.use('/', contextRoutes);
 apiRouter.use('/auth', authRoutes);
-apiRouter.use('/dashboard', agentOrAdminAuth, dashboardRoutes);
-apiRouter.use('/agents', agentOrAdminAuth, agentsRoutes);
-apiRouter.use('/channels', agentOrAdminAuth, channelsRoutes);
-apiRouter.use('/agent', inboundRoutes);
 
 app.use('/api', apiRouter);
 

@@ -1,16 +1,17 @@
 /**
  * Rotas CRUD de canais – Client App (app.omnia1biai.com.br).
- * Todas filtram por tenant_id (req.tenantId do JWT).
- * Protegidas por requireTenant (apiRouter) + agentOrAdminAuth.
+ * Protegidas por agentAuth (JWT do Client App); req.user e req.tenantId disponíveis.
  */
 
 import { Router } from 'express';
+import { agentAuth } from '../middleware/agentAuth.js';
 import * as channelRepo from '../repositories/channel.repository.js';
 import { requireActiveTenant } from '../middleware/requireActiveTenant.js';
 import { sendBadRequest, sendNotFound } from '../utils/errorResponses.js';
 import { pool } from '../db/pool.js';
 
 const router = Router();
+router.use(agentAuth);
 
 /**
  * GET /api/channels

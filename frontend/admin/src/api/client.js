@@ -45,34 +45,35 @@ export function createApiClient(getChannel, getToken = null, onUnauthorized = nu
     return { data, headers: { 'x-channel-active': xChannelActive } };
   }
 
+  const agent = '/api/agent';
   return {
     getContext: (clientId, agentId) =>
       requestWithHeaders(
-        `/api/context?client_id=${clientId || ''}&agent_id=${agentId || ''}`
+        `${agent}/context?client_id=${clientId || ''}&agent_id=${agentId || ''}`
       ).then(({ data, headers }) => ({ ...data, _headerXChannelActive: headers['x-channel-active'] })),
-    getSummary: () => request('/api/dashboard/summary'),
+    getSummary: () => request(`${agent}/dashboard/summary`),
     getAgents: (clientId) =>
-      request(`/api/dashboard/agents${clientId ? `?client_id=${clientId}` : ''}`),
+      request(`${agent}/dashboard/agents${clientId ? `?client_id=${clientId}` : ''}`),
     getChannels: (agentId) =>
-      request(`/api/dashboard/channels${agentId ? `?agent_id=${agentId}` : ''}`),
+      request(`${agent}/dashboard/channels${agentId ? `?agent_id=${agentId}` : ''}`),
     getCosts: (params) => {
       const q = new URLSearchParams(params).toString();
-      return request(`/api/dashboard/costs${q ? `?${q}` : ''}`);
+      return request(`${agent}/dashboard/costs${q ? `?${q}` : ''}`);
     },
     getMessages: (agentId, channelId, limit = 100, offset = 0) => {
       const q = new URLSearchParams({ agent_id: agentId, limit, offset });
       if (channelId) q.set('channel_id', channelId);
-      return request(`/api/dashboard/messages?${q}`);
+      return request(`${agent}/dashboard/messages?${q}`);
     },
-    getPrompts: () => request(`/api/dashboard/prompts?agent_id=${AGENT_ID}`),
-    getClients: () => request(`/api/dashboard/clients?agent_id=${AGENT_ID}`),
+    getPrompts: () => request(`${agent}/dashboard/prompts?agent_id=${AGENT_ID}`),
+    getClients: () => request(`${agent}/dashboard/clients?agent_id=${AGENT_ID}`),
     listAgents: (clientId) =>
-      request(`/api/agents${clientId ? `?client_id=${clientId}` : ''}`),
+      request(`${agent}/agents${clientId ? `?client_id=${clientId}` : ''}`),
     createAgent: (body) =>
-      request('/api/agents', { method: 'POST', body: JSON.stringify(body) }),
+      request(`${agent}/agents`, { method: 'POST', body: JSON.stringify(body) }),
     updateAgent: (id, body) =>
-      request(`/api/agents/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+      request(`${agent}/agents/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
     deleteAgent: (id) =>
-      request(`/api/agents/${id}`, { method: 'DELETE' }),
+      request(`${agent}/agents/${id}`, { method: 'DELETE' }),
   };
 }

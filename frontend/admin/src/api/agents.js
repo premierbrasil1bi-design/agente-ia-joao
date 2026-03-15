@@ -15,12 +15,12 @@ export function createAgentsApi(getToken, onUnauthorized = null) {
   }
 
   return {
-    getAgents: () => request('/api/agents'),
-    getAgent: (id) => request(`/api/agents/${id}`),
+    getAgents: () => request('/api/agent/agents'),
+    getAgent: (id) => request(`/api/agent/agents/${id}`),
     createAgent: (data) =>
-      request('/api/agents', { method: 'POST', body: JSON.stringify(data) }),
+      request('/api/agent/agents', { method: 'POST', body: JSON.stringify(data) }),
     updateAgent: (id, data) =>
-      request(`/api/agents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-    deleteAgent: (id) => request(`/api/agents/${id}`, { method: 'DELETE' }),
+      request(`/api/agent/agents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    deleteAgent: (id) => request(`/api/agent/agents/${id}`, { method: 'DELETE' }),
   };
 }
