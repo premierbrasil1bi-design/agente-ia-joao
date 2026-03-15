@@ -23,6 +23,7 @@ import adminTenantRoutes from './routes/admin/tenant.routes.js';
 import globalAdminRoutes from './routes/globalAdmin.routes.js';
 import tenantUsersRoutes from './routes/tenantUsers.routes.js';
 import platformTenantsRoutes from './routes/platformTenants.routes.js';
+import agentContextRoutes from './routes/agentContext.routes.js';
 
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { agentAuth } from './middleware/agentAuth.js';
@@ -123,9 +124,10 @@ agentRouter.use(inboundRoutes);
 
 apiRouter.use('/agent', agentRouter);
 
-/* ---------- ROTAS /api/agents e /api/channels (Client App, com auth) ---------- */
+/* ---------- ROTAS /api/agents, /api/channels, /api/context (Client App, com auth) ---------- */
 apiRouter.use('/agents', agentAuth, requireTenant, agentsRoutes);
 apiRouter.use('/channels', agentAuth, requireTenant, channelsRoutes);
+apiRouter.use('/context', agentAuth, requireTenant, agentContextRoutes);
 
 /* ---------- OUTRAS ROTAS DA API ---------- */
 apiRouter.use('/', evolutionWebhookRoutes);
