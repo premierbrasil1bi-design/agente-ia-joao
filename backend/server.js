@@ -8,10 +8,7 @@ import { config } from './config/env.js';
 import { isDbConnected } from './db/connection.js';
 import { pool } from './db/pool.js';
 import { requireTenant } from './middleware/requireTenant.js';
-import bcrypt from 'bcryptjs';
 import { sendNotFound, sendServerError, sendBadRequest } from './utils/errorResponses.js';
-import globalAdminAuth from './middlewares/globalAdminAuth.js';
-import * as adminsRepo from './repositories/adminsRepository.js';
 
 import contextRoutes from './routes/contextRoutes.js';
 import evolutionWebhookRoutes from './routes/evolutionWebhook.routes.js';
@@ -24,6 +21,7 @@ import inboundRoutes from './routes/inboundRoutes.js';
 import tenantUsageRoutes from './routes/tenantUsage.routes.js';
 import adminTenantRoutes from './routes/admin/tenant.routes.js';
 import globalAdminRoutes from './routes/globalAdmin.routes.js';
+import tenantUsersRoutes from './routes/tenantUsers.routes.js';
 import platformTenantsRoutes from './routes/platformTenants.routes.js';
 
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
@@ -82,45 +80,7 @@ app.get('/api/health/db', async (req, res) => {
 ========================================================= */
 
 app.use('/api/global-admin', globalAdminRoutes);
-
-/* POST /api/tenant-users – Global Admin only: criar usuário do tenant */
-app.post('/api/tenant-users', globalAdminAuth, async (req, res) => {
-  try {
-    const { tenant_id, email, password, role } = req.body || {};
-    if (!tenant_id || !email || !password) {
-      return sendBadRequest(res, 'tenant_id, email e password são obrigatórios.');
-    }
-    const tenantId = String(tenant_id).trim();
-    const emailClean = String(email).trim().toLowerCase();
-    const { rows: tenantRows } = await pool.query(
-      'SELECT id FROM tenants WHERE id = $1',
-      [tenantId]
-    );
-    if (tenantRows.length === 0) {
-      return sendBadRequest(res, 'Tenant não encontrado.');
-    }
-    const existing = await adminsRepo.findByEmail(emailClean);
-    if (existing) {
-      return sendBadRequest(res, 'Já existe um usuário com este email.');
-    }
-    const passwordHash = await bcrypt.hash(String(password), 10);
-    const user = await adminsRepo.create(
-      tenantId,
-      { email: emailClean, password, name: req.body.name },
-      passwordHash
-    );
-    res.status(201).json({
-      id: user.id,
-      tenant_id: user.tenant_id,
-      email: user.email,
-      name: user.name,
-      created_at: user.created_at,
-    });
-  } catch (err) {
-    console.error('[tenant-users] POST:', err.message);
-    sendServerError(res, 'Erro ao criar usuário do tenant.', err);
-  }
-});
+app.use('/api/tenant-users', tenantUsersRoutes);
 
 /* =========================================================
    PLATFORM TENANTS (GLOBAL ADMIN, SEM TENANT)

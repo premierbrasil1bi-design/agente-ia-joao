@@ -11,6 +11,7 @@ import * as agentsCtrl from '../controllers/globalAdmin.agents.controller.js';
 import * as channelsCtrl from '../controllers/globalAdmin.channels.controller.js';
 import * as tenantScopedCtrl from '../controllers/globalAdmin.tenantScoped.controller.js';
 import * as tenantCtrl from '../controllers/globalAdmin.tenant.controller.js';
+import * as adminsRepo from '../repositories/adminsRepository.js';
 
 const router = Router();
 
@@ -200,19 +201,14 @@ router.get('/tenants', globalAdminAuth, async (req, res) => {
  */
 router.get('/tenant-users', globalAdminAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT a.id, a.tenant_id, a.email, a.name, a.created_at, t.name AS tenant_name, t.slug AS tenant_slug
-      FROM admins a
-      LEFT JOIN tenants t ON t.id = a.tenant_id
-      WHERE a.tenant_id IS NOT NULL
-      ORDER BY a.created_at DESC
-    `);
+    const rows = await adminsRepo.findAllWithTenant();
     res.status(200).json(rows.map((r) => ({
       id: r.id,
       tenant_id: r.tenant_id,
       email: r.email,
       name: r.name ?? r.email,
       created_at: r.created_at,
+      active: r.active !== false,
       tenant_name: r.tenant_name ?? r.tenant_slug ?? r.tenant_id,
     })));
   } catch (err) {
