@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAgentAuth } from '../context/AgentAuthContext';
 import { createChannelsApi } from '../api/channels';
 import { createAgentsApi } from '../api/agents';
+import { agentApi } from '../services/agentApi.js';
 
 const CHANNEL_TYPES = [
   { value: 'whatsapp', label: 'WhatsApp' },
@@ -180,6 +181,8 @@ export function Channels() {
   const [toast, setToast] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [qrCode, setQrCode] = useState('');
 
   const onUnauthorized = useCallback(() => {
     logout();
@@ -338,6 +341,61 @@ export function Channels() {
       .finally(() => setDeleting(false));
   }, [deleteTarget, channelsApi, fetchChannels]);
 
+  const handleConnect = useCallback(async (channelId) => {
+    try {
+      await agentApi.request(`/api/channels/${channelId}/connect`, {
+        method: 'POST',
+      });
+      setToast('Instance creation requested.');
+      fetchChannels();
+    } catch (err) {
+      console.error(err);
+      setToast(err.message || 'Error connecting instance.');
+    }
+  }, [fetchChannels]);
+
+  const handleQrCode = useCallback(async (channelId) => {
+    try {
+      const data = await agentApi.request(`/api/channels/${channelId}/qrcode`, {
+        method: 'GET',
+      });
+      if (data.qrcode) {
+        setQrCode(data.qrcode);
+        setShowQrModal(true);
+      } else {
+        setToast('QR Code not available yet.');
+      }
+    } catch (err) {
+      console.error(err);
+      setToast(err.message || 'Error loading QR Code.');
+    }
+  }, []);
+
+  const handleStatus = useCallback(async (channelId) => {
+    try {
+      const data = await agentApi.request(`/api/channels/${channelId}/status`, {
+        method: 'GET',
+      });
+      setToast(`Connection status: ${data.status ?? data}`);
+    } catch (err) {
+      console.error(err);
+      setToast(err.message || 'Error checking status.');
+    }
+  }, []);
+
+  const handleDisconnect = useCallback(async (channelId) => {
+    try {
+      await agentApi.request(`/api/channels/${channelId}/disconnect`, {
+        method: 'POST',
+      });
+      setToast('Instance disconnected.');
+      fetchChannels();
+    } catch (err) {
+      console.error(err);
+      setToast(err.message || 'Error disconnecting.');
+    }
+  }, [fetchChannels]);
+
   const agentMap = Object.fromEntries((agents || []).map((a) => [a.id, a]));
   const getAgentName = (agentId) => agentMap[agentId]?.name ?? agentId?.slice(0, 8) ?? '—';
 
@@ -401,6 +459,18 @@ export function Channels() {
                   </td>
                   <td style={styles.td}>
                     <div style={styles.actions}>
+                      <button type="button" style={styles.btn} onClick={() => handleConnect(ch.id)}>
+                        Connect
+                      </button>
+                      <button type="button" style={styles.btn} onClick={() => handleQrCode(ch.id)}>
+                        QR Code
+                      </button>
+                      <button type="button" style={styles.btn} onClick={() => handleStatus(ch.id)}>
+                        Status
+                      </button>
+                      <button type="button" style={styles.btn} onClick={() => handleDisconnect(ch.id)}>
+                        Disconnect
+                      </button>
                       <button type="button" style={styles.btn} onClick={() => openEdit(ch)}>
                         Edit
                       </button>
@@ -523,6 +593,20 @@ export function Channels() {
               </button>
               <button type="button" style={{ ...styles.btn, ...styles.btnDanger }} onClick={doDelete} disabled={deleting}>
                 {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showQrModal && (
+        <div style={styles.overlay} onClick={() => setShowQrModal(false)} role="presentation">
+          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <h3 style={styles.modalTitle}>WhatsApp QR Code</h3>
+            <img src={qrCode} alt="WhatsApp QR Code" style={{ width: 300, display: 'block', margin: '0 auto' }} />
+            <div style={{ ...styles.modalActions, marginTop: '1rem' }}>
+              <button type="button" style={styles.btn} onClick={() => setShowQrModal(false)}>
+                Close
               </button>
             </div>
           </div>
