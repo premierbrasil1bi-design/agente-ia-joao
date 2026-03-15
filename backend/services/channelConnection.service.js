@@ -15,6 +15,32 @@ function sanitizeInstancePart(s) {
 }
 
 /**
+ * Converte o campo instance do canal para nome de instância Evolution (slug).
+ * Ex.: "Dra Ana Paula" → "dra_ana_paula"
+ */
+function slugifyInstance(instance) {
+  if (instance == null || typeof instance !== 'string') return null;
+  return String(instance)
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .slice(0, 80) || null;
+}
+
+/**
+ * Retorna o nome da instância Evolution para o canal.
+ * Ordem: external_id (já salvo) → slugify(instance) → fallback via tenant/agent (connect).
+ */
+function getEvolutionInstanceName(channel) {
+  if (channel?.external_id) return channel.external_id;
+  const fromInstance = slugifyInstance(channel?.instance);
+  if (fromInstance) return fromInstance;
+  return null;
+}
+
+/**
  * Gera o nome da instância no formato tenantSlug_agentSlug_channelId.
  * Garante contexto tenant_id e agent_id. Fallback: omnia_{channelId}.
  */
@@ -41,11 +67,15 @@ async function instanceNameForChannel(channel) {
 
 /**
  * Inicia conexão WhatsApp: cria instância na Evolution e persiste estado.
- * @param {object} channel - canal com id, tenant_id
+ * Usa channel.instance (slug) como nome quando preenchido; senão tenantSlug_agentSlug_channelId.
+ * @param {object} channel - canal com id, tenant_id, instance?
  * @returns {Promise<{ instanceName: string }>}
  */
 export async function connectWhatsAppChannel(channel) {
-  const instanceName = await instanceNameForChannel(channel);
+  const instanceName =
+    (channel?.instance && slugifyInstance(channel.instance)) ||
+    channel?.external_id ||
+    (await instanceNameForChannel(channel));
 
   await evolutionService.createInstance(instanceName);
 
@@ -60,24 +90,28 @@ export async function connectWhatsAppChannel(channel) {
 }
 
 /**
- * Obtém QR Code para o canal (usa external_id = instanceName).
+ * Obtém QR Code para o canal.
+ * Usa external_id ou slug do campo instance (permite QR sem ter clicado Connect antes).
  */
 export async function getChannelQrCode(channel) {
-  if (!channel?.external_id) {
-    throw new Error('Canal sem external_id (instância não criada).');
+  const instanceName = getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
+  if (!instanceName) {
+    throw new Error('Configure o campo Instance do canal (ex.: Dra Ana Paula).');
   }
-  return evolutionService.getQrCode(channel.external_id);
+  return evolutionService.getQrCode(instanceName);
 }
 
 /**
  * Obtém status na Evolution e atualiza banco se status = "open".
+ * Usa external_id ou slug do campo instance.
  */
 export async function getChannelStatus(channel) {
-  if (!channel?.external_id) {
+  const instanceName = getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
+  if (!instanceName) {
     return { state: null, channel };
   }
 
-  const state = await evolutionService.getInstanceStatus(channel.external_id);
+  const state = await evolutionService.getInstanceStatus(instanceName);
 
   if (state?.state === 'open' || state?.instance?.state === 'open') {
     await channelRepo.updateConnection(channel.id, channel.tenant_id, {
@@ -94,13 +128,14 @@ export async function getChannelStatus(channel) {
  * Desconecta instância na Evolution e atualiza banco.
  */
 export async function disconnectChannel(channel) {
-  if (!channel?.external_id) {
+  const instanceName = getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
+  if (!instanceName) {
     await channelRepo.updateConnection(channel.id, channel.tenant_id, { status: 'disconnected' });
     return;
   }
 
   try {
-    await evolutionService.disconnectInstance(channel.external_id);
+    await evolutionService.disconnectInstance(instanceName);
   } catch (err) {
     console.error('[channelConnection] disconnectInstance error:', err.message);
   }

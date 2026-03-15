@@ -64,6 +64,8 @@ const styles = {
   },
   badgeAtivo: { background: 'rgba(63,185,80,0.2)', color: 'var(--success)' },
   badgeInativo: { background: 'rgba(139,148,158,0.2)', color: 'var(--text-muted)' },
+  badgeConnecting: { background: 'rgba(210,180,0,0.25)', color: '#b38600' },
+  badgeDisconnected: { background: 'rgba(200,80,80,0.2)', color: 'var(--danger)' },
   actions: { display: 'flex', gap: '0.5rem', flexWrap: 'wrap' },
   empty: {
     padding: '2rem',
@@ -162,6 +164,19 @@ function StatusBadge({ channel }) {
   return <span style={style}>{active ? 'Active' : 'Inactive'}</span>;
 }
 
+function ConnectionBadge({ evolutionStatus }) {
+  if (evolutionStatus === undefined || evolutionStatus === null) return null;
+  const map = { open: 'Connected', close: 'Disconnected', connecting: 'Connecting...' };
+  const label = map[evolutionStatus] || String(evolutionStatus);
+  const style =
+    evolutionStatus === 'open'
+      ? { ...styles.badge, ...styles.badgeAtivo }
+      : evolutionStatus === 'connecting'
+        ? { ...styles.badge, ...styles.badgeConnecting }
+        : { ...styles.badge, ...styles.badgeDisconnected };
+  return <span style={style}>{label}</span>;
+}
+
 const emptyForm = () => ({
   type: 'whatsapp',
   instance: '',
@@ -184,6 +199,8 @@ export function Channels() {
   const [deleting, setDeleting] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
   const [qrCode, setQrCode] = useState('');
+  const [qrChannelId, setQrChannelId] = useState(null);
+  const [connectionStatusMap, setConnectionStatusMap] = useState({});
 
   const onUnauthorized = useCallback(() => {
     logout();
@@ -229,6 +246,52 @@ export function Channels() {
     const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // Polling automático de status enquanto o modal do QR Code estiver aberto (a cada 5s)
+  useEffect(() => {
+    if (!showQrModal || !qrChannelId) return;
+
+    const pollStatus = async () => {
+      try {
+        const statusRes = await agentApi.request(`/api/channels/${qrChannelId}/status`, { method: 'GET' });
+        const state =
+          statusRes?.instance?.state ??
+          statusRes?.status ??
+          statusRes?.channel?.status ??
+          statusRes?.channel?.instance?.state;
+
+        setConnectionStatusMap((prev) => ({ ...prev, [qrChannelId]: state ?? prev[qrChannelId] }));
+
+        if (state === 'open') {
+          setConnectionStatusMap((prev) => ({ ...prev, [qrChannelId]: 'open' }));
+          setQrChannelId(null);
+          setShowQrModal(false);
+          setToast('WhatsApp conectado com sucesso');
+          fetchChannels();
+        }
+      } catch {
+        // ignora erro de polling
+      }
+    };
+
+    const refreshQr = async () => {
+      try {
+        const data = await agentApi.request(`/api/channels/${qrChannelId}/qrcode`, { method: 'GET' });
+        const qr = typeof data.qrcode === 'string' ? data.qrcode : (data.qrcode?.base64 ?? data.qrcode?.code ?? '');
+        if (qr) setQrCode(qr.startsWith('data:') ? qr : `data:image/png;base64,${qr}`);
+      } catch {
+        // ignora erro de refresh do QR
+      }
+    };
+
+    pollStatus();
+    refreshQr();
+    const interval = setInterval(() => {
+      pollStatus();
+      refreshQr();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [showQrModal, qrChannelId, fetchChannels]);
 
   const openCreate = useCallback(() => {
     setFormError(null);
@@ -360,15 +423,17 @@ export function Channels() {
       const data = await agentApi.request(`/api/channels/${channelId}/qrcode`, {
         method: 'GET',
       });
-      if (data.qrcode) {
-        setQrCode(data.qrcode);
+      const qr = typeof data.qrcode === 'string' ? data.qrcode : (data.qrcode?.base64 ?? data.qrcode?.code ?? '');
+      if (qr) {
+        setQrCode(qr.startsWith('data:') ? qr : `data:image/png;base64,${qr}`);
+        setQrChannelId(channelId);
         setShowQrModal(true);
       } else {
-        setToast('QR Code not available yet.');
+        setToast('QR Code não disponível. Clique em Connect antes.');
       }
     } catch (err) {
       console.error(err);
-      setToast(err.message || 'Error loading QR Code.');
+      setToast(err.message || 'Erro ao carregar QR Code.');
     }
   }, []);
 
@@ -377,10 +442,13 @@ export function Channels() {
       const data = await agentApi.request(`/api/channels/${channelId}/status`, {
         method: 'GET',
       });
-      setToast(`Connection status: ${data.status ?? data}`);
+      const status = data.status ?? data?.channel?.status ?? null;
+      setConnectionStatusMap((prev) => ({ ...prev, [channelId]: status }));
+      const label = status === 'open' ? 'Connected' : status === 'close' ? 'Disconnected' : status === 'connecting' ? 'Connecting' : String(status || '—');
+      setToast(`Status: ${label}`);
     } catch (err) {
       console.error(err);
-      setToast(err.message || 'Error checking status.');
+      setToast(err.message || 'Erro ao verificar status.');
     }
   }, []);
 
@@ -456,22 +524,31 @@ export function Channels() {
                   <td style={styles.td}>{ch.instance ?? ch.name ?? '—'}</td>
                   <td style={styles.td}>{getAgentName(ch.agent_id)}</td>
                   <td style={styles.td}>
-                    <StatusBadge channel={ch} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <StatusBadge channel={ch} />
+                      {(ch.type || '').toLowerCase() === 'whatsapp' && (
+                        <ConnectionBadge evolutionStatus={connectionStatusMap[ch.id]} />
+                      )}
+                    </div>
                   </td>
                   <td style={styles.td}>
                     <div style={styles.actions}>
-                      <button type="button" style={styles.btn} onClick={() => handleConnect(ch.id)}>
-                        Connect
-                      </button>
-                      <button type="button" style={styles.btn} onClick={() => handleQrCode(ch.id)}>
-                        QR Code
-                      </button>
-                      <button type="button" style={styles.btn} onClick={() => handleStatus(ch.id)}>
-                        Status
-                      </button>
-                      <button type="button" style={styles.btn} onClick={() => handleDisconnect(ch.id)}>
-                        Disconnect
-                      </button>
+                      {(ch.type || '').toLowerCase() === 'whatsapp' && (
+                        <>
+                          <button type="button" style={styles.btn} onClick={() => handleConnect(ch.id)}>
+                            Connect
+                          </button>
+                          <button type="button" style={styles.btn} onClick={() => handleQrCode(ch.id)}>
+                            QR Code
+                          </button>
+                          <button type="button" style={styles.btn} onClick={() => handleStatus(ch.id)}>
+                            Status
+                          </button>
+                          <button type="button" style={styles.btn} onClick={() => handleDisconnect(ch.id)}>
+                            Disconnect
+                          </button>
+                        </>
+                      )}
                       <button type="button" style={styles.btn} onClick={() => openEdit(ch)}>
                         Edit
                       </button>
@@ -601,13 +678,23 @@ export function Channels() {
       )}
 
       {showQrModal && (
-        <div style={styles.overlay} onClick={() => setShowQrModal(false)} role="presentation">
+        <div style={styles.overlay} onClick={() => { setShowQrModal(false); setQrChannelId(null); }} role="presentation">
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h3 style={styles.modalTitle}>WhatsApp QR Code</h3>
-            <img src={qrCode} alt="WhatsApp QR Code" style={{ width: 300, display: 'block', margin: '0 auto' }} />
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0 0 0.5rem' }}>
+              O QR Code é atualizado a cada 5 segundos. Escaneie com o WhatsApp.
+            </p>
+            {qrChannelId && connectionStatusMap[qrChannelId] === 'connecting' && (
+              <p style={{ fontSize: '0.9rem', color: 'var(--text)', margin: '0 0 0.75rem', fontWeight: 500 }}>
+                Esperando conexão do WhatsApp...
+              </p>
+            )}
+            {qrCode && (
+              <img src={qrCode} alt="WhatsApp QR Code" style={{ width: 300, display: 'block', margin: '0 auto' }} />
+            )}
             <div style={{ ...styles.modalActions, marginTop: '1rem' }}>
-              <button type="button" style={styles.btn} onClick={() => setShowQrModal(false)}>
-                Close
+              <button type="button" style={styles.btn} onClick={() => { setShowQrModal(false); setQrChannelId(null); }}>
+                Fechar
               </button>
             </div>
           </div>

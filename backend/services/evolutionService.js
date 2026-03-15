@@ -1,6 +1,7 @@
 /**
  * Evolution API – send messages to WhatsApp e gestão de instâncias.
  * Reusable channel sender for the message pipeline.
+ * Headers: apikey (EVOLUTION_API_KEY) em todas as chamadas.
  */
 
 import axios from 'axios';
@@ -11,16 +12,26 @@ const getBaseUrl = () => {
   return url.replace(/\/$/, '');
 };
 
+const getApiKey = () => process.env.EVOLUTION_API_KEY || '';
+
+const evolutionHeaders = () => {
+  const apikey = getApiKey();
+  const headers = { 'Content-Type': 'application/json' };
+  if (apikey) headers.apikey = apikey;
+  return headers;
+};
+
 /**
  * Cria uma instância na Evolution API.
  * POST /instance/create
+ * Body: { instanceName, qrcode: true }
  */
 export async function createInstance(instanceName) {
   const baseUrl = getBaseUrl();
   const { data } = await axios.post(
     `${baseUrl}/instance/create`,
-    { instanceName },
-    { timeout: 15000 }
+    { instanceName, qrcode: true },
+    { timeout: 15000, headers: evolutionHeaders() }
   );
   return data;
 }
@@ -28,12 +39,13 @@ export async function createInstance(instanceName) {
 /**
  * Obtém QR Code para conexão.
  * GET /instance/connect/{instanceName}
+ * Resposta retorna QR Code base64.
  */
 export async function getQrCode(instanceName) {
   const baseUrl = getBaseUrl();
   const { data } = await axios.get(
     `${baseUrl}/instance/connect/${encodeURIComponent(instanceName)}`,
-    { timeout: 15000 }
+    { timeout: 15000, headers: evolutionHeaders() }
   );
   return data;
 }
@@ -46,7 +58,7 @@ export async function getInstanceStatus(instanceName) {
   const baseUrl = getBaseUrl();
   const { data } = await axios.get(
     `${baseUrl}/instance/connectionState/${encodeURIComponent(instanceName)}`,
-    { timeout: 15000 }
+    { timeout: 15000, headers: evolutionHeaders() }
   );
   return data;
 }
@@ -59,7 +71,7 @@ export async function disconnectInstance(instanceName) {
   const baseUrl = getBaseUrl();
   const { data } = await axios.delete(
     `${baseUrl}/instance/delete/${encodeURIComponent(instanceName)}`,
-    { timeout: 15000 }
+    { timeout: 15000, headers: evolutionHeaders() }
   );
   return data;
 }
