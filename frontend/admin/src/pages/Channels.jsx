@@ -184,6 +184,11 @@ const emptyForm = () => ({
   active: true,
 });
 
+/** Verifica se o canal é WhatsApp para exibir botões Connect, QR Code, Status, Disconnect. Usa apenas ch.type. */
+function isWhatsAppChannel(ch) {
+  return (String(ch?.type ?? '').trim().toLowerCase() === 'whatsapp');
+}
+
 export function Channels() {
   const { getToken, logout } = useAgentAuth();
   const navigate = useNavigate();
@@ -221,7 +226,10 @@ export function Channels() {
     setError(null);
     channelsApi()
       .getChannels()
-      .then((data) => setList(Array.isArray(data) ? data : []))
+      .then((data) => {
+        const items = Array.isArray(data) ? data : [];
+        setList(items.map((ch) => ({ ...ch, type: ch.type ?? 'api' })));
+      })
       .catch((err) => {
         setList([]);
         setError(err.message || 'Não foi possível carregar os canais.');
@@ -526,14 +534,14 @@ export function Channels() {
                   <td style={styles.td}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <StatusBadge channel={ch} />
-                      {(ch.type || '').toLowerCase() === 'whatsapp' && (
+                      {isWhatsAppChannel(ch) && (
                         <ConnectionBadge evolutionStatus={connectionStatusMap[ch.id]} />
                       )}
                     </div>
                   </td>
                   <td style={styles.td}>
                     <div style={styles.actions}>
-                      {(ch.type || '').toLowerCase() === 'whatsapp' && (
+                      {isWhatsAppChannel(ch) && (
                         <>
                           <button type="button" style={styles.btn} onClick={() => handleConnect(ch.id)}>
                             Connect
