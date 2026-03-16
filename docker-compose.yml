@@ -29,7 +29,7 @@ services:
       - redis
     environment:
       DATABASE_PROVIDER: postgresql
-      DATABASE_CONNECTION_URI: postgresql://postgres:postgres@postgres:5432/evolution
+      DATABASE_CONNECTION_URI: postgresql://postgres:postgres@saas_postgres:5432/evolution
       REDIS_URI: redis://redis:6379
       AUTHENTICATION_API_KEY: EVOLUTION_2026_JOAO_998877
     volumes:
