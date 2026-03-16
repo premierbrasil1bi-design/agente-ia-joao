@@ -4,6 +4,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { QRCodeModal } from '../components/QRCodeModal.jsx';
 
 const API_BASE = typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL
   ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
@@ -115,6 +116,8 @@ export function Channels() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [toast, setToast] = useState(null);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [qrCode, setQrCode] = useState('');
 
   const fetchChannels = useCallback(() => {
     setLoading(true);
@@ -162,7 +165,8 @@ export function Channels() {
       const qr = typeof data.qrcode === 'string' ? data.qrcode : (data.qrcode?.base64 ?? data.qrcode?.code ?? '');
       if (qr) {
         const dataUrl = qr.startsWith('data:') ? qr : `data:image/png;base64,${qr}`;
-        window.open('', '_blank').document.write(`<img src="${dataUrl}" alt="QR Code" style="max-width:100%" />`);
+        setQrCode(dataUrl);
+        setShowQrModal(true);
       } else {
         setToast('QR Code não disponível. Clique em Connect antes.');
       }
@@ -178,11 +182,12 @@ export function Channels() {
       const status = data.status ?? data?.channel?.status ?? data?.instance?.state ?? null;
       const label = status === 'open' ? 'Connected' : status === 'close' ? 'Disconnected' : status === 'connecting' ? 'Connecting' : String(status || '—');
       setToast(`Status: ${label}`);
+      fetchChannels();
     } catch (err) {
       console.error(err);
       setToast(err.message || 'Erro ao verificar status.');
     }
-  }, []);
+  }, [fetchChannels]);
 
   const handleDisconnect = useCallback(async (channelId) => {
     try {
@@ -289,6 +294,15 @@ export function Channels() {
           </table>
         </div>
       )}
+
+      <QRCodeModal
+        open={showQrModal}
+        qrCode={qrCode}
+        onClose={() => {
+          setShowQrModal(false);
+          setQrCode('');
+        }}
+      />
 
       {toast && (
         <div style={styles.toast} role="status">
