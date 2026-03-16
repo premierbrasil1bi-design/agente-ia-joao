@@ -1,36 +1,12 @@
 /**
  * Channels page – Painel do Agente (client-app).
  * Inclui botões de integração WhatsApp (Connect, QR Code, Status, Disconnect) quando type === "whatsapp".
+ * Usa agentApi.request, que lê agent_token do localStorage e envia Authorization: Bearer <agent_token>.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { QRCodeModal } from '../components/QRCodeModal.jsx';
-
-const API_BASE = typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL
-  ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
-  : '';
-
-const TOKEN_KEY = 'token';
-
-function getToken() {
-  return typeof localStorage !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null;
-}
-
-async function apiRequest(path, options = {}) {
-  const token = getToken();
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...options.headers,
-  };
-  const url = `${API_BASE}${path}`;
-  const res = await fetch(url, { ...options, headers, credentials: 'include' });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || data.message || `Erro ${res.status}`);
-  }
-  return data;
-}
+import { agentApi } from '../services/agentApi.js';
 
 const styles = {
   header: {
@@ -122,7 +98,8 @@ export function Channels() {
   const fetchChannels = useCallback(() => {
     setLoading(true);
     setError(null);
-    apiRequest('/api/agent/channels')
+    agentApi
+      .request('/api/agent/channels')
       .then((data) => setList(Array.isArray(data) ? data : []))
       .catch((err) => {
         setList([]);
@@ -132,7 +109,8 @@ export function Channels() {
   }, []);
 
   const fetchAgents = useCallback(() => {
-    apiRequest('/api/agent/agents')
+    agentApi
+      .request('/api/agent/agents')
       .then((data) => setAgents(Array.isArray(data) ? data : []))
       .catch(() => setAgents([]));
   }, []);
@@ -150,7 +128,7 @@ export function Channels() {
 
   const handleConnect = useCallback(async (channelId) => {
     try {
-      await apiRequest(`/api/channels/${channelId}/connect`, { method: 'POST' });
+      await agentApi.request(`/api/channels/${channelId}/connect`, { method: 'POST' });
       setToast('Instância solicitada.');
       fetchChannels();
     } catch (err) {
@@ -161,7 +139,7 @@ export function Channels() {
 
   const handleQrCode = useCallback(async (channelId) => {
     try {
-      const data = await apiRequest(`/api/channels/${channelId}/qrcode`, { method: 'GET' });
+      const data = await agentApi.request(`/api/channels/${channelId}/qrcode`, { method: 'GET' });
       const qr = typeof data.qrcode === 'string' ? data.qrcode : (data.qrcode?.base64 ?? data.qrcode?.code ?? '');
       if (qr) {
         const dataUrl = qr.startsWith('data:') ? qr : `data:image/png;base64,${qr}`;
@@ -178,7 +156,7 @@ export function Channels() {
 
   const handleStatus = useCallback(async (channelId) => {
     try {
-      const data = await apiRequest(`/api/channels/${channelId}/status`, { method: 'GET' });
+      const data = await agentApi.request(`/api/channels/${channelId}/status`, { method: 'GET' });
       const status = data.status ?? data?.channel?.status ?? data?.instance?.state ?? null;
       const label = status === 'open' ? 'Connected' : status === 'close' ? 'Disconnected' : status === 'connecting' ? 'Connecting' : String(status || '—');
       setToast(`Status: ${label}`);
@@ -191,7 +169,7 @@ export function Channels() {
 
   const handleDisconnect = useCallback(async (channelId) => {
     try {
-      await apiRequest(`/api/channels/${channelId}/disconnect`, { method: 'POST' });
+      await agentApi.request(`/api/channels/${channelId}/disconnect`, { method: 'POST' });
       setToast('Instância desconectada.');
       fetchChannels();
     } catch (err) {

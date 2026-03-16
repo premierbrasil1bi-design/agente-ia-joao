@@ -46,6 +46,7 @@ async function request(path, options = {}) {
 
 export const agentApi = {
   getToken,
+  request,
   getAgent() {
     try {
       const s = localStorage.getItem(AGENT_USER);
