@@ -9,6 +9,7 @@ import * as channelRepo from '../repositories/channel.repository.js';
 import { requireActiveTenant } from '../middleware/requireActiveTenant.js';
 import { sendBadRequest, sendNotFound } from '../utils/errorResponses.js';
 import { pool } from '../db/pool.js';
+import * as channelConnectionService from '../services/channelConnection.service.js';
 
 const router = Router();
 router.use(agentAuth);
@@ -72,7 +73,15 @@ router.get('/:id', requireActiveTenant, async (req, res) => {
 
 /**
  * POST /api/channels
- * Body: { type, instance, agent_id, active }
+ * Fluxo completo de criação de canal WhatsApp via Evolution:
+ * 1) Cria canal no banco
+ * 2) Cria/usa instância na Evolution API
+ * 3) Atualiza dados externos (provider, external_id, status, config)
+ *
+ * Body recomendado (Client App):
+ *   { name, agentId }
+ *
+ * Compatibilidade: ainda aceita { type, instance, agent_id, active }.
  */
 router.post('/', requireActiveTenant, async (req, res) => {
   try {
@@ -81,27 +90,58 @@ router.post('/', requireActiveTenant, async (req, res) => {
       return res.status(401).json({ error: 'Tenant não identificado.' });
     }
 
-    const { type, instance, agent_id, active } = req.body || {};
-    if (!type || !agent_id) {
-      return sendBadRequest(res, 'type e agent_id são obrigatórios.');
+    const { name, agentId, agent_id, type, instance, active } = req.body || {};
+    const finalAgentId = agent_id || agentId;
+
+    if (!finalAgentId) {
+      return sendBadRequest(res, 'agent_id (ou agentId) é obrigatório.');
     }
 
     const { rows: agentRows } = await pool.query(
       'SELECT id FROM agents WHERE id = $1 AND tenant_id = $2',
-      [agent_id, tenantId]
+      [finalAgentId, tenantId]
     );
     if (agentRows.length === 0) {
       return sendBadRequest(res, 'Agente não encontrado ou não pertence ao tenant.');
     }
 
+    // Criação do canal no banco (type/instance opcionais; padrão para WhatsApp Evolution)
     const channel = await channelRepo.create({
       tenant_id: tenantId,
-      agent_id,
-      type,
-      instance,
-      active,
+      agent_id: finalAgentId,
+      type: type || 'whatsapp',
+      instance: instance || name || null,
+      active: active ?? true,
     });
-    res.status(201).json(channel);
+
+    try {
+      // Cria a instância na Evolution SEM conectar (status: created).
+      const evolutionResult = await channelConnectionService.createWhatsAppInstance({
+        ...channel,
+        tenant_id: tenantId,
+      });
+
+      const fullChannel =
+        evolutionResult.channel ??
+        (await channelRepo.findById(channel.id, tenantId));
+
+      return res.status(201).json({
+        success: true,
+        channel: fullChannel,
+        evolution: {
+          instance: evolutionResult.instanceName,
+          create: evolutionResult.createResponse,
+        },
+      });
+    } catch (e) {
+      // Não deixar canal "fake" sem Evolution: remove o registro e retorna erro.
+      await channelRepo.deleteById(channel.id, tenantId);
+      console.error('[channels] POST / (evolution error):', e.message);
+      return res.status(502).json({
+        success: false,
+        error: 'Falha ao criar instância na Evolution. Canal não foi criado.',
+      });
+    }
   } catch (err) {
     console.error('[channels] POST /:', err.message);
     res.status(500).json({ error: 'Erro ao criar canal.' });

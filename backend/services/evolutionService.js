@@ -47,17 +47,34 @@ async function withRetry(fn, operation, instanceName) {
 /**
  * Cria uma instância na Evolution API 2.2.x.
  * POST /instance/create
- * Body: { instanceName, integration: "WHATSAPP-BAILEYS" }
+ * Body: { instanceName, integration: "WHATSAPP-BAILEYS", webhook? }
+ * O webhook, quando configurado via EVOLUTION_WEBHOOK_URL, recebe eventos messages.upsert.
  */
 export async function createInstance(instanceName) {
   const baseUrl = getBaseUrl();
+
+  const webhookUrl =
+    process.env.EVOLUTION_WEBHOOK_URL ||
+    process.env.PUBLIC_EVOLUTION_WEBHOOK_URL ||
+    null;
+
+  const payload = {
+    instanceName,
+    integration: 'WHATSAPP-BAILEYS',
+  };
+
+  if (webhookUrl) {
+    payload.webhook = {
+      url: webhookUrl,
+      events: ['messages.upsert'],
+    };
+  }
+
   return withRetry(
     () =>
-      axios.post(
-        `${baseUrl}/instance/create`,
-        { instanceName, integration: 'WHATSAPP-BAILEYS' },
-        opts()
-      ).then((r) => r.data),
+      axios
+        .post(`${baseUrl}/instance/create`, payload, opts())
+        .then((r) => r.data),
     'createInstance',
     instanceName
   );

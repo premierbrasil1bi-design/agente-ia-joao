@@ -68,32 +68,64 @@ async function instanceNameForChannel(channel) {
 }
 
 /**
- * Inicia conexão WhatsApp: cria instância (idempotente) e inicia conexão (gera QR).
- * Se a instância já existir (409), ignora e segue para connectInstance.
- * @param {object} channel - canal com id, tenant_id, instance?
- * @returns {Promise<{ instanceName: string }>}
+ * Cria (ou garante) a instância WhatsApp na Evolution para o canal,
+ * sem conectar. Atualiza o canal com provider/external_id/status = created.
+ * Fluxo: usado na criação do canal (POST /api/channels).
  */
-export async function connectWhatsAppChannel(channel) {
+export async function createWhatsAppInstance(channel) {
   const instanceName =
     (channel?.instance && slugifyInstance(channel.instance)) ||
     channel?.external_id ||
     (await instanceNameForChannel(channel));
 
+  let createResponse;
   try {
-    await evolutionService.createInstance(instanceName);
+    createResponse = await evolutionService.createInstance(instanceName);
   } catch (err) {
     if (err.response?.status !== 409) throw err;
   }
-  await evolutionService.connectInstance(instanceName);
 
-  await channelRepo.updateConnection(channel.id, channel.tenant_id, {
+  const externalId =
+    createResponse?.instance?.instanceId ||
+    createResponse?.instanceId ||
+    instanceName;
+
+  const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
+    external_id: externalId,
+    provider: 'evolution',
+    status: 'created',
+  });
+
+  logger.instanceCreated(instanceName, channel.id);
+  return {
+    instanceName,
+    createResponse,
+    channel: updatedChannel,
+  };
+}
+
+/**
+ * Inicia conexão WhatsApp: garante instância criada e chama Evolution para conectar (gera QR).
+ * Se a instância já existir (409), createWhatsAppInstance trata de forma idempotente.
+ * Usado por POST /channels/:id/connect e GET /channels/:id/qrcode (via serviço).
+ */
+export async function connectWhatsAppChannel(channel) {
+  const { instanceName, createResponse } = await createWhatsAppInstance(channel);
+
+  const connectResponse = await evolutionService.connectInstance(instanceName);
+
+  const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
     external_id: instanceName,
     provider: 'evolution',
     status: 'connecting',
   });
 
-  logger.instanceCreated(instanceName, channel.id);
-  return instanceName;
+  return {
+    instanceName,
+    createResponse,
+    connectResponse,
+    channel: updatedChannel,
+  };
 }
 
 /**

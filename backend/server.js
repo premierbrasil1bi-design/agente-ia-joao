@@ -3,6 +3,8 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import { createServer } from 'http';
+import { Server as SocketIOServer } from 'socket.io';
 
 import { config } from './config/env.js';
 import { isDbConnected } from './db/connection.js';
@@ -175,7 +177,23 @@ app.use((err, req, res, next) => {
    SERVER START
 ========================================================= */
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = createServer(app);
+
+const io = new SocketIOServer(server, {
+  cors: {
+    origin: '*',
+  },
+});
+
+// Disponibiliza io globalmente para emissão de eventos de status de canais
+// (ex.: logger.statusChange, monitor de canais, etc.).
+globalThis.io = io;
+
+io.on('connection', (socket) => {
+  console.log('[socket.io] Cliente conectado', socket.id);
+});
+
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   startChannelMonitor();
 });

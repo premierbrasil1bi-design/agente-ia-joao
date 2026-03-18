@@ -27,11 +27,16 @@ export async function connectChannel(req, res) {
     if (!channel) return;
 
     console.log('[CONNECT_CHANNEL] channelId:', channel.id, 'tenantId:', channel.tenant_id);
-    const instanceName = await channelConnectionService.connectWhatsAppChannel(channel);
+    const result = await channelConnectionService.connectWhatsAppChannel(channel);
 
     res.status(200).json({
       success: true,
-      instance: instanceName,
+      instance: result.instanceName,
+      evolution: {
+        create: result.createResponse,
+        connect: result.connectResponse,
+      },
+      channel: result.channel,
     });
   } catch (err) {
     console.error('[channelConnection] connectChannel:', err.message);

@@ -24,5 +24,15 @@ export const logger = {
 
   statusChange(instanceName, channelId, fromStatus, toStatus) {
     console.log(`${ts()} ${PREFIX} status_change instance=${instanceName} channelId=${channelId ?? '—'} ${fromStatus ?? '—'} -> ${toStatus}`);
+    try {
+      if (globalThis.io && typeof globalThis.io.emit === 'function' && channelId) {
+        globalThis.io.emit('channel_status_update', {
+          channelId,
+          status: toStatus,
+        });
+      }
+    } catch {
+      // evitar quebrar o fluxo caso websocket não esteja configurado
+    }
   },
 };
