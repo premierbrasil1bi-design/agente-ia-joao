@@ -504,7 +504,9 @@ export function Channels() {
             ...styles.actionButton,
             ...styles.actionButtonPrimary,
           }}
-          onClick={() => toast.info('Fluxo de conexão Instagram (Meta OAuth) será configurado aqui.')}
+          onClick={() =>
+            toast('Fluxo de conexão Instagram (Meta OAuth) será configurado aqui.')
+          }
         >
           Conectar via Meta OAuth
         </button>
@@ -515,7 +517,9 @@ export function Channels() {
         <button
           type="button"
           style={styles.actionButton}
-          onClick={() => toast.info('Configuração de token do bot Telegram será exibida aqui.')}
+          onClick={() =>
+            toast('Configuração de token do bot Telegram será exibida aqui.')
+          }
         >
           Configurar token do bot
         </button>
@@ -562,7 +566,9 @@ export function Channels() {
       <button
         type="button"
         style={styles.actionButton}
-        onClick={() => toast.info('Edição de canal ainda não configurada nesta interface.')}
+        onClick={() =>
+          toast('Edição de canal ainda não configurada nesta interface.')
+        }
       >
         Editar
       </button>
@@ -572,7 +578,9 @@ export function Channels() {
           ...styles.actionButton,
           ...styles.actionButtonMuted,
         }}
-        onClick={() => toast.info('Ativação/Desativação de canal será configurada em breve.')}
+        onClick={() =>
+          toast('Ativação/Desativação de canal será configurada em breve.')
+        }
       >
         Desativar
       </button>
@@ -587,7 +595,9 @@ export function Channels() {
         borderColor: 'var(--danger)',
         color: 'var(--danger)',
       }}
-      onClick={() => toast.info('Exclusão de canal deve ser confirmada em fluxo dedicado.')}
+      onClick={() =>
+        toast('Exclusão de canal deve ser confirmada em fluxo dedicado.')
+      }
     >
       Excluir
     </button>
