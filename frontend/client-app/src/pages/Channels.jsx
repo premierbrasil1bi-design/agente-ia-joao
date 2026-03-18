@@ -281,6 +281,14 @@ export function Channels() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
+  const [deleteChannel, setDeleteChannel] = useState(null);
+  const [editChannel, setEditChannel] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editType, setEditType] = useState('whatsapp');
+  const [editAgentId, setEditAgentId] = useState('');
+  const [loadingDeleteId, setLoadingDeleteId] = useState(null);
+  const [loadingToggleId, setLoadingToggleId] = useState(null);
+  const [loadingEditId, setLoadingEditId] = useState(null);
   const pollingRefs = useRef({});
 
   async function loadChannels() {
@@ -566,11 +574,9 @@ export function Channels() {
       <button
         type="button"
         style={styles.actionButton}
-        onClick={() =>
-          toast('Edição de canal ainda não configurada nesta interface.')
-        }
+        onClick={() => openEditModal(ch)}
       >
-        Editar
+        {loadingEditId === ch.id ? 'Salvando...' : 'Editar'}
       </button>
       <button
         type="button"
@@ -578,11 +584,10 @@ export function Channels() {
           ...styles.actionButton,
           ...styles.actionButtonMuted,
         }}
-        onClick={() =>
-          toast('Ativação/Desativação de canal será configurada em breve.')
-        }
+        disabled={loadingToggleId === ch.id}
+        onClick={() => handleToggleActive(ch)}
       >
-        Desativar
+        {loadingToggleId === ch.id ? 'Atualizando...' : 'Ativar/Desativar'}
       </button>
     </>
   );
@@ -595,9 +600,7 @@ export function Channels() {
         borderColor: 'var(--danger)',
         color: 'var(--danger)',
       }}
-      onClick={() =>
-        toast('Exclusão de canal deve ser confirmada em fluxo dedicado.')
-      }
+      onClick={() => setDeleteChannel(ch)}
     >
       Excluir
     </button>
@@ -631,6 +634,84 @@ export function Channels() {
     }
     return true;
   });
+
+  const openEditModal = (ch) => {
+    setEditChannel(ch);
+    setEditName(ch.name || ch.instance || '');
+    setEditType((ch.type || 'whatsapp').toLowerCase());
+    setEditAgentId(ch.agent_id || '');
+  };
+
+  const closeEditModal = () => {
+    setEditChannel(null);
+    setEditName('');
+    setEditType('whatsapp');
+    setEditAgentId('');
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteChannel) return;
+    const id = deleteChannel.id;
+    try {
+      setLoadingDeleteId(id);
+      await agentApi.request(`/api/channels/${id}`, { method: 'DELETE' });
+      setChannels((prev) => prev.filter((c) => c.id !== id));
+      setDeleteChannel(null);
+      toast.success('Canal excluído com sucesso.');
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'Erro ao excluir canal.');
+    } finally {
+      setLoadingDeleteId(null);
+    }
+  };
+
+  const handleToggleActive = async (ch) => {
+    const id = ch.id;
+    const nextActive = !ch.active && ch.active !== false;
+    try {
+      setLoadingToggleId(id);
+      const updated = await agentApi.request(`/api/channels/${id}/status`, {
+        method: 'PATCH',
+        body: { active: nextActive },
+      });
+      setChannels((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, ...updated } : c)),
+      );
+      toast.success(nextActive ? 'Canal ativado.' : 'Canal desativado.');
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'Erro ao atualizar status do canal.');
+    } finally {
+      setLoadingToggleId(null);
+    }
+  };
+
+  const handleEditSave = async () => {
+    if (!editChannel) return;
+    const id = editChannel.id;
+    try {
+      setLoadingEditId(id);
+      const updated = await agentApi.request(`/api/channels/${id}`, {
+        method: 'PUT',
+        body: {
+          name: editName,
+          type: editType,
+          agent_id: editAgentId,
+        },
+      });
+      setChannels((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, ...updated } : c)),
+      );
+      toast.success('Canal atualizado com sucesso.');
+      closeEditModal();
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'Erro ao atualizar canal.');
+    } finally {
+      setLoadingEditId(null);
+    }
+  };
 
   return (
     <div style={styles.page}>
@@ -925,6 +1006,117 @@ export function Channels() {
                   onClick={() => setQrCode(null)}
                 >
                   Fechar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {deleteChannel && (
+          <div
+            style={styles.modalOverlay}
+            onClick={() => setDeleteChannel(null)}
+          >
+            <div
+              style={styles.modalCard}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 style={styles.modalTitle}>Excluir canal</h2>
+              <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                Tem certeza que deseja excluir o canal{' '}
+                <strong>{deleteChannel.instance || deleteChannel.name}</strong>? Esta ação
+                não poderá ser desfeita.
+              </p>
+              <div style={styles.modalFooter}>
+                <button
+                  type="button"
+                  style={styles.buttonSecondary}
+                  onClick={() => setDeleteChannel(null)}
+                  disabled={loadingDeleteId === deleteChannel.id}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    ...styles.buttonPrimary,
+                    background: 'var(--danger)',
+                  }}
+                  onClick={handleDeleteConfirm}
+                  disabled={loadingDeleteId === deleteChannel.id}
+                >
+                  {loadingDeleteId === deleteChannel.id ? 'Excluindo...' : 'Confirmar exclusão'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {editChannel && (
+          <div
+            style={styles.modalOverlay}
+            onClick={closeEditModal}
+          >
+            <div
+              style={styles.modalCard}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 style={styles.modalTitle}>Editar canal</h2>
+              <div style={styles.formRow}>
+                <div style={styles.field}>
+                  <label style={styles.label}>Nome do canal</label>
+                  <input
+                    style={styles.input}
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                  />
+                </div>
+                <div style={styles.field}>
+                  <label style={styles.label}>Tipo de canal</label>
+                  <select
+                    style={styles.select}
+                    value={editType}
+                    onChange={(e) => setEditType(e.target.value)}
+                  >
+                    <option value="whatsapp">WhatsApp</option>
+                    <option value="instagram">Instagram</option>
+                    <option value="telegram">Telegram</option>
+                    <option value="web">Web Chat</option>
+                    <option value="api">API / Webhook</option>
+                  </select>
+                </div>
+                <div style={styles.field}>
+                  <label style={styles.label}>Agente</label>
+                  <select
+                    style={styles.select}
+                    value={editAgentId}
+                    onChange={(e) => setEditAgentId(e.target.value)}
+                  >
+                    <option value="">Selecione um agente</option>
+                    {agents.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div style={styles.modalFooter}>
+                <button
+                  type="button"
+                  style={styles.buttonSecondary}
+                  onClick={closeEditModal}
+                  disabled={loadingEditId === editChannel.id}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  style={styles.buttonPrimary}
+                  onClick={handleEditSave}
+                  disabled={loadingEditId === editChannel.id}
+                >
+                  {loadingEditId === editChannel.id ? 'Salvando...' : 'Salvar alterações'}
                 </button>
               </div>
             </div>

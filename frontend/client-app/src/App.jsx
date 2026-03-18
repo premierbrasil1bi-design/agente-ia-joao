@@ -1,6 +1,5 @@
 import { Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
 import { TopBar } from './components/TopBar';
-import { ChannelIndicator } from './components/ChannelIndicator';
 import { Dashboard } from './pages/Dashboard';
 import { ContextoAgente } from './pages/ContextoAgente';
 import { Prompts } from './pages/Prompts';
@@ -32,9 +31,6 @@ function Layout({ children }) {
             <Link to="/agents" style={linkStyle}>Agents</Link>
             <Link to="/channels" style={linkStyle}>Channels</Link>
           </nav>
-          <div style={{ padding: '1rem 1rem 0', borderTop: '1px solid var(--border)', marginTop: '0.5rem' }}>
-            <ChannelIndicator compact />
-          </div>
         </aside>
         <main style={{ flex: 1, padding: '1.5rem 2rem', overflow: 'auto' }}>
           {children}

@@ -1,11 +1,5 @@
-/**
- * Barra superior fixa: nome do produto + "Canal ativo: X" + seletor de canal + admin + logout.
- */
-
 import { useNavigate } from 'react-router-dom';
-import { useChannel } from '../context/ChannelContext';
 import { useAgentAuth } from '../context/AgentAuthContext';
-import { ChannelIndicator } from './ChannelIndicator';
 
 const styles = {
   bar: {
@@ -44,10 +38,8 @@ const styles = {
 };
 
 export function TopBar() {
-  const { channel } = useChannel();
   const { agent, logout } = useAgentAuth();
   const navigate = useNavigate();
-  const label = channel.toUpperCase();
 
   const handleLogout = () => {
     logout();
@@ -58,9 +50,6 @@ export function TopBar() {
     <header style={styles.bar}>
       <span style={styles.product}>Agent Admin</span>
       <div style={styles.right}>
-        <span style={styles.canalLabel}>Canal ativo:</span>
-        <span style={styles.canalValue}>{label}</span>
-        <ChannelIndicator />
         {agent?.name && (
           <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{agent.name}</span>
         )}
