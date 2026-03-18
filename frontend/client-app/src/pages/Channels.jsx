@@ -5,6 +5,17 @@ import { agentApi } from '../services/agentApi.js';
 import StatusBadge from '../components/StatusBadge.jsx';
 import useAutoReconnect from '../hooks/useAutoReconnect.js';
 
+export function Channels() {
+  const [channels, setChannels] = useState([]);
+  const [agents, setAgents] = useState([]);
+  const [showModal, setShowModal] = useState(false);
+  const [name, setName] = useState('');
+  const [agentId, setAgentId] = useState('');
+  const [qrCode, setQrCode] = useState(null);
+  const [loadingCreate, setLoadingCreate] = useState(false);
+  const [loadingQr, setLoadingQr] = useState(null);
+  const pollingRefs = useRef({});
+
   async function loadChannels() {
     const data = await agentApi.request('/api/agent/channels');
     setChannels(Array.isArray(data) ? data : []);
@@ -134,44 +145,44 @@ import useAutoReconnect from '../hooks/useAutoReconnect.js';
           </tr>
         </thead>
         <tbody>
-            {channels.map((ch) => (
-              <tr key={ch.id}>
-                <td>{ch.instance || ch.name}</td>
-                <td>
-                  <StatusBadge status={ch.status} />
-                </td>
-                <td>
-                  {ch.status === 'created' && (
-                    <button
-                      type="button"
-                      disabled={loadingQr === ch.id || loadingCreate}
-                      onClick={() => {
-                        restoreQr(ch.id);
-                        getQr(ch.id);
-                      }}
-                    >
-                      {loadingQr === ch.id ? 'Gerando...' : 'Conectar WhatsApp'}
-                    </button>
-                  )}
-                  {ch.status === 'connecting' && (
-                    <span>Escaneie o QR Code no seu WhatsApp</span>
-                  )}
-                  {ch.status === 'connected' && <span>✅ Conectado</span>}
-                  {!ch.status && (
-                    <button
-                      type="button"
-                      disabled={loadingQr === ch.id || loadingCreate}
-                      onClick={() => {
-                        restoreQr(ch.id);
-                        getQr(ch.id);
-                      }}
-                    >
-                      {loadingQr === ch.id ? 'Gerando...' : 'QR Code'}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+          {channels.map((ch) => (
+            <tr key={ch.id}>
+              <td>{ch.instance || ch.name}</td>
+              <td>
+                <StatusBadge status={ch.status} />
+              </td>
+              <td>
+                {ch.status === 'created' && (
+                  <button
+                    type="button"
+                    disabled={loadingQr === ch.id || loadingCreate}
+                    onClick={() => {
+                      restoreQr(ch.id);
+                      getQr(ch.id);
+                    }}
+                  >
+                    {loadingQr === ch.id ? 'Gerando...' : 'Conectar WhatsApp'}
+                  </button>
+                )}
+                {ch.status === 'connecting' && (
+                  <span>Escaneie o QR Code no seu WhatsApp</span>
+                )}
+                {ch.status === 'connected' && <span>✅ Conectado</span>}
+                {!ch.status && (
+                  <button
+                    type="button"
+                    disabled={loadingQr === ch.id || loadingCreate}
+                    onClick={() => {
+                      restoreQr(ch.id);
+                      getQr(ch.id);
+                    }}
+                  >
+                    {loadingQr === ch.id ? 'Gerando...' : 'QR Code'}
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
 
