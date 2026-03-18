@@ -25,3 +25,28 @@ body {
 #root {
   min-height: 100vh;
 }
+
+/* Inputs e selects – dark theme consistente */
+input,
+select,
+textarea {
+  background-color: #111827; /* próximo de var(--bg) */
+  color: #e5e7eb;
+  border: 1px solid #374151;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #6b7280;
+}
+
+select option {
+  background-color: #111827;
+  color: #e5e7eb;
+}
+
+select option:checked,
+select option:hover {
+  background-color: #374151;
+  color: #f9fafb;
+}
