@@ -30,8 +30,13 @@ async function request(path, options = {}) {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
+  let body = options.body;
+  if (body && typeof body === 'object') {
+    body = JSON.stringify(body);
+  }
+
   const url = `${BASE()}${path}`;
-  const res = await fetch(url, { ...options, headers });
+  const res = await fetch(url, { ...options, headers, body });
   const data = await res.json().catch(() => ({}));
 
   if (res.status === 401) {
