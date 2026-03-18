@@ -118,6 +118,19 @@ const styles = {
     fontSize: '0.8rem',
     color: 'var(--text-muted)',
   },
+  headerBadges: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    flexWrap: 'wrap',
+  },
+  typeBadge: {
+    padding: '0.15rem 0.6rem',
+    borderRadius: 999,
+    border: '1px solid var(--border)',
+    fontSize: '0.75rem',
+    color: 'var(--text-muted)',
+  },
   channelRowBottom: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -127,7 +140,9 @@ const styles = {
   },
   actionsRow: {
     display: 'flex',
-    gap: '0.5rem',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '0.75rem',
     flexWrap: 'wrap',
   },
   actionButton: {
@@ -149,7 +164,7 @@ const styles = {
     color: 'var(--text-muted)',
   },
   emptyState: {
-    padding: '1.25rem',
+    padding: '1.75rem 1.5rem',
     borderRadius: 10,
     border: '1px dashed var(--border)',
     textAlign: 'center',
@@ -259,9 +274,13 @@ export function Channels() {
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState('');
   const [agentId, setAgentId] = useState('');
+  const [channelType, setChannelType] = useState('whatsapp');
   const [qrCode, setQrCode] = useState(null);
   const [loadingCreate, setLoadingCreate] = useState(false);
   const [loadingQr, setLoadingQr] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterType, setFilterType] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('all');
   const pollingRefs = useRef({});
 
   async function loadChannels() {
@@ -284,7 +303,7 @@ export function Channels() {
     try {
       const data = await agentApi.request('/api/channels', {
         method: 'POST',
-        body: { name, agentId },
+        body: { name, agentId, type: channelType },
       });
 
       toast.success('Canal criado com sucesso');
@@ -292,6 +311,7 @@ export function Channels() {
       setShowModal(false);
       setName('');
       setAgentId('');
+      setChannelType('whatsapp');
 
       await loadChannels();
 
@@ -376,13 +396,239 @@ export function Channels() {
     };
   }, []);
 
+  const agentMap = Object.fromEntries((agents || []).map((a) => [a.id, a]));
+  const getAgentName = (id) => agentMap[id]?.name || '—';
+
+  const getChannelTypeLabel = (type) => {
+    const t = (type || '').toLowerCase();
+    if (t === 'whatsapp') return 'WhatsApp';
+    if (t === 'instagram') return 'Instagram';
+    if (t === 'telegram') return 'Telegram';
+    if (t === 'web') return 'Web Chat';
+    if (t === 'api') return 'API / Webhook';
+    return 'Outro';
+  };
+
+  const getChannelContextText = (ch) => {
+    const t = (ch.type || '').toLowerCase();
+    const s = (ch.status || '').toLowerCase();
+
+    if (t === 'whatsapp') {
+      if (s === 'connected') {
+        return 'Canal WhatsApp conectado. Mensagens serão roteadas automaticamente para o agente vinculado.';
+      }
+      if (s === 'connecting') {
+        return 'Escaneie o QR Code no WhatsApp para finalizar a conexão desta instância.';
+      }
+      if (s === 'created') {
+        return 'Instância criada. Gere o QR Code e conecte a sessão do WhatsApp.';
+      }
+      if (s === 'error') {
+        return 'Houve um erro na conexão com a Evolution. Verifique as credenciais e a instância.';
+      }
+      return 'Configure a instância na Evolution e conecte o WhatsApp para iniciar o atendimento.';
+    }
+    if (t === 'instagram') {
+      return 'Conecte sua conta Instagram via Meta OAuth para receber e responder mensagens do Direct.';
+    }
+    if (t === 'telegram') {
+      return 'Informe o token do bot do Telegram para habilitar o atendimento neste canal.';
+    }
+    if (t === 'web') {
+      return 'Instale o widget de chat no seu site utilizando o script deste canal.';
+    }
+    if (t === 'api') {
+      return 'Use o endpoint de webhook para integrar fontes externas de mensagem ao agente.';
+    }
+    return 'Canal em configuração. Defina o tipo e complete as credenciais para ativá-lo.';
+  };
+
+  const renderTypeActions = (ch) => {
+    const t = (ch.type || '').toLowerCase();
+    if (t === 'whatsapp') {
+      return (
+        <>
+          {ch.status === 'created' && (
+            <button
+              type="button"
+              style={{
+                ...styles.actionButton,
+                ...styles.actionButtonPrimary,
+              }}
+              disabled={loadingQr === ch.id || loadingCreate}
+              onClick={() => {
+                restoreQr(ch.id);
+                getQr(ch.id);
+              }}
+            >
+              {loadingQr === ch.id ? 'Gerando...' : 'Conectar WhatsApp'}
+            </button>
+          )}
+          {ch.status === 'connecting' && (
+            <button
+              type="button"
+              style={{
+                ...styles.actionButton,
+                ...styles.actionButtonPrimary,
+              }}
+              disabled={loadingQr === ch.id || loadingCreate}
+              onClick={() => {
+                restoreQr(ch.id);
+                getQr(ch.id);
+              }}
+            >
+              {loadingQr === ch.id ? 'Atualizando...' : 'Reexibir QR Code'}
+            </button>
+          )}
+          {!ch.status && (
+            <button
+              type="button"
+              style={styles.actionButton}
+              disabled={loadingQr === ch.id || loadingCreate}
+              onClick={() => {
+                restoreQr(ch.id);
+                getQr(ch.id);
+              }}
+            >
+              {loadingQr === ch.id ? 'Gerando...' : 'QR Code'}
+            </button>
+          )}
+        </>
+      );
+    }
+    if (t === 'instagram') {
+      return (
+        <button
+          type="button"
+          style={{
+            ...styles.actionButton,
+            ...styles.actionButtonPrimary,
+          }}
+          onClick={() => toast.info('Fluxo de conexão Instagram (Meta OAuth) será configurado aqui.')}
+        >
+          Conectar via Meta OAuth
+        </button>
+      );
+    }
+    if (t === 'telegram') {
+      return (
+        <button
+          type="button"
+          style={styles.actionButton}
+          onClick={() => toast.info('Configuração de token do bot Telegram será exibida aqui.')}
+        >
+          Configurar token do bot
+        </button>
+      );
+    }
+    if (t === 'web') {
+      return (
+        <button
+          type="button"
+          style={styles.actionButton}
+          onClick={async () => {
+            const snippet = '<script src="https://api.omnia1biai.com.br/widget.js" data-channel-id="' + ch.id + '"></script>';
+            try {
+              await navigator.clipboard.writeText(snippet);
+              toast.success('Snippet do widget copiado para a área de transferência.');
+            } catch {
+              toast.error('Não foi possível copiar o snippet. Copie manualmente.');
+            }
+          }}
+        >
+          Copiar script do widget
+        </button>
+      );
+    }
+    if (t === 'api') {
+      return (
+        <button
+          type="button"
+          style={styles.actionButton}
+          onClick={() => {
+            const endpoint = `/api/inbound/${ch.id}`;
+            toast(`Endpoint do webhook: ${endpoint}`);
+          }}
+        >
+          Ver endpoint do webhook
+        </button>
+      );
+    }
+    return null;
+  };
+
+  const renderSecondaryActions = (ch) => (
+    <>
+      <button
+        type="button"
+        style={styles.actionButton}
+        onClick={() => toast.info('Edição de canal ainda não configurada nesta interface.')}
+      >
+        Editar
+      </button>
+      <button
+        type="button"
+        style={{
+          ...styles.actionButton,
+          ...styles.actionButtonMuted,
+        }}
+        onClick={() => toast.info('Ativação/Desativação de canal será configurada em breve.')}
+      >
+        Desativar
+      </button>
+    </>
+  );
+
+  const renderDangerAction = (ch) => (
+    <button
+      type="button"
+      style={{
+        ...styles.actionButton,
+        borderColor: 'var(--danger)',
+        color: 'var(--danger)',
+      }}
+      onClick={() => toast.info('Exclusão de canal deve ser confirmada em fluxo dedicado.')}
+    >
+      Excluir
+    </button>
+  );
+
+  const getLastActivity = (ch) => {
+    const ts = ch.updated_at || ch.connected_at || ch.created_at;
+    if (!ts) return '—';
+    const d = new Date(ts);
+    const diffMs = Date.now() - d.getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return 'agora';
+    if (diffMin < 60) return `há ${diffMin} min`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return `há ${diffH} h`;
+    const diffD = Math.floor(diffH / 24);
+    return `há ${diffD} d`;
+  };
+
+  const filteredChannels = channels.filter((ch) => {
+    const term = searchTerm.trim().toLowerCase();
+    if (term) {
+      const hay = `${ch.name || ''} ${ch.instance || ''} ${ch.id || ''}`.toLowerCase();
+      if (!hay.includes(term)) return false;
+    }
+    if (filterType !== 'all') {
+      if ((ch.type || '').toLowerCase() !== filterType) return false;
+    }
+    if (filterStatus !== 'all') {
+      if ((ch.status || '').toLowerCase() !== filterStatus) return false;
+    }
+    return true;
+  });
+
   return (
     <div style={styles.page}>
       <div style={styles.content}>
         <header style={styles.header}>
           <div style={styles.titleBlock}>
             <h1 style={styles.title}>Canais</h1>
-            <p style={styles.subtitle}>Gerencie e conecte seus canais de comunicação WhatsApp.</p>
+            <p style={styles.subtitle}>Centralize e administre todos os canais de atendimento do seu agente omnichannel.</p>
           </div>
           <button
             type="button"
@@ -390,7 +636,7 @@ export function Channels() {
             onClick={() => setShowModal(true)}
           >
             <span>➕</span>
-            <span>Novo Canal</span>
+            <span>Conectar novo canal</span>
           </button>
         </header>
 
@@ -406,86 +652,90 @@ export function Channels() {
               <div>
                 <h2 style={styles.cardTitle}>Canais configurados</h2>
                 <p style={styles.cardSubtitle}>
-                  Acompanhe o status dos canais e acesse ações rápidas.
+                  Acompanhe o status dos canais e acesse ações rápidas de conexão e configuração.
                 </p>
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <input
+                  style={{ ...styles.input, maxWidth: 180 }}
+                  placeholder="Buscar canal..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+                <select
+                  style={{ ...styles.select, maxWidth: 140 }}
+                  value={filterType}
+                  onChange={(e) => setFilterType(e.target.value)}
+                >
+                  <option value="all">Tipo: Todos</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="instagram">Instagram</option>
+                  <option value="telegram">Telegram</option>
+                  <option value="web">Web Chat</option>
+                  <option value="api">API/Webhook</option>
+                </select>
+                <select
+                  style={{ ...styles.select, maxWidth: 150 }}
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                >
+                  <option value="all">Status: Todos</option>
+                  <option value="connected">Conectado</option>
+                  <option value="connecting">Conectando</option>
+                  <option value="created">Criado</option>
+                  <option value="offline">Offline</option>
+                  <option value="error">Erro</option>
+                </select>
               </div>
             </div>
 
-            {channels.length === 0 ? (
+            {filteredChannels.length === 0 ? (
               <div style={styles.emptyState}>
-                Nenhum canal configurado ainda. Crie um novo canal para iniciar suas conversas.
+                <div style={{ marginBottom: '0.5rem', fontWeight: 500 }}>Nenhum canal configurado ainda.</div>
+                <div style={{ fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                  Crie um novo canal e conecte seus clientes pelos principais aplicativos de mensagem.
+                </div>
+                <button
+                  type="button"
+                  style={styles.primaryButton}
+                  onClick={() => setShowModal(true)}
+                >
+                  <span>➕</span>
+                  <span>Criar primeiro canal</span>
+                </button>
               </div>
             ) : (
               <div style={styles.channelsList}>
-                {channels.map((ch) => (
+                {filteredChannels.map((ch) => (
                   <div key={ch.id} style={styles.channelCard}>
                     <div style={styles.channelRowTop}>
                       <div>
                         <div style={styles.channelName}>{ch.instance || ch.name}</div>
                         <div style={styles.channelMeta}>
-                          ID: {ch.id?.slice(0, 8)} ·{' '}
-                          {ch.status ? 'WhatsApp · Canal Evolution' : 'WhatsApp · Ainda não conectado'}
+                          {getChannelTypeLabel(ch.type)} · Agente: {getAgentName(ch.agent_id)} · ID: {ch.id?.slice(0, 8)}
                         </div>
                       </div>
-                      <StatusBadge status={ch.status} />
+                      <div style={styles.headerBadges}>
+                        <span style={styles.typeBadge}>{getChannelTypeLabel(ch.type)}</span>
+                        <StatusBadge status={ch.status} />
+                      </div>
                     </div>
 
                     <div style={styles.channelRowBottom}>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        {ch.status === 'created' && 'Pronto para conectar. Gere o QR Code para conectar o WhatsApp.'}
-                        {ch.status === 'connecting' && 'Escaneie o QR Code no seu WhatsApp para finalizar a conexão.'}
-                        {ch.status === 'connected' && 'Canal conectado. Mensagens serão roteadas automaticamente.'}
-                        {!ch.status && 'Canal criado, mas ainda sem status de conexão.'}
+                        {getChannelContextText(ch)}
+                        <div style={{ marginTop: '0.15rem', fontSize: '0.75rem', opacity: 0.8 }}>
+                          Última atividade: {getLastActivity(ch)}
+                        </div>
                       </div>
                       <div style={styles.actionsRow}>
-                        {ch.status === 'created' && (
-                          <button
-                            type="button"
-                            style={{
-                              ...styles.actionButton,
-                              ...styles.actionButtonPrimary,
-                            }}
-                            disabled={loadingQr === ch.id || loadingCreate}
-                            onClick={() => {
-                              restoreQr(ch.id);
-                              getQr(ch.id);
-                            }}
-                          >
-                            {loadingQr === ch.id ? 'Gerando...' : 'Conectar WhatsApp'}
-                          </button>
-                        )}
-                        {ch.status === 'connecting' && (
-                          <button
-                            type="button"
-                            style={{
-                              ...styles.actionButton,
-                              ...styles.actionButtonPrimary,
-                            }}
-                            disabled={loadingQr === ch.id || loadingCreate}
-                            onClick={() => {
-                              restoreQr(ch.id);
-                              getQr(ch.id);
-                            }}
-                          >
-                            {loadingQr === ch.id ? 'Atualizando...' : 'Reexibir QR Code'}
-                          </button>
-                        )}
-                        {ch.status === 'connected' && (
-                          <span style={{ fontSize: '0.8rem', color: 'var(--success)' }}>✅ Conectado</span>
-                        )}
-                        {!ch.status && (
-                          <button
-                            type="button"
-                            style={styles.actionButton}
-                            disabled={loadingQr === ch.id || loadingCreate}
-                            onClick={() => {
-                              restoreQr(ch.id);
-                              getQr(ch.id);
-                            }}
-                          >
-                            {loadingQr === ch.id ? 'Gerando...' : 'QR Code'}
-                          </button>
-                        )}
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          {renderTypeActions(ch)}
+                          {renderSecondaryActions(ch)}
+                        </div>
+                        <div>
+                          {renderDangerAction(ch)}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -497,9 +747,9 @@ export function Channels() {
           <section style={styles.card}>
             <div style={styles.cardHeader}>
               <div>
-                <h2 style={styles.cardTitle}>Novo canal WhatsApp</h2>
+                <h2 style={styles.cardTitle}>Novo canal</h2>
                 <p style={styles.cardSubtitle}>
-                  Crie um novo canal vinculado a um agente para receber e enviar mensagens.
+                  Crie um novo canal vinculado a um agente para receber e enviar mensagens nos principais canais digitais.
                 </p>
               </div>
             </div>
@@ -514,6 +764,20 @@ export function Channels() {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                   />
+                </div>
+                <div style={styles.field}>
+                  <label style={styles.label}>Tipo de canal</label>
+                  <select
+                    style={styles.select}
+                    value={channelType}
+                    onChange={(e) => setChannelType(e.target.value)}
+                  >
+                    <option value="whatsapp">WhatsApp</option>
+                    <option value="instagram">Instagram</option>
+                    <option value="telegram">Telegram</option>
+                    <option value="web">Web Chat</option>
+                    <option value="api">API / Webhook</option>
+                  </select>
                 </div>
                 <div style={styles.field}>
                   <label style={styles.label}>Agente</label>
@@ -575,6 +839,20 @@ export function Channels() {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                   />
+                </div>
+                <div style={styles.field}>
+                  <label style={styles.label}>Tipo de canal</label>
+                  <select
+                    style={styles.select}
+                    value={channelType}
+                    onChange={(e) => setChannelType(e.target.value)}
+                  >
+                    <option value="whatsapp">WhatsApp</option>
+                    <option value="instagram">Instagram</option>
+                    <option value="telegram">Telegram</option>
+                    <option value="web">Web Chat</option>
+                    <option value="api">API / Webhook</option>
+                  </select>
                 </div>
                 <div style={styles.field}>
                   <label style={styles.label}>Agente</label>
