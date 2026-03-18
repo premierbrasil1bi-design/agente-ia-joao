@@ -16,22 +16,33 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
+            set -e
+
+            echo "==== Deploy iniciado ===="
+
             cd ~/agente-ia-joao
             git pull origin main
 
-            # Update backend
+            echo "==== Deploy BACKEND ===="
             cd backend
             npm install
-            pm2 restart agente-backend
+            pm2 reload agente-backend || pm2 start index.js --name agente-backend
 
-            # Build frontend
-            cd ../frontend/saas-admin
+            echo "==== Build FRONTEND ===="
+            cd ~/agente-ia-joao/frontend/client-app
             npm install
             npm run build
 
-            # Publish frontend
-            rm -rf /var/www/saas-admin/*
-            cp -r dist/* /var/www/saas-admin/
+            echo "==== Publicação segura do FRONTEND ===="
+            rm -rf /var/www/app_new
+            mkdir -p /var/www/app_new
 
-            # Reload nginx
-            systemctl reload nginx
+            cp -r dist/* /var/www/app_new/
+
+            rm -rf /var/www/app/*
+            cp -r /var/www/app_new/* /var/www/app/
+
+            echo "==== Reiniciando Nginx ===="
+            systemctl restart nginx
+
+            echo "==== DEPLOY FINALIZADO COM SUCESSO ===="
