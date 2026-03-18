@@ -1,41 +1,52 @@
-version: "3.8"
+version: '3.9'
 
 services:
-
-  postgres:
+  saas_postgres:
     image: postgres:15
     container_name: saas_postgres
     restart: always
+
     environment:
+      POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: evolution
+
+    healthcheck:
+     test: ["CMD-SHELL", "pg_isready -U postgres"]
+     interval: 5s
+     timeout: 5s
+     retries: 5
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
     ports:
       - "5432:5432"
 
-  redis:
+  saas_redis:
     image: redis:6.2
     container_name: saas_redis
     restart: always
     ports:
       - "6379:6379"
 
-  evolution:
+  saas_evolution:
     image: atendai/evolution-api:latest
     container_name: saas_evolution
     restart: always
     depends_on:
-      - postgres
-      - redis
+      - saas_postgres
+      - saas_redis
+
     environment:
       DATABASE_PROVIDER: postgresql
       DATABASE_CONNECTION_URI: postgresql://postgres:postgres@saas_postgres:5432/evolution
-      REDIS_URI: redis://redis:6379
+      REDIS_URI: redis://saas_redis:6379
       AUTHENTICATION_API_KEY: EVOLUTION_2026_JOAO_998877
-    volumes:
-      - evolution_store:/evolution/store
     ports:
       - "8080:8080"
+    volumes:
+      - evolution_store:/evolution/store
 
 volumes:
   postgres_data:
