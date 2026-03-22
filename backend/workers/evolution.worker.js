@@ -1,11 +1,17 @@
+import { fileURLToPath } from 'url';
+import path from 'path';
 import { Worker } from 'bullmq';
 import {
   getRedisConnection,
+  getRedisUrl,
+  initEvolutionQueueInfra,
   EVOLUTION_JOB,
   serializeAxiosErrorForJob,
 } from '../queues/evolution.queue.js';
 import * as http from '../services/evolutionHttp.client.js';
 import { evolutionLog } from '../utils/evolutionLog.js';
+
+const QUEUE_NAME = 'evolution-api';
 
 const concurrency = Math.max(
   1,
@@ -28,7 +34,8 @@ async function wrap(name, instanceLabel, fn) {
 }
 
 /**
- * Inicia o consumer BullMQ. Idempotente: se já existir, não duplica.
+ * Inicia o consumer BullMQ na fila `evolution-api` (mesmo nome que evolution.queue.js).
+ * Idempotente: se já existir, não duplica.
  */
 export function startEvolutionWorker() {
   if (worker) {
@@ -37,8 +44,9 @@ export function startEvolutionWorker() {
   }
 
   worker = new Worker(
-    'evolution-api',
+    QUEUE_NAME,
     async (job) => {
+      console.log('Processando job', job.id, job.name);
       const d = job.data || {};
       switch (job.name) {
         case EVOLUTION_JOB.CREATE:
@@ -59,7 +67,6 @@ export function startEvolutionWorker() {
           );
         case EVOLUTION_JOB.HEALTH:
           return wrap('HEALTH', null, () => http.fetchInstances());
-        /** Smoke-test da fila no deploy (scripts/deploy.sh); não chama Evolution. */
         case 'health-check':
           return { ok: true, source: 'deploy-check', ts: d.ts ?? null };
         default:
@@ -72,7 +79,12 @@ export function startEvolutionWorker() {
     }
   );
 
+  worker.on('completed', (job) => {
+    console.log('Job concluído', job.id, job.name);
+  });
+
   worker.on('failed', (job, err) => {
+    console.error('Erro no job', job?.id, job?.name, err?.message);
     evolutionLog('JOB_FAILED', job?.data?.instanceName ?? job?.data?.instance ?? '-', {
       jobId: job?.id,
       name: job?.name,
@@ -80,7 +92,7 @@ export function startEvolutionWorker() {
     });
   });
 
-  console.log(`[evolution-worker] ativo (concurrency=${concurrency})`);
+  console.log(`[evolution-worker] ativo fila=${QUEUE_NAME} concurrency=${concurrency}`);
   return worker;
 }
 
@@ -89,4 +101,38 @@ export async function stopEvolutionWorker() {
     await worker.close();
     worker = null;
   }
+}
+
+function isExecutedDirectly() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return path.resolve(entry) === path.resolve(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+async function bootstrapStandaloneWorker() {
+  console.log('Worker evolution iniciado');
+  const url = getRedisUrl();
+  if (!url || !String(url).trim()) {
+    console.error('[evolution-worker] REDIS_URL vazio — defina no ambiente ou .env');
+    process.exit(1);
+  }
+  await initEvolutionQueueInfra();
+  await getRedisConnection().ping();
+  console.log('Conectado ao Redis');
+  startEvolutionWorker();
+}
+
+if (isExecutedDirectly()) {
+  (async () => {
+    await import('../bootstrap/dns-ipv4first.js');
+    await import('dotenv/config');
+    await bootstrapStandaloneWorker();
+  })().catch((err) => {
+    console.error('[evolution-worker] falha ao subir:', err);
+    process.exit(1);
+  });
 }

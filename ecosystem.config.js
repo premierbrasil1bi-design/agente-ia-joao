@@ -36,7 +36,7 @@ module.exports = {
     },
     {
       name: 'worker-evolution',
-      script: 'backend/workers/evolution.standalone.js',
+      script: 'backend/workers/evolution.worker.js',
       cwd: root,
       instances: 1,
       exec_mode: 'fork',
