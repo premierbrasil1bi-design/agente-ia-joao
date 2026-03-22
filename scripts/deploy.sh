@@ -178,23 +178,24 @@ log "pm2: diretório de logs"
 mkdir -p "$REPO_ROOT/logs"
 
 cd "$REPO_ROOT"
-if pm2 describe agente-backend >/dev/null 2>&1; then
-  log "pm2 reload ecosystem.config.js --update-env"
-  pm2 reload ecosystem.config.js --update-env
-else
-  log "pm2 start ecosystem.config.js (primeira subida)"
-  pm2 start ecosystem.config.js
-fi
+log "PM2: garantindo que todos os processos do ecosystem estejam ativos..."
+
+log "PM2: start ecosystem"
+pm2 start ecosystem.config.js || true
+
+log "PM2: reload ecosystem"
+pm2 reload ecosystem.config.js --update-env
 
 if ! pm2 describe worker-evolution >/dev/null 2>&1; then
-  log "pm2: garantindo worker-evolution (ex.: migração de deploy antigo)"
+  log "PM2: worker-evolution não encontrado, iniciando manualmente..."
   pm2 start ecosystem.config.js --only worker-evolution
 fi
 
 pm2 describe agente-backend >/dev/null 2>&1 || fail "PM2: agente-backend não está ativo"
 pm2 describe worker-evolution >/dev/null 2>&1 || fail "PM2: worker-evolution não está ativo"
+log "PM2: worker-evolution garantido"
 
-log "pm2 save"
+log "PM2: estado salvo"
 pm2 save
 
 log "aguardando worker estabilizar (3s) antes da validação funcional da fila"
