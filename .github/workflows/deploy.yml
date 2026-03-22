@@ -1,3 +1,14 @@
+# Deploy para VPS via SSH (appleboy/ssh-action).
+#
+# Secrets obrigatórios:
+#   VPS_HOST, VPS_USER, VPS_SSH_KEY, VPS_REPO_PATH (ex.: /root/agente-ia-omnicanal)
+# Secrets opcionais:
+#   VPS_DEPLOY_BRANCH (se vazio, o script usa main)
+# Porta SSH não padrão: altere o workflow (appleboy `port:`) ou use ~/.ssh/config no runner (não coberto aqui).
+#
+# No servidor: usuário SSH com permissão em $VPS_REPO_PATH, sudo sem senha para nginx/chown em /var/www
+# (ou rode o deploy como root).
+
 name: Deploy to VPS
 
 on:
@@ -5,44 +16,105 @@ on:
     branches:
       - main
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
+    name: Deploy via SSH
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH — 1ª tentativa
+        id: deploy_ssh_1
+        continue-on-error: true
+        timeout-minutes: 22
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 20m
+          script_stop: true
+          debug: true
           script: |
-            set -e
+            set -euo pipefail
+            echo "========================================"
+            echo "[gha] Deploy — tentativa 1 | $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "========================================"
 
-            echo "==== Deploy iniciado ===="
+            DEPLOY_PATH="${{ secrets.VPS_REPO_PATH }}"
+            if [ -z "${DEPLOY_PATH}" ]; then
+              echo "[gha][ERRO] Secret VPS_REPO_PATH não definido."
+              exit 1
+            fi
+            if [ ! -d "${DEPLOY_PATH}" ]; then
+              echo "[gha][ERRO] Diretório inexistente: ${DEPLOY_PATH}"
+              exit 1
+            fi
 
-            cd ~/agente-ia-joao
-            git pull origin main
+            export DEPLOY_BRANCH="${{ secrets.VPS_DEPLOY_BRANCH }}"
+            if [ -z "${DEPLOY_BRANCH}" ]; then
+              export DEPLOY_BRANCH="main"
+            fi
 
-            echo "==== Deploy BACKEND ===="
-            cd backend
-            npm install
-            pm2 reload agente-backend || pm2 start index.js --name agente-backend
+            cd "${DEPLOY_PATH}"
+            if [ ! -f scripts/deploy.sh ]; then
+              echo "[gha][ERRO] scripts/deploy.sh não encontrado. Clone o repositório neste caminho."
+              exit 1
+            fi
+            chmod +x scripts/deploy.sh
+            bash scripts/deploy.sh
+            echo "[gha] Tentativa 1 OK."
 
-            echo "==== Build FRONTEND ===="
-            cd ~/agente-ia-joao/frontend/client-app
-            npm install
-            npm run build
+      - name: Deploy via SSH — 2ª tentativa (retry)
+        id: deploy_ssh_2
+        if: steps.deploy_ssh_1.outcome == 'failure'
+        continue-on-error: true
+        timeout-minutes: 22
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 20m
+          script_stop: true
+          debug: true
+          script: |
+            set -euo pipefail
+            echo "========================================"
+            echo "[gha] Deploy — tentativa 2 | $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "========================================"
+            sleep 15
 
-            echo "==== Publicação segura do FRONTEND ===="
-            rm -rf /var/www/app_new
-            mkdir -p /var/www/app_new
+            DEPLOY_PATH="${{ secrets.VPS_REPO_PATH }}"
+            export DEPLOY_BRANCH="${{ secrets.VPS_DEPLOY_BRANCH }}"
+            if [ -z "${DEPLOY_BRANCH}" ]; then
+              export DEPLOY_BRANCH="main"
+            fi
+            cd "${DEPLOY_PATH}"
+            chmod +x scripts/deploy.sh
+            bash scripts/deploy.sh
+            echo "[gha] Tentativa 2 OK."
 
-            cp -r dist/* /var/www/app_new/
-
-            rm -rf /var/www/app/*
-            cp -r /var/www/app_new/* /var/www/app/
-
-            echo "==== Reiniciando Nginx ===="
-            systemctl restart nginx
-
-            echo "==== DEPLOY FINALIZADO COM SUCESSO ===="
+      - name: Verificar resultado
+        if: always()
+        run: |
+          set -euo pipefail
+          echo "Tentativa 1: ${{ steps.deploy_ssh_1.outcome }}"
+          echo "Tentativa 2: ${{ steps.deploy_ssh_2.outcome }}"
+          if [ "${{ steps.deploy_ssh_1.outcome }}" = "success" ]; then
+            echo "Deploy concluído na primeira tentativa."
+            exit 0
+          fi
+          if [ "${{ steps.deploy_ssh_2.outcome }}" = "success" ]; then
+            echo "Deploy concluído na segunda tentativa."
+            exit 0
+          fi
+          echo "::error::Deploy falhou após 2 tentativas."
+          exit 1

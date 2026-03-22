@@ -7,3 +7,6 @@ backend/.env
 frontend/.env
 
 .DS_Storegit
+
+# PM2 / deploy
+logs/*.log

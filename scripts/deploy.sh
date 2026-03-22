@@ -1,0 +1,301 @@
+#!/usr/bin/env bash
+# Deploy idempotente: lock + validação Redis/BullMQ + backend + PM2 + frontend + www + healthcheck
+# Uso: cd /caminho/do/repo && bash scripts/deploy.sh
+#
+# Variáveis opcionais:
+#   DEPLOY_BRANCH (default: main)
+#   DEPLOY_WWW_ROOT (default: /var/www)
+#   APP_DIRNAME (default: app)
+#   DEPLOY_HEALTH_PORT / PORT (default: 3000)
+#   DEPLOY_LOCK_FILE (default: /tmp/omnia_deploy.lock)
+#   DEPLOY_SKIP_REEXEC=1 — pula re-exec após git (apenas testes)
+#
+# Lock: aplicado APÓS a fase git/re-exec — evita arquivo preso quando o bash faz `exec` na 1ª passagem.
+#
+# Ordem: lock → pré-requisitos → npm ci → .env → Redis → BullMQ estrutural (getJobCounts) → PM2 →
+# BullMQ funcional (health-check) → frontend → www → nginx → health HTTP.
+
+set -euo pipefail
+IFS=$'\n\t'
+
+LOCK_FILE="${DEPLOY_LOCK_FILE:-/tmp/omnia_deploy.lock}"
+
+log() { echo "[deploy] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }
+fail() { echo "[deploy][ERRO] $*" >&2; exit 1; }
+
+maybe_sudo() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  else
+    sudo -n "$@" || fail "sudo necessário para: $* (configure NOPASSWD ou rode como root)"
+  fi
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+WWW_ROOT="${DEPLOY_WWW_ROOT:-/var/www}"
+APP_NAME="${APP_DIRNAME:-app}"
+WWW_LIVE="${WWW_ROOT}/${APP_NAME}"
+WWW_NEW="${WWW_ROOT}/${APP_NAME}_new"
+WWW_OLD="${WWW_ROOT}/${APP_NAME}_old"
+
+FRONTEND_SWAP_DONE=0
+
+rollback_www_swap() {
+  if [[ "$FRONTEND_SWAP_DONE" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -d "$WWW_OLD" && ! -d "$WWW_LIVE" ]]; then
+    log "rollback: restaurando diretório ativo a partir de ${WWW_OLD}"
+    maybe_sudo mv "$WWW_OLD" "$WWW_LIVE" || true
+  elif [[ -d "$WWW_OLD" && -d "$WWW_LIVE" ]]; then
+    log "rollback: estado ambíguo (existem ${WWW_LIVE} e ${WWW_OLD}) — verifique manualmente"
+  fi
+}
+
+trap 'rollback_www_swap' ERR
+
+log "início | REPO_ROOT=${REPO_ROOT} | branch=${DEPLOY_BRANCH}"
+
+# --- 1) Git update + re-exec (sem lock: `exec` substitui o processo e não libera trap EXIT da 1ª passagem) ---
+if [[ "${DEPLOY_SKIP_REEXEC:-0}" != "1" ]] && [[ "${DEPLOY_REEXEC_DONE:-0}" != "1" ]]; then
+  command -v git >/dev/null 2>&1 || fail "git ausente"
+  export DEPLOY_REEXEC_DONE=1
+  log "git fetch --all (re-exec em seguida com script atualizado)"
+  git fetch --all --prune
+  log "git reset --hard origin/${DEPLOY_BRANCH}"
+  git reset --hard "origin/${DEPLOY_BRANCH}"
+  exec bash "$REPO_ROOT/scripts/deploy.sh"
+fi
+
+# --- 2) Lock anti-concorrência ---
+if [[ -f "$LOCK_FILE" ]]; then
+  log "Deploy já está em execução (lock: ${LOCK_FILE}). Abortando."
+  exit 1
+fi
+touch "$LOCK_FILE"
+trap 'rm -f "$LOCK_FILE"' EXIT
+
+# --- 3) Pré-requisitos ---
+for cmd in git node npm pm2; do
+  command -v "$cmd" >/dev/null 2>&1 || fail "comando ausente: $cmd"
+done
+
+[[ -f "$REPO_ROOT/ecosystem.config.js" ]] || fail "ecosystem.config.js não encontrado na raiz do repositório"
+[[ -f "$REPO_ROOT/backend/package.json" ]] || fail "backend/package.json não encontrado"
+[[ -f "$REPO_ROOT/backend/package-lock.json" ]] || fail "backend/package-lock.json ausente (obrigatório para npm ci)"
+[[ -f "$REPO_ROOT/backend/server.js" ]] || fail "backend/server.js não encontrado"
+[[ -f "$REPO_ROOT/frontend/client-app/package.json" ]] || fail "frontend/client-app/package.json não encontrado"
+[[ -f "$REPO_ROOT/frontend/client-app/package-lock.json" ]] || fail "frontend/client-app/package-lock.json ausente (obrigatório para npm ci)"
+
+GIT_SHA_AFTER="$(git rev-parse HEAD)"
+log "git HEAD: ${GIT_SHA_AFTER}"
+
+# --- 4) Backend: dependências (node_modules para validações Node) ---
+log "backend: npm ci"
+(
+  cd "$REPO_ROOT/backend"
+  npm ci
+)
+
+# --- 5) Carregar .env (REDIS_URL etc.) ---
+if [[ -f "$REPO_ROOT/backend/.env" ]]; then
+  log "carregando backend/.env"
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/backend/.env"
+  set +a
+else
+  log "aviso: backend/.env não encontrado — REDIS_URL deve estar no ambiente"
+fi
+
+export NODE_ENV="${NODE_ENV:-production}"
+
+[[ -n "${REDIS_URL:-}" ]] || fail "REDIS_URL não definido (backend/.env ou ambiente)"
+
+# --- 6) Validação Redis (fail fast) ---
+log "Verificando conexão com Redis..."
+export NODE_PATH="$REPO_ROOT/backend/node_modules${NODE_PATH:+:${NODE_PATH}}"
+node -e "
+const Redis = require('ioredis');
+const url = process.env.REDIS_URL;
+const redis = new Redis(url, {
+  maxRetriesPerRequest: null,
+  connectTimeout: 15000,
+  retryStrategy: () => null,
+});
+redis
+  .ping()
+  .then((p) => {
+    if (p !== 'PONG') {
+      console.error('Redis FAIL: resposta inesperada:', p);
+      return redis.quit().then(() => process.exit(1));
+    }
+    return redis.quit();
+  })
+  .then(() => {
+    console.log('Redis OK');
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error('Redis FAIL', err && err.message ? err.message : err);
+    process.exit(1);
+  });
+" || fail "validação Redis falhou"
+log "Redis OK"
+
+# --- 7) BullMQ: validação estrutural (Redis + metadados da fila, sem worker) ---
+log "BullMQ: validação estrutural (getJobCounts)..."
+node -e "
+const { Queue } = require('bullmq');
+const url = process.env.REDIS_URL;
+const queue = new Queue('evolution-api', {
+  connection: {
+    url,
+    maxRetriesPerRequest: null,
+    connectTimeout: 15000,
+  },
+});
+queue
+  .getJobCounts('waiting', 'active', 'delayed', 'completed', 'failed', 'paused')
+  .then(() => queue.close())
+  .then(() => {
+    console.log('Fila estrutural OK');
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error('Fila estrutural FAIL', err && err.message ? err.message : err);
+    return queue.close().catch(() => {}).then(() => process.exit(1));
+  });
+" || fail "validação estrutural BullMQ falhou"
+log "Fila estrutural OK"
+
+# --- 8) PM2 (ecosystem) ---
+log "pm2: diretório de logs"
+mkdir -p "$REPO_ROOT/logs"
+
+cd "$REPO_ROOT"
+if pm2 describe agente-backend >/dev/null 2>&1; then
+  log "pm2 reload ecosystem.config.js --update-env"
+  pm2 reload ecosystem.config.js --update-env
+else
+  log "pm2 start ecosystem.config.js (primeira subida)"
+  pm2 start ecosystem.config.js
+fi
+
+if ! pm2 describe worker-evolution >/dev/null 2>&1; then
+  log "pm2: garantindo worker-evolution (ex.: migração de deploy antigo)"
+  pm2 start ecosystem.config.js --only worker-evolution
+fi
+
+pm2 describe agente-backend >/dev/null 2>&1 || fail "PM2: agente-backend não está ativo"
+pm2 describe worker-evolution >/dev/null 2>&1 || fail "PM2: worker-evolution não está ativo"
+
+log "pm2 save"
+pm2 save
+
+log "aguardando worker estabilizar (3s) antes da validação funcional da fila"
+sleep 3
+
+# --- 9) BullMQ: validação funcional (enqueue + worker processa health-check) ---
+log "BullMQ: validação funcional (add health-check)..."
+node -e "
+const IORedis = require('ioredis');
+const { Queue } = require('bullmq');
+const url = process.env.REDIS_URL;
+const connection = new IORedis(url, {
+  maxRetriesPerRequest: null,
+  connectTimeout: 15000,
+  retryStrategy: () => null,
+});
+const queue = new Queue('evolution-api', { connection });
+queue
+  .add('health-check', { ts: Date.now() })
+  .then(() => queue.close())
+  .then(() => connection.quit())
+  .then(() => {
+    console.log('Fila funcional OK');
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error('Fila funcional FAIL', err && err.message ? err.message : err);
+    process.exit(1);
+  });
+" || fail "validação funcional BullMQ falhou"
+log "Fila funcional OK"
+
+# --- 10) Frontend ---
+log "frontend: npm ci"
+(
+  cd "$REPO_ROOT/frontend/client-app"
+  npm ci
+)
+
+log "frontend: npm run build"
+(
+  cd "$REPO_ROOT/frontend/client-app"
+  npm run build
+)
+
+DIST_DIR="$REPO_ROOT/frontend/client-app/dist"
+[[ -d "$DIST_DIR" ]] || fail "pasta dist não gerada: ${DIST_DIR}"
+[[ -f "$DIST_DIR/index.html" ]] || fail "build inválido: falta dist/index.html"
+
+# --- 11) Publicação www atômica ---
+log "www: preparando ${WWW_NEW}"
+maybe_sudo rm -rf "$WWW_NEW"
+maybe_sudo mkdir -p "$WWW_NEW"
+
+if command -v rsync >/dev/null 2>&1; then
+  log "www: rsync dist -> ${WWW_NEW}"
+  maybe_sudo rsync -a --delete "${DIST_DIR}/" "${WWW_NEW}/"
+else
+  log "www: cp -a dist -> ${WWW_NEW} (rsync não instalado)"
+  maybe_sudo cp -a "${DIST_DIR}/." "${WWW_NEW}/"
+fi
+
+[[ "$(maybe_sudo find "$WWW_NEW" -type f | wc -l)" -ge 1 ]] || fail "staging www vazio após cópia"
+
+log "www: swap atômico (${WWW_LIVE})"
+if [[ -d "$WWW_LIVE" ]]; then
+  maybe_sudo rm -rf "$WWW_OLD" 2>/dev/null || true
+  maybe_sudo mv "$WWW_LIVE" "$WWW_OLD"
+fi
+
+if maybe_sudo mv "$WWW_NEW" "$WWW_LIVE"; then
+  FRONTEND_SWAP_DONE=1
+  maybe_sudo rm -rf "$WWW_OLD"
+else
+  fail "falha ao promover ${WWW_NEW} -> ${WWW_LIVE}"
+fi
+
+trap - ERR
+
+# --- 12) Permissões www ---
+log "www: chown www-data:www-data ${WWW_LIVE}"
+maybe_sudo chown -R www-data:www-data "$WWW_LIVE"
+
+# --- 13) Nginx ---
+if command -v nginx >/dev/null 2>&1; then
+  log "nginx: teste de configuração"
+  maybe_sudo nginx -t
+  log "nginx: reload"
+  maybe_sudo systemctl reload nginx || maybe_sudo systemctl restart nginx
+else
+  log "nginx não encontrado no PATH — ignorando reload"
+fi
+
+# --- 14) Healthcheck backend + PM2 ---
+HEALTH_PORT="${DEPLOY_HEALTH_PORT:-${PORT:-3000}}"
+command -v curl >/dev/null 2>&1 || fail "curl ausente (necessário para healthcheck)"
+log "healthcheck: PM2 (agente-backend, worker-evolution)"
+pm2 describe agente-backend >/dev/null 2>&1 || fail "healthcheck: agente-backend não encontrado no PM2"
+pm2 describe worker-evolution >/dev/null 2>&1 || fail "healthcheck: worker-evolution não encontrado no PM2"
+log "healthcheck: GET http://127.0.0.1:${HEALTH_PORT}/api/health"
+curl -sfS --max-time 15 "http://127.0.0.1:${HEALTH_PORT}/api/health" >/dev/null || fail "healthcheck: /api/health falhou (porta ${HEALTH_PORT})"
+
+log "Deploy seguro confirmado | www=${WWW_LIVE} | PM2: agente-backend + worker-evolution"
+exit 0

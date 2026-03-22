@@ -203,7 +203,7 @@ initEvolutionQueueInfra()
       startEvolutionWorker();
     } else {
       console.warn(
-        '[server] EVOLUTION_WORKER_IN_PROCESS=false — inicie workers/evolution.standalone.js ou jobs ficarão pendentes.'
+        '[server] EVOLUTION_WORKER_IN_PROCESS=false — worker BullMQ deve estar no PM2 (worker-evolution).'
       );
     }
     server.listen(PORT, '0.0.0.0', () => {

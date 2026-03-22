@@ -59,6 +59,9 @@ export function startEvolutionWorker() {
           );
         case EVOLUTION_JOB.HEALTH:
           return wrap('HEALTH', null, () => http.fetchInstances());
+        /** Smoke-test da fila no deploy (scripts/deploy.sh); não chama Evolution. */
+        case 'health-check':
+          return { ok: true, source: 'deploy-check', ts: d.ts ?? null };
         default:
           throw new Error(`Job desconhecido: ${job.name}`);
       }
