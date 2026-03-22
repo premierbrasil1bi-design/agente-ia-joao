@@ -24,7 +24,7 @@ let queueEvents = null;
 export function getRedisUrl() {
   return (
     process.env.REDIS_URL ||
-    `redis://${process.env.REDIS_HOST || '127.0.0.1'}:${process.env.REDIS_PORT || '6379'}`
+    `redis://${process.env.REDIS_HOST || 'saas_redis'}:${process.env.REDIS_PORT || '6379'}`
   );
 }
 
