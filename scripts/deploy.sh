@@ -305,7 +305,7 @@ log "Fila funcional OK"
 log "frontend: npm ci"
 (
   cd "$REPO_ROOT/frontend/client-app"
-  npm ci
+  npm ci --include=dev
 )
 
 log "frontend: npm run build"
