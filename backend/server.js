@@ -48,28 +48,36 @@ const allowedOrigins = [
   'http://localhost:5173'
 ];
 
-// 1) CORS único — sem segundo app.use(cors) nem app.options(cors)
+// 1) CORS único
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(null, false);
+      if (!origin) {
+        return callback(null, true);
       }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(null, false);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true
   })
 );
 
-// 2) Complemento mínimo (sem repetir Allow-Origin / Allow-Methods / Allow-Headers)
+// 2) Garante Access-Control-Allow-Origin em toda resposta (curl, proxies, etc.)
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Credentials', 'true');
+  const origin = req.headers.origin;
 
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
+  if (allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  } else {
+    res.header('Access-Control-Allow-Origin', 'https://app.omnia1biai.com.br');
   }
+
+  res.header('Access-Control-Allow-Credentials', 'true');
 
   next();
 });
