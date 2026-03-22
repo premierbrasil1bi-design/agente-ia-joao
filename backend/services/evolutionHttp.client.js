@@ -1,0 +1,280 @@
+/**
+ * Cliente HTTP direto da Evolution API — usado apenas pelo worker BullMQ.
+ * Não importar em rotas ou serviços de domínio; use evolutionService.js.
+ */
+
+import axios from 'axios';
+import { evolutionLog } from '../utils/evolutionLog.js';
+
+const EXP_MAX = 5;
+const BASE_DELAY_MS = 1000;
+
+const getBaseUrl = () => {
+  const url = process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL;
+  if (!url) throw new Error('EVOLUTION_API_URL ou EVOLUTION_URL deve estar definida.');
+  return url.replace(/\/$/, '');
+};
+
+const getHeaders = () => ({
+  apikey: process.env.EVOLUTION_API_KEY || '',
+  'Content-Type': 'application/json',
+});
+
+const opts = () => ({ timeout: 25000, headers: getHeaders() });
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function responseText(err) {
+  const d = err.response?.data;
+  if (d == null) return err.message || '';
+  if (typeof d === 'string') return d;
+  try {
+    return JSON.stringify(d);
+  } catch {
+    return String(d);
+  }
+}
+
+function isTransientError(err) {
+  const st = err.response?.status;
+  const txt = (responseText(err) + (err.message || '')).toLowerCase();
+  if (!err.response && (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ECONNREFUSED'))
+    return true;
+  if (st === 502 || st === 503 || st === 504) return true;
+  if (st === 500 && /prisma|authentication failed|database|timeout|connect|query/i.test(txt)) return true;
+  return false;
+}
+
+/**
+ * Até 5 tentativas com backoff exponencial: 1s, 2s, 4s, 8s, 16s.
+ */
+export async function withExponentialRetry(fn, operation, instanceName) {
+  let lastErr;
+  for (let i = 0; i < EXP_MAX; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const canRetry = i < EXP_MAX - 1 && isTransientError(err);
+      if (canRetry) {
+        const delay = BASE_DELAY_MS * 2 ** i;
+        evolutionLog(`${operation}_RETRY`, instanceName, { attempt: i + 1, delayMs: delay });
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+export async function createInstance(instanceName) {
+  const baseUrl = getBaseUrl();
+  const webhookUrl =
+    process.env.EVOLUTION_WEBHOOK_URL || process.env.PUBLIC_EVOLUTION_WEBHOOK_URL || null;
+
+  const payload = {
+    instanceName,
+    integration: 'WHATSAPP-BAILEYS',
+  };
+
+  if (webhookUrl) {
+    payload.webhook = {
+      url: webhookUrl,
+      events: ['messages.upsert'],
+    };
+  }
+
+  evolutionLog('CREATE_HTTP', instanceName);
+  return withExponentialRetry(
+    () =>
+      axios.post(`${baseUrl}/instance/create`, payload, opts()).then((r) => {
+        evolutionLog('CREATE_HTTP_OK', instanceName);
+        return r.data;
+      }),
+    'CREATE',
+    instanceName
+  );
+}
+
+export async function disconnectInstance(instanceName) {
+  const baseUrl = getBaseUrl();
+  const enc = encodeURIComponent(instanceName);
+  const path = `/instance/logout/${enc}`;
+  const url = `${baseUrl}${path}`;
+  evolutionLog('DISCONNECT_HTTP', instanceName);
+
+  return withExponentialRetry(
+    async () => {
+      try {
+        const r = await axios.get(url, opts());
+        evolutionLog('DISCONNECT_HTTP_OK', instanceName);
+        return r.data;
+      } catch (err) {
+        if (err.response?.status === 405) {
+          const r = await axios.delete(url, opts());
+          evolutionLog('DISCONNECT_HTTP_OK', instanceName);
+          return r.data;
+        }
+        throw err;
+      }
+    },
+    'DISCONNECT',
+    instanceName
+  );
+}
+
+async function disconnectBestEffort(instanceName) {
+  try {
+    await disconnectInstance(instanceName);
+  } catch {
+    /* intencional */
+  }
+}
+
+async function performConnect(instanceName) {
+  const baseUrl = getBaseUrl();
+  const path = `/instance/connect/${encodeURIComponent(instanceName)}`;
+  const url = `${baseUrl}${path}`;
+  evolutionLog('CONNECT_PAIR_HTTP', instanceName);
+
+  return withExponentialRetry(
+    async () => {
+      try {
+        const r = await axios.post(url, {}, opts());
+        evolutionLog('CONNECT_PAIR_HTTP_OK', instanceName);
+        return r.data;
+      } catch (err) {
+        const st = err.response?.status;
+        if (st === 405 || st === 404) {
+          const r = await axios.get(url, opts());
+          evolutionLog('CONNECT_PAIR_HTTP_OK', instanceName);
+          return r.data;
+        }
+        throw err;
+      }
+    },
+    'CONNECT',
+    instanceName
+  );
+}
+
+export async function connectInstance(instanceName) {
+  evolutionLog('CONNECT_RESET', instanceName);
+  await disconnectBestEffort(instanceName);
+  evolutionLog('CONNECT_AFTER_RESET', instanceName);
+  return performConnect(instanceName);
+}
+
+async function fetchQrOnce(instanceName) {
+  const baseUrl = getBaseUrl();
+  const path = `/instance/qrcode/${encodeURIComponent(instanceName)}`;
+  evolutionLog('QRCODE_HTTP', instanceName);
+  const { data } = await axios.get(`${baseUrl}${path}`, opts());
+  evolutionLog('QRCODE_HTTP_OK', instanceName);
+  return data;
+}
+
+export async function getQRCode(instanceName) {
+  return withExponentialRetry(
+    async () => {
+      try {
+        return await fetchQrOnce(instanceName);
+      } catch (err) {
+        const st = err.response?.status;
+        if (st === 404 || st === 500) {
+          evolutionLog('QRCODE_RECOVER', instanceName, { httpStatus: st });
+          await connectInstance(instanceName);
+          return await fetchQrOnce(instanceName);
+        }
+        throw err;
+      }
+    },
+    'QRCODE',
+    instanceName
+  );
+}
+
+export async function getConnectionStatus(instanceName) {
+  const baseUrl = getBaseUrl();
+  const path = `/instance/connectionState/${encodeURIComponent(instanceName)}`;
+  evolutionLog('STATUS_HTTP', instanceName);
+  return withExponentialRetry(
+    () =>
+      axios.get(`${baseUrl}${path}`, opts()).then((r) => {
+        evolutionLog('STATUS_HTTP_OK', instanceName);
+        return r.data;
+      }),
+    'STATUS',
+    instanceName
+  );
+}
+
+export async function deleteInstance(instanceName) {
+  const baseUrl = getBaseUrl();
+  const enc = encodeURIComponent(instanceName);
+  const path = `/instance/delete/${enc}`;
+  evolutionLog('DELETE_HTTP', instanceName);
+  return withExponentialRetry(
+    () =>
+      axios.delete(`${baseUrl}${path}`, opts()).then((r) => {
+        evolutionLog('DELETE_HTTP_OK', instanceName);
+        return r.data;
+      }),
+    'DELETE',
+    instanceName
+  );
+}
+
+export async function fetchInstances() {
+  const baseUrl = getBaseUrl();
+  evolutionLog('FETCH_INSTANCES_HTTP', null);
+  return withExponentialRetry(
+    () =>
+      axios.get(`${baseUrl}/instance/fetchInstances`, opts()).then((r) => {
+        evolutionLog('FETCH_INSTANCES_HTTP_OK', null);
+        return r.data;
+      }),
+    'HEALTH',
+    'fetchInstances'
+  );
+}
+
+export async function sendText(instance, number, text) {
+  const EVOLUTION_URL = process.env.EVOLUTION_URL || process.env.EVOLUTION_API_URL;
+  const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY;
+
+  if (!EVOLUTION_URL || !EVOLUTION_API_KEY) {
+    throw new Error('EVOLUTION_URL and EVOLUTION_API_KEY must be set');
+  }
+
+  let instanceEncoded = instance;
+  if (/%[0-9A-Fa-f]{2}/.test(instance)) {
+    try {
+      instanceEncoded = decodeURIComponent(instance);
+    } catch {
+      /* keep */
+    }
+  }
+  instanceEncoded = encodeURIComponent(instanceEncoded);
+
+  const url = `${EVOLUTION_URL.replace(/\/$/, '')}/message/sendText/${instanceEncoded}`;
+  evolutionLog('SEND_TEXT_HTTP', instance, { number });
+
+  await withExponentialRetry(
+    () =>
+      axios.post(
+        url,
+        { number, text },
+        {
+          headers: { apikey: EVOLUTION_API_KEY },
+          timeout: 20000,
+        }
+      ),
+    'SEND_TEXT',
+    instance
+  );
+  evolutionLog('SEND_TEXT_HTTP_OK', instance, { number });
+}

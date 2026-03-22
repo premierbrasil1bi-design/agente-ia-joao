@@ -32,6 +32,9 @@ import webhooksRoutes from './routes/webhooks.routes.js';
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { startChannelMonitor } from './services/channelMonitor.service.js';
 import { agentAuth } from './middleware/agentAuth.js';
+import { initEvolutionQueueInfra } from './queues/evolution.queue.js';
+import { startEvolutionWorker } from './workers/evolution.worker.js';
+import * as evolutionService from './services/evolutionService.js';
 
 const app = express();
 const PORT = config.port || 3000;
@@ -194,7 +197,21 @@ io.on('connection', (socket) => {
   console.log('[socket.io] Cliente conectado', socket.id);
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-  startChannelMonitor();
-});
+initEvolutionQueueInfra()
+  .then(() => {
+    if (process.env.EVOLUTION_WORKER_IN_PROCESS !== 'false') {
+      startEvolutionWorker();
+    } else {
+      console.warn(
+        '[server] EVOLUTION_WORKER_IN_PROCESS=false — inicie workers/evolution.standalone.js ou jobs ficarão pendentes.'
+      );
+    }
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`Servidor rodando na porta ${PORT}`);
+      startChannelMonitor();
+    });
+  })
+  .catch((err) => {
+    console.error('[server] Falha ao iniciar fila Redis/Evolution:', err?.message || err);
+    process.exit(1);
+  });

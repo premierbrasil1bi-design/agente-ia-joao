@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "agente-ia-omnicanal-backend": "file:.."
+  }
+}

@@ -12,6 +12,7 @@ import { pool } from '../db/pool.js';
 import * as channelConnectionService from '../services/channelConnection.service.js';
 import * as evolutionService from '../services/evolutionService.js';
 import { normalizeEvolutionState } from '../utils/evolutionState.js';
+import { invalidateTenantChannels } from '../utils/channelCache.js';
 
 const router = Router();
 router.use(agentAuth);
@@ -258,6 +259,7 @@ router.delete('/:id', requireActiveTenant, async (req, res) => {
     }
 
     await channelRepo.deleteById(req.params.id, tenantId);
+    invalidateTenantChannels(tenantId);
     res.status(204).send();
   } catch (err) {
     console.error('[channels] DELETE /:id:', err.message);

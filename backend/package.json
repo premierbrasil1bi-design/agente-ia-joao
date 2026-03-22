@@ -6,12 +6,15 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "worker:evolution": "node workers/evolution.standalone.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "bullmq": "^5.34.10",
+    "ioredis": "^5.4.2",
     "axios": "^1.13.5",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
@@ -21,6 +24,7 @@
     "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2",
     "openai": "^4.104.0",
-    "pg": "^8.11.3"
+    "pg": "^8.11.3",
+    "socket.io": "^4.8.1"
   }
 }
