@@ -72,9 +72,10 @@ export async function createInstance(instanceName) {
 
   return withRetry(
     () =>
-      axios
-        .post(`${baseUrl}/instance/create`, payload, opts())
-        .then((r) => r.data),
+      axios.post(`${baseUrl}/instance/create`, payload, opts()).then((r) => {
+        console.log('Evolution response:', r.data);
+        return r.data;
+      }),
     'createInstance',
     instanceName
   );

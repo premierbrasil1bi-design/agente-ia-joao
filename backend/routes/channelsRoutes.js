@@ -134,12 +134,41 @@ router.post('/', requireActiveTenant, async (req, res) => {
         },
       });
     } catch (e) {
-      // Não deixar canal "fake" sem Evolution: remove o registro e retorna erro.
       await channelRepo.deleteById(channel.id, tenantId);
-      console.error('[channels] POST / (evolution error):', e.message);
+      const axStatus = e.response?.status;
+      const axData = e.response?.data;
+      const detail =
+        (typeof axData === 'string' && axData) ||
+        axData?.message ||
+        axData?.error ||
+        e.message;
+      console.error('[channels] POST / (evolution error):', detail, axStatus ? `HTTP ${axStatus}` : '');
+
+      if (axStatus === 400) {
+        return res.status(400).json({
+          success: false,
+          error: detail || 'Requisição rejeitada pela Evolution API.',
+        });
+      }
+      if (axStatus === 401 || axStatus === 403) {
+        return res.status(502).json({
+          success: false,
+          error: 'Falha de autenticação com a Evolution API.',
+          details: detail,
+        });
+      }
+      if (axStatus != null && axStatus >= 500) {
+        return res.status(502).json({
+          success: false,
+          error: 'Evolution API retornou erro no servidor.',
+          details: detail,
+        });
+      }
+
       return res.status(502).json({
         success: false,
         error: 'Falha ao criar instância na Evolution. Canal não foi criado.',
+        details: detail,
       });
     }
   } catch (err) {

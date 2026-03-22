@@ -67,6 +67,21 @@ async function instanceNameForChannel(channel) {
   }
 }
 
+/** Corpo típico Evolution v2: { instance, hash, ... }; alguns proxies envolvem em `data`. */
+function normalizeEvolutionCreateBody(body) {
+  if (body == null || typeof body !== 'object') return body;
+  if (body.instance != null) return body;
+  if (body.data != null && typeof body.data === 'object' && body.data.instance != null) {
+    return body.data;
+  }
+  return body;
+}
+
+function evolutionCreateHasInstance(body) {
+  const b = normalizeEvolutionCreateBody(body);
+  return b != null && b.instance != null;
+}
+
 /**
  * Cria (ou garante) a instância WhatsApp na Evolution para o canal,
  * sem conectar. Atualiza o canal com provider/external_id/status = created.
@@ -82,11 +97,28 @@ export async function createWhatsAppInstance(channel) {
   try {
     createResponse = await evolutionService.createInstance(instanceName);
   } catch (err) {
-    if (err.response?.status !== 409) throw err;
+    if (err.response?.status === 409) {
+      const raw = err.response?.data;
+      console.log('Evolution response (409):', raw);
+      createResponse = normalizeEvolutionCreateBody(raw);
+      if (!evolutionCreateHasInstance(createResponse)) {
+        createResponse = { instance: { instanceName, instanceId: instanceName } };
+      }
+    } else {
+      throw err;
+    }
   }
 
+  createResponse = normalizeEvolutionCreateBody(createResponse);
+  if (createResponse == null || createResponse.instance == null) {
+    throw new Error('Evolution: resposta sem instance ao criar instância.');
+  }
+
+  const inst = createResponse.instance;
   const externalId =
-    createResponse?.instance?.instanceId ||
+    inst?.instanceId ||
+    inst?.id ||
+    inst?.instanceName ||
     createResponse?.instanceId ||
     instanceName;
 
