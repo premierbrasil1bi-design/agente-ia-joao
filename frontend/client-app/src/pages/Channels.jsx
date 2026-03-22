@@ -278,6 +278,7 @@ export function Channels() {
   const [qrCode, setQrCode] = useState(null);
   const [loadingCreate, setLoadingCreate] = useState(false);
   const [loadingQr, setLoadingQr] = useState(null);
+  const [loadingConnectId, setLoadingConnectId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
@@ -341,27 +342,59 @@ export function Channels() {
     }
   }
 
+  function applyQrFromResponse(channelId, data) {
+    const src = data?.qr || data?.qrcode;
+    if (!src || (typeof src === 'string' && !src.trim())) {
+      throw new Error(data?.error || 'QR não disponível ainda');
+    }
+    const raw = typeof src === 'string' ? src : src?.base64 ?? src?.code ?? '';
+    if (!raw || (typeof raw === 'string' && !raw.trim())) {
+      throw new Error(data?.error || 'QR não disponível ainda');
+    }
+    const qr = raw.startsWith('data:image') || /^https?:\/\//i.test(raw)
+      ? raw
+      : `data:image/png;base64,${raw.replace(/^data:image\/\w+;base64,/, '')}`;
+    sessionStorage.setItem(`qr_${channelId}`, qr);
+    setQrCode(qr);
+  }
+
+  /** Só busca QR (instância já criada / já em pairing). */
   async function getQr(channelId) {
     setLoadingQr(channelId);
     try {
       const data = await agentApi.request(`/api/channels/${channelId}/qrcode`, { method: 'GET' });
-
-      if (!data?.qrcode) {
-        throw new Error('QR não disponível');
-      }
-
-      const raw = typeof data.qrcode === 'string' ? data.qrcode : data.qrcode?.base64 ?? data.qrcode?.code ?? '';
-      const qr = raw.startsWith('data:image') ? raw : `data:image/png;base64,${raw}`;
-
-      sessionStorage.setItem(`qr_${channelId}`, qr);
-      setQrCode(qr);
-
+      applyQrFromResponse(channelId, data);
       startPolling(channelId);
     } catch (err) {
       console.error(err);
-      toast.error('Erro na conexão com WhatsApp');
+      toast.error(
+        err.message?.includes('503') || err.message?.includes('offline')
+          ? 'Evolution API indisponível. Verifique se o serviço está no ar.'
+          : err.message || 'Erro ao obter QR Code.',
+      );
     } finally {
       setLoadingQr(null);
+    }
+  }
+
+  /** Conecta na Evolution (create + connect) e em seguida obtém o QR Code. */
+  async function connectThenQr(channelId) {
+    setLoadingConnectId(channelId);
+    try {
+      await agentApi.request(`/api/channels/${channelId}/connect`, { method: 'POST' });
+      const data = await agentApi.request(`/api/channels/${channelId}/qrcode`, { method: 'GET' });
+      applyQrFromResponse(channelId, data);
+      startPolling(channelId);
+      toast.success('Escaneie o QR Code com o WhatsApp.');
+    } catch (err) {
+      console.error(err);
+      toast.error(
+        err.message?.includes('503') || err.message?.includes('indisponível')
+          ? 'Evolution API indisponível. Confira o Docker e EVOLUTION_API_URL no backend.'
+          : err.message || 'Erro ao conectar WhatsApp.',
+      );
+    } finally {
+      setLoadingConnectId(null);
     }
   }
 
@@ -371,19 +404,31 @@ export function Channels() {
     pollingRefs.current[channelId] = setInterval(async () => {
       try {
         const data = await agentApi.request(`/api/channels/${channelId}/status`, { method: 'GET' });
+        const nextStatus = data.normalizedStatus ?? data.status;
+        const updated = data.channel;
 
         setChannels((prev) =>
-          prev.map((ch) => (ch.id === channelId ? { ...ch, status: data.status } : ch)),
+          prev.map((ch) => {
+            if (ch.id !== channelId) return ch;
+            if (updated && typeof updated === 'object') {
+              return { ...ch, ...updated, status: nextStatus ?? ch.status };
+            }
+            return { ...ch, status: nextStatus ?? ch.status };
+          }),
         );
 
-        if (['connected', 'disconnected'].includes(data.status)) {
+        if (['connected', 'disconnected', 'open', 'close'].includes(String(nextStatus || '').toLowerCase())) {
           clearInterval(pollingRefs.current[channelId]);
           delete pollingRefs.current[channelId];
+          if (String(nextStatus).toLowerCase() === 'connected' || String(nextStatus).toLowerCase() === 'open') {
+            toast.success('WhatsApp conectado.');
+            setQrCode(null);
+          }
         }
-      } catch {
-        // silencioso
+      } catch (e) {
+        console.warn('[channels] polling status:', e.message);
       }
-    }, 5000);
+    }, 3000);
   }, []);
 
   useAutoReconnect(channels, startPolling);
@@ -454,51 +499,40 @@ export function Channels() {
   const renderTypeActions = (ch) => {
     const t = (ch.type || '').toLowerCase();
     if (t === 'whatsapp') {
+      const st = (ch.status || '').toLowerCase();
+      const showConnect =
+        ['created', 'connecting', 'disconnected', 'close', 'unknown', ''].includes(st) || !ch.status;
+      const busy = loadingConnectId === ch.id || loadingQr === ch.id || loadingCreate;
+
       return (
         <>
-          {ch.status === 'created' && (
+          {showConnect && st !== 'connected' && st !== 'open' && (
             <button
               type="button"
               style={{
                 ...styles.actionButton,
                 ...styles.actionButtonPrimary,
               }}
-              disabled={loadingQr === ch.id || loadingCreate}
+              disabled={busy}
               onClick={() => {
                 restoreQr(ch.id);
-                getQr(ch.id);
+                connectThenQr(ch.id);
               }}
             >
-              {loadingQr === ch.id ? 'Gerando...' : 'Conectar WhatsApp'}
+              {loadingConnectId === ch.id ? 'Conectando...' : 'Conectar'}
             </button>
           )}
-          {ch.status === 'connecting' && (
-            <button
-              type="button"
-              style={{
-                ...styles.actionButton,
-                ...styles.actionButtonPrimary,
-              }}
-              disabled={loadingQr === ch.id || loadingCreate}
-              onClick={() => {
-                restoreQr(ch.id);
-                getQr(ch.id);
-              }}
-            >
-              {loadingQr === ch.id ? 'Atualizando...' : 'Reexibir QR Code'}
-            </button>
-          )}
-          {!ch.status && (
+          {(st === 'connecting' || st === 'created') && (
             <button
               type="button"
               style={styles.actionButton}
-              disabled={loadingQr === ch.id || loadingCreate}
+              disabled={busy}
               onClick={() => {
                 restoreQr(ch.id);
                 getQr(ch.id);
               }}
             >
-              {loadingQr === ch.id ? 'Gerando...' : 'QR Code'}
+              {loadingQr === ch.id ? 'Atualizando...' : 'Ver QR Code'}
             </button>
           )}
         </>
@@ -668,11 +702,12 @@ export function Channels() {
 
   const handleToggleActive = async (ch) => {
     const id = ch.id;
-    const nextActive = !ch.active && ch.active !== false;
+    const currentlyOn = ch.active !== false;
+    const nextActive = !currentlyOn;
     try {
       setLoadingToggleId(id);
-      const updated = await agentApi.request(`/api/channels/${id}/status`, {
-        method: 'PATCH',
+      const updated = await agentApi.request(`/api/channels/${id}`, {
+        method: 'PUT',
         body: { active: nextActive },
       });
       setChannels((prev) =>

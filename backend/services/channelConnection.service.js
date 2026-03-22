@@ -144,19 +144,37 @@ export async function createWhatsAppInstance(channel) {
 }
 
 /**
- * Inicia conexão WhatsApp: garante instância criada e chama Evolution para conectar (gera QR).
- * Se a instância já existir (409), createWhatsAppInstance trata de forma idempotente.
- * Usado por POST /channels/:id/connect e GET /channels/:id/qrcode (via serviço).
+ * POST connect: sem external_id → createInstance (persiste); sempre → connectInstance (QR).
  */
 export async function connectWhatsAppChannel(channel) {
-  const { instanceName, createResponse } = await createWhatsAppInstance(channel);
+  const tenantId = channel.tenant_id;
+  let instanceName =
+    getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
+  if (!instanceName) {
+    instanceName = await instanceNameForChannel(channel);
+  }
 
+  const ext = channel.external_id != null ? String(channel.external_id).trim() : '';
+  let createResponse = null;
+  let baseChannel = channel;
+
+  if (!ext) {
+    const created = await createWhatsAppInstance({ ...channel, tenant_id: tenantId });
+    instanceName = created.instanceName;
+    createResponse = created.createResponse;
+    baseChannel = created.channel;
+  } else {
+    instanceName = ext;
+  }
+
+  console.log('[evolution] CONNECT START', instanceName);
   const connectResponse = await evolutionService.connectInstance(instanceName);
+  console.log('[evolution] CONNECT DONE', instanceName);
 
   const connectingDbStatus = mapEvolutionStatus('connecting');
-  console.log('[channels] status normalized:', 'connecting', '→', connectingDbStatus);
+  console.log('[channels] connectWhatsAppChannel → connecting DB:', connectingDbStatus);
 
-  const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
+  const updatedChannel = await channelRepo.updateConnection(baseChannel.id, tenantId, {
     external_id: instanceName,
     provider: 'evolution',
     status: connectingDbStatus,
@@ -176,11 +194,20 @@ export async function connectWhatsAppChannel(channel) {
  * Usa external_id ou slug do campo instance (permite QR sem ter clicado Connect antes).
  */
 export async function getChannelQrCode(channel) {
-  const instanceName = getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
+  let instanceName =
+    getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
+  if (!instanceName) {
+    instanceName = await instanceNameForChannel(channel);
+  }
   if (!instanceName) {
     throw new Error('Configure o campo Instance do canal (ex.: Dra Ana Paula).');
   }
-  return evolutionService.getQrCode(instanceName);
+
+  // Sempre coloca a instância em fluxo de pairing antes de buscar o QR
+  console.log('[evolution] PRE-QR connectInstance', instanceName);
+  await evolutionService.connectInstance(instanceName);
+
+  return await evolutionService.getQRCode(instanceName);
 }
 
 /**
@@ -192,24 +219,81 @@ export async function getChannelStatus(channel) {
     return { normalizedStatus: 'unknown', channel };
   }
 
-  const state = await evolutionService.getInstanceStatus(instanceName);
-  const rawState = state?.state ?? state?.instance?.state ?? null;
-  const normalizedStatus = normalizeEvolutionState(rawState);
-  const dbStatus = mapEvolutionStatus(rawState);
-  console.log('[channels] status normalized:', rawState, '→', dbStatus);
+  try {
+    let state = await evolutionService.getStatus(instanceName);
+    let rawState = state?.state ?? state?.instance?.state ?? null;
+    let rawLower = rawState != null ? String(rawState).trim().toLowerCase() : '';
 
-  const previousStatus = channel.status ?? null;
-  if (dbStatus !== previousStatus) {
-    logger.statusChange(instanceName, channel.id, previousStatus, normalizedStatus);
+    if (rawLower === 'close') {
+      console.log('[channelConnection] state=close → connectInstance', instanceName);
+      await evolutionService.connectInstance(instanceName);
+      state = await evolutionService.getStatus(instanceName);
+      rawState = state?.state ?? state?.instance?.state ?? null;
+      rawLower = rawState != null ? String(rawState).trim().toLowerCase() : '';
+    }
+
+    const normalizedStatus = normalizeEvolutionState(rawState);
+    const dbStatus = mapEvolutionStatus(rawState);
+    console.log('[channels] status normalized:', rawState, '→', dbStatus);
+
+    const previousStatus = channel.status ?? null;
+    if (dbStatus !== previousStatus) {
+      logger.statusChange(instanceName, channel.id, previousStatus, normalizedStatus);
+    }
+
+    const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
+      status: dbStatus,
+      evolution_status: toEvolutionStatusColumn(rawState),
+      ...(dbStatus === 'active' ? { connected_at: new Date(), last_error: null } : {}),
+    });
+
+    return { normalizedStatus, state, channel: updatedChannel ?? channel };
+  } catch (err) {
+    const code = err.code;
+    const axStatus = err.response?.status;
+    console.error('[channelConnection] getChannelStatus Evolution:', err.message, code || axStatus || '');
+
+    if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ETIMEDOUT') {
+      return {
+        normalizedStatus: 'unknown',
+        state: null,
+        channel,
+        evolutionOffline: true,
+        error: 'Evolution API indisponível. Verifique se o serviço está em execução.',
+      };
+    }
+
+    if (axStatus === 404) {
+      console.log('[channelConnection] getStatus 404 → createInstance + connectInstance', instanceName);
+      try {
+        await createWhatsAppInstance({ ...channel, tenant_id: channel.tenant_id });
+        const afterCreate = await channelRepo.findById(channel.id, channel.tenant_id);
+        const name =
+          afterCreate?.external_id?.trim() ||
+          getEvolutionInstanceName(afterCreate) ||
+          instanceName;
+        await evolutionService.connectInstance(name);
+
+        const connectingDb = mapEvolutionStatus('connecting');
+        const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
+          status: connectingDb,
+          evolution_status: 'connecting',
+        });
+
+        return {
+          normalizedStatus: 'recreated',
+          state: null,
+          channel: updatedChannel ?? afterCreate ?? channel,
+          recreated: true,
+        };
+      } catch (recErr) {
+        console.error('[channelConnection] auto-recovery status falhou:', recErr.message);
+        throw recErr;
+      }
+    }
+
+    throw err;
   }
-
-  const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
-    status: dbStatus,
-    evolution_status: toEvolutionStatusColumn(rawState),
-    ...(dbStatus === 'active' ? { connected_at: new Date(), last_error: null } : {}),
-  });
-
-  return { normalizedStatus, state, channel: updatedChannel ?? channel };
 }
 
 /**

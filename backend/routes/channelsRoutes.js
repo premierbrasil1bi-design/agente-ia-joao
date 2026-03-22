@@ -10,9 +10,23 @@ import { requireActiveTenant } from '../middleware/requireActiveTenant.js';
 import { sendBadRequest, sendNotFound } from '../utils/errorResponses.js';
 import { pool } from '../db/pool.js';
 import * as channelConnectionService from '../services/channelConnection.service.js';
+import * as evolutionService from '../services/evolutionService.js';
+import { normalizeEvolutionState } from '../utils/evolutionState.js';
 
 const router = Router();
 router.use(agentAuth);
+
+/** Status de UI para WhatsApp (Evolution): alinha evolution_status + status interno active/inactive. */
+function evolutionUiStatus(ch) {
+  const ev = ch.evolution_status;
+  if (ev != null && String(ev).trim() !== '') {
+    return normalizeEvolutionState(ev);
+  }
+  const internal = String(ch.status || '').toLowerCase();
+  if (internal === 'active') return 'connected';
+  if (ch.external_id) return 'created';
+  return 'disconnected';
+}
 
 /**
  * Garante que cada canal tenha o campo "type" no JSON (contrato do frontend).
@@ -27,6 +41,9 @@ function normalizeChannelForApi(ch) {
       : (ch.type != null && String(ch.type).trim() !== '')
         ? String(ch.type).trim().toLowerCase()
         : 'api';
+  if (isEvolution) {
+    return { ...ch, type, status: evolutionUiStatus(ch) };
+  }
   return { ...ch, type };
 }
 
@@ -221,6 +238,23 @@ router.delete('/:id', requireActiveTenant, async (req, res) => {
     const existing = await channelRepo.findById(req.params.id, tenantId);
     if (!existing) {
       return sendNotFound(res, 'Canal não encontrado.');
+    }
+
+    const ext = existing.external_id != null ? String(existing.external_id).trim() : '';
+    if (String(existing.provider || '').toLowerCase() === 'evolution' && ext) {
+      try {
+        await evolutionService.deleteInstance(ext);
+        console.log('[channels] DELETE: deleteInstance Evolution OK:', ext);
+      } catch (e) {
+        console.warn('[channels] DELETE: deleteInstance falhou, tentando logout + delete:', e.message);
+        try {
+          await evolutionService.disconnectInstance(ext);
+          await evolutionService.deleteInstance(ext);
+          console.log('[channels] DELETE: Evolution removida após logout:', ext);
+        } catch (e2) {
+          console.warn('[channels] DELETE: Evolution (seguindo exclusão no banco):', e2.message);
+        }
+      }
     }
 
     await channelRepo.deleteById(req.params.id, tenantId);

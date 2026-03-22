@@ -1,7 +1,6 @@
 /**
- * Evolution API 2.2.x – serviço centralizado para WhatsApp (WHATSAPP-BAILEYS).
- * Headers: apikey (EVOLUTION_API_KEY) e Content-Type em todas as chamadas.
- * Retry: máx 3 tentativas, delay 500ms.
+ * Evolution API 2.x – WhatsApp (WHATSAPP-BAILEYS).
+ * Header apikey: EVOLUTION_API_KEY (ex.: EVOLUTION_2026_JOAO_998877 via .env).
  */
 
 import axios from 'axios';
@@ -21,15 +20,12 @@ const getHeaders = () => ({
   'Content-Type': 'application/json',
 });
 
-const opts = () => ({ timeout: 15000, headers: getHeaders() });
+const opts = () => ({ timeout: 20000, headers: getHeaders() });
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Executa request com retry (máx 3 tentativas, delay 500ms).
- */
 async function withRetry(fn, operation, instanceName) {
   let lastErr;
   for (let attempt = 1; attempt <= RETRY_MAX; attempt++) {
@@ -45,14 +41,10 @@ async function withRetry(fn, operation, instanceName) {
 }
 
 /**
- * Cria uma instância na Evolution API 2.2.x.
  * POST /instance/create
- * Body: { instanceName, integration: "WHATSAPP-BAILEYS", webhook? }
- * O webhook, quando configurado via EVOLUTION_WEBHOOK_URL, recebe eventos messages.upsert.
  */
 export async function createInstance(instanceName) {
   const baseUrl = getBaseUrl();
-
   const webhookUrl =
     process.env.EVOLUTION_WEBHOOK_URL ||
     process.env.PUBLIC_EVOLUTION_WEBHOOK_URL ||
@@ -70,10 +62,11 @@ export async function createInstance(instanceName) {
     };
   }
 
+  console.log('[evolution] createInstance', instanceName);
   return withRetry(
     () =>
       axios.post(`${baseUrl}/instance/create`, payload, opts()).then((r) => {
-        console.log('Evolution response:', r.data);
+        console.log('[evolution] createInstance OK', instanceName);
         return r.data;
       }),
     'createInstance',
@@ -82,75 +75,152 @@ export async function createInstance(instanceName) {
 }
 
 /**
- * Inicia conexão e gera QR Code.
- * GET /instance/connect/:instance
+ * GET /instance/logout/:instance — se 405, tenta DELETE (versões antigas).
  */
-export async function connectInstance(instanceName) {
+export async function disconnectInstance(instanceName) {
   const baseUrl = getBaseUrl();
+  const enc = encodeURIComponent(instanceName);
+  const path = `/instance/logout/${enc}`;
+  const url = `${baseUrl}${path}`;
+  console.log('[evolution] disconnectInstance', instanceName);
+
   return withRetry(
-    () =>
-      axios.get(`${baseUrl}/instance/connect/${encodeURIComponent(instanceName)}`, opts()).then((r) => r.data),
+    async () => {
+      try {
+        const r = await axios.get(url, opts());
+        console.log('[evolution] disconnectInstance OK (GET)', instanceName);
+        return r.data;
+      } catch (err) {
+        if (err.response?.status === 405) {
+          const r = await axios.delete(url, opts());
+          console.log('[evolution] disconnectInstance OK (DELETE fallback)', instanceName);
+          return r.data;
+        }
+        throw err;
+      }
+    },
+    'disconnectInstance',
+    instanceName
+  );
+}
+
+/** Sempre ignorar falha — limpa sessão “travada” antes do connect. */
+async function disconnectInstanceBestEffort(instanceName) {
+  try {
+    await disconnectInstance(instanceName);
+  } catch {
+    /* ignorado propositalmente */
+  }
+}
+
+/**
+ * Apenas pairing (POST connect ou GET fallback).
+ */
+async function performConnect(instanceName) {
+  const baseUrl = getBaseUrl();
+  const path = `/instance/connect/${encodeURIComponent(instanceName)}`;
+  const url = `${baseUrl}${path}`;
+  console.log('[evolution] connectInstance (pairing request)', instanceName);
+
+  return withRetry(
+    async () => {
+      try {
+        const r = await axios.post(url, {}, opts());
+        console.log('[evolution] connectInstance OK (POST)', instanceName);
+        return r.data;
+      } catch (err) {
+        const st = err.response?.status;
+        if (st === 405 || st === 404) {
+          const r = await axios.get(url, opts());
+          console.log('[evolution] connectInstance OK (GET fallback)', instanceName);
+          return r.data;
+        }
+        throw err;
+      }
+    },
     'connectInstance',
     instanceName
   );
 }
 
 /**
- * Alias para connectInstance (compatibilidade).
+ * Fluxo obrigatório: disconnect (ignora erro) → connect — evita instância presa em "close".
  */
-export async function getQrCode(instanceName) {
-  return connectInstance(instanceName);
+export async function connectInstance(instanceName) {
+  console.log('[evolution] FORCE RESET INSTANCE', instanceName);
+  await disconnectInstanceBestEffort(instanceName);
+  console.log('[evolution] CONNECT AFTER RESET', instanceName);
+  return performConnect(instanceName);
+}
+
+async function fetchQrOnce(instanceName) {
+  const baseUrl = getBaseUrl();
+  const path = `/instance/qrcode/${encodeURIComponent(instanceName)}`;
+  console.log('[evolution] getQRCode', instanceName);
+  const { data } = await axios.get(`${baseUrl}${path}`, opts());
+  console.log('[evolution] getQRCode OK', instanceName);
+  return data;
 }
 
 /**
- * Estado da conexão da instância.
+ * GET /instance/qrcode/:instance
+ * Em 404/500: logout + connect + nova tentativa (instância em pairing / connecting).
+ */
+export async function getQRCode(instanceName) {
+  try {
+    return await fetchQrOnce(instanceName);
+  } catch (err) {
+    const st = err.response?.status;
+    if (st === 404 || st === 500) {
+      console.log('[evolution] getQRCode failed HTTP', st, '→ disconnect + connect + retry', instanceName);
+      await connectInstance(instanceName);
+      return await fetchQrOnce(instanceName);
+    }
+    throw err;
+  }
+}
+
+export async function getQrCode(instanceName) {
+  return getQRCode(instanceName);
+}
+
+/**
  * GET /instance/connectionState/:instance
  */
 export async function getConnectionStatus(instanceName) {
   const baseUrl = getBaseUrl();
+  const path = `/instance/connectionState/${encodeURIComponent(instanceName)}`;
+  console.log('[evolution] getStatus', instanceName);
   return withRetry(
     () =>
-      axios.get(
-        `${baseUrl}/instance/connectionState/${encodeURIComponent(instanceName)}`,
-        opts()
-      ).then((r) => r.data),
-    'getConnectionStatus',
+      axios.get(`${baseUrl}${path}`, opts()).then((r) => {
+        console.log('[evolution] getStatus OK', instanceName);
+        return r.data;
+      }),
+    'getStatus',
     instanceName
   );
 }
 
-/**
- * Alias para getConnectionStatus (compatibilidade).
- */
+export const getStatus = getConnectionStatus;
+
 export async function getInstanceStatus(instanceName) {
   return getConnectionStatus(instanceName);
 }
 
 /**
- * Desconecta a sessão (logout) – Evolution 2.2.x.
- * DELETE /instance/logout/:instance
+ * DELETE /instance/delete/:instance
  */
-export async function disconnectInstance(instanceName) {
+export async function deleteInstance(instanceName) {
   const baseUrl = getBaseUrl();
-  return withRetry(
-    () =>
-      axios.delete(
-        `${baseUrl}/instance/logout/${encodeURIComponent(instanceName)}`,
-        opts()
-      ).then((r) => r.data),
-    'disconnectInstance',
-    instanceName
-  );
+  const enc = encodeURIComponent(instanceName);
+  const path = `/instance/delete/${enc}`;
+  console.log('[evolution] deleteInstance', instanceName);
+  const { data } = await axios.delete(`${baseUrl}${path}`, opts());
+  console.log('[evolution] deleteInstance OK', instanceName);
+  return data;
 }
 
-/**
- * Send a text message via Evolution API.
- *
- * @param {string} instance - Evolution instance name (will be encoded for URL).
- * @param {string} number - Destination number (e.g. 5588999999999 or 5588999999999@s.whatsapp.net).
- * @param {string} text - Message text to send.
- * @returns {Promise<void>} Resolves when sent; throws on failure.
- */
 export async function sendText(instance, number, text) {
   const EVOLUTION_URL = process.env.EVOLUTION_URL;
   const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY;

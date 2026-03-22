@@ -122,6 +122,7 @@ agentRouter.use('/auth', agentAuthRoutes);
 agentRouter.use(agentAuth);
 agentRouter.use(requireTenant);
 agentRouter.use('/dashboard', dashboardRoutes);
+agentRouter.use('/channels', channelConnectionRoutes);
 agentRouter.use('/channels', channelsRoutes);
 agentRouter.use('/agents', agentsRoutes);
 agentRouter.use(contextRoutes);

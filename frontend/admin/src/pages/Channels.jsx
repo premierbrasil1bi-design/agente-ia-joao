@@ -283,8 +283,16 @@ export function Channels() {
     const refreshQr = async () => {
       try {
         const data = await agentApi.request(`/api/channels/${qrChannelId}/qrcode`, { method: 'GET' });
-        const qr = typeof data.qrcode === 'string' ? data.qrcode : (data.qrcode?.base64 ?? data.qrcode?.code ?? '');
-        if (qr) setQrCode(qr.startsWith('data:') ? qr : `data:image/png;base64,${qr}`);
+        const src = data.qr || data.qrcode;
+        const qr =
+          typeof src === 'string' ? src : (src?.base64 ?? src?.code ?? '');
+        if (qr) {
+          const url =
+            qr.startsWith('data:') || /^https?:\/\//i.test(qr)
+              ? qr
+              : `data:image/png;base64,${qr}`;
+          setQrCode(url);
+        }
       } catch {
         // ignora erro de refresh do QR
       }
@@ -429,9 +437,14 @@ export function Channels() {
       const data = await agentApi.request(`/api/channels/${channelId}/qrcode`, {
         method: 'GET',
       });
-      const qr = typeof data.qrcode === 'string' ? data.qrcode : (data.qrcode?.base64 ?? data.qrcode?.code ?? '');
+      const src = data.qr || data.qrcode;
+      const qr = typeof src === 'string' ? src : (src?.base64 ?? src?.code ?? '');
       if (qr) {
-        setQrCode(qr.startsWith('data:') ? qr : `data:image/png;base64,${qr}`);
+        const url =
+          qr.startsWith('data:') || /^https?:\/\//i.test(qr)
+            ? qr
+            : `data:image/png;base64,${qr}`;
+        setQrCode(url);
         setQrChannelId(channelId);
         setShowQrModal(true);
       } else {

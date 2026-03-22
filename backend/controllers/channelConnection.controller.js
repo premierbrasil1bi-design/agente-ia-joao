@@ -6,6 +6,7 @@
 import * as channelRepo from '../repositories/channel.repository.js';
 import * as channelConnectionService from '../services/channelConnection.service.js';
 import { sendNotFound } from '../utils/errorResponses.js';
+import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 
 async function getChannelFromReq(req, res) {
   const tenantId = req.tenantId || req.user?.tenantId;
@@ -19,6 +20,11 @@ async function getChannelFromReq(req, res) {
     return null;
   }
   return channel;
+}
+
+function isEvolutionOffline(err) {
+  const c = err.code;
+  return c === 'ECONNREFUSED' || c === 'ENOTFOUND' || c === 'ETIMEDOUT';
 }
 
 export async function connectChannel(req, res) {
@@ -39,7 +45,13 @@ export async function connectChannel(req, res) {
       channel: result.channel,
     });
   } catch (err) {
-    console.error('[channelConnection] connectChannel:', err.message);
+    console.error('[channelConnection] connectChannel:', err.message, err.response?.status || err.code || '');
+    if (isEvolutionOffline(err)) {
+      return res.status(503).json({
+        success: false,
+        error: 'Evolution API está offline ou inacessível. Verifique o container/serviço e a variável EVOLUTION_API_URL.',
+      });
+    }
     res.status(500).json({
       success: false,
       error: err.message || 'Erro ao conectar canal.',
@@ -54,13 +66,29 @@ export async function getQrCode(req, res) {
 
     console.log('[GET_QRCODE] channelId:', channel.id);
     const qr = await channelConnectionService.getChannelQrCode(channel);
-    const qrcode = typeof qr === 'string' ? qr : (qr?.base64 ?? qr?.qrcode ?? qr?.code ?? '');
+    const raw = extractQrPayload(qr);
+    const dataUrl = toQrDataUrl(raw);
+
+    if (!dataUrl) {
+      return res.status(404).json({
+        success: false,
+        error: 'QR não disponível ainda',
+      });
+    }
+
     res.status(200).json({
       success: true,
-      qrcode,
+      qr: dataUrl,
+      qrcode: dataUrl,
     });
   } catch (err) {
-    console.error('[channelConnection] getQrCode:', err.message);
+    console.error('[channelConnection] getQrCode:', err.message, err.response?.status || err.code || '');
+    if (isEvolutionOffline(err)) {
+      return res.status(503).json({
+        success: false,
+        error: 'Evolution API está offline ou inacessível.',
+      });
+    }
     res.status(500).json({
       success: false,
       error: err.message || 'Erro ao obter QR Code.',
@@ -74,15 +102,36 @@ export async function getStatus(req, res) {
     if (!channel) return;
 
     console.log('[CHECK_STATUS] channelId:', channel.id);
-    const { normalizedStatus, channel: updatedChannel } = await channelConnectionService.getChannelStatus(channel);
+    const result = await channelConnectionService.getChannelStatus(channel);
 
+    if (result.evolutionOffline) {
+      return res.status(503).json({
+        success: false,
+        error: result.error || 'Evolution API indisponível.',
+        status: 'unknown',
+        normalizedStatus: 'unknown',
+        channel: result.channel,
+      });
+    }
+
+    const rawState = result.state?.state ?? result.state?.instance?.state ?? null;
     res.status(200).json({
       success: true,
-      status: normalizedStatus,
-      channel: updatedChannel,
+      status: result.normalizedStatus,
+      normalizedStatus: result.normalizedStatus,
+      evolutionState: rawState,
+      channel: result.channel,
+      recreated: Boolean(result.recreated),
     });
   } catch (err) {
-    console.error('[channelConnection] getStatus:', err.message);
+    console.error('[channelConnection] getStatus:', err.message, err.response?.status || err.code || '');
+    if (isEvolutionOffline(err)) {
+      return res.status(503).json({
+        success: false,
+        error: 'Evolution API está offline ou inacessível.',
+        status: 'unknown',
+      });
+    }
     res.status(500).json({
       success: false,
       error: err.message || 'Erro ao obter status.',
