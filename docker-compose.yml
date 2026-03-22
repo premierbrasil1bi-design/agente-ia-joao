@@ -1,7 +1,7 @@
 # Evolution + PostgreSQL + Redis (produção SaaS)
 #
 # Postgres: POSTGRES_USER/PASSWORD/DB alinhados às URIs da Evolution.
-# Evolution: imagem oficial evolutionapi/evolution-api — Prisma usa DATABASE_CONNECTION_URI.
+# Evolution: atendai/evolution-api — Prisma usa DATABASE_CONNECTION_URI (sem DATABASE_URL duplicado).
 #
 # Reset dev (apaga dados): docker compose down -v && docker compose pull && docker compose up -d
 
@@ -42,7 +42,7 @@ services:
       - "6379:6379"
 
   saas_evolution:
-    image: evolutionapi/evolution-api:latest
+    image: atendai/evolution-api:latest
     container_name: saas_evolution
     restart: always
     depends_on:
@@ -52,21 +52,12 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/sh", "/evolution-entrypoint.sh"]
     environment:
-      PGHOST: saas_postgres
-      PGPORT: "5432"
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: postgresql
       DATABASE_CONNECTION_URI: postgresql://postgres:postgres@saas_postgres:5432/evolution
-      CACHE_REDIS_URI: redis://saas_redis:6379/1
-      AUTHENTICATION_TYPE: apikey
-      AUTHENTICATION_API_KEY: EVOLUTION_2026_JOAO_998877
-      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
-      SERVER_TYPE: http
-      SERVER_PORT: "8080"
       CACHE_REDIS_ENABLED: "true"
-      CACHE_REDIS_PREFIX_KEY: evolution_saas
-      CACHE_LOCAL_ENABLED: "false"
-      POSTGRES_STABILIZE_SEC: "10"
+      CACHE_REDIS_URI: redis://saas_redis:6379/1
+      AUTHENTICATION_API_KEY: default_key
     ports:
       - "8080:8080"
     volumes:
