@@ -31,6 +31,40 @@ maybe_sudo() {
   fi
 }
 
+# Carrega .env sem `source`: cada linha vira export KEY=valor (valor pode conter espaços).
+# Ignora comentários e linhas sem '='; rejeita chaves inválidas. Evita & ? $ ` quebrarem o shell.
+load_env_file_safely() {
+  local envfile="$1"
+  local line key val
+  [[ -f "$envfile" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line//$'\r'/}"
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "${line//[:space:]}" ]] && continue
+    if [[ "$line" != *"="* ]]; then
+      log "aviso: .env ignorado (linha sem '=' — texto solto?): ${line:0:100}"
+      continue
+    fi
+    key="${line%%=*}"
+    val="${line#*=}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+    if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+      val="${BASH_REMATCH[1]}"
+      val="${val//\\\"/\"}"
+    elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    fi
+    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      log "aviso: .env chave inválida ignorada: ${key:0:60}"
+      continue
+    fi
+    export "${key}=${val}"
+  done <"$envfile"
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/../package.json" ]]; then
   REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -108,13 +142,10 @@ log "backend: npm ci"
   npm ci
 )
 
-# --- 5) Carregar .env (REDIS_URL etc.) ---
+# --- 5) Carregar .env (REDIS_URL etc.) — parser seguro (não usar source: URLs com & e textos com espaços) ---
 if [[ -f "$REPO_ROOT/backend/.env" ]]; then
-  log "carregando backend/.env"
-  set -a
-  # shellcheck disable=SC1091
-  source "$REPO_ROOT/backend/.env"
-  set +a
+  log "carregando backend/.env (parser seguro)"
+  load_env_file_safely "$REPO_ROOT/backend/.env"
 else
   log "aviso: backend/.env não encontrado — REDIS_URL deve estar no ambiente"
 fi
