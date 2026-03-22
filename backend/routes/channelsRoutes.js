@@ -13,8 +13,97 @@ import * as channelConnectionService from '../services/channelConnection.service
 import * as evolutionService from '../services/evolutionService.js';
 import { normalizeEvolutionState } from '../utils/evolutionState.js';
 import { invalidateTenantChannels } from '../utils/channelCache.js';
+import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 
 const router = Router();
+
+/** Valor para `connection.qrCode`: base64 cru da Evolution ou data URL para `<img src>`. */
+function qrCodeForConnection(qrRaw) {
+  if (qrRaw == null) return null;
+  if (typeof qrRaw === 'object' && typeof qrRaw.base64 === 'string' && qrRaw.base64.trim()) {
+    return qrRaw.base64.trim();
+  }
+  return toQrDataUrl(extractQrPayload(qrRaw));
+}
+
+/** Estado bruto da Evolution no objeto retornado por getChannelStatus. */
+function rawEvolutionStateFromStatusResult(statusResult) {
+  const st = statusResult?.state;
+  if (st == null) return null;
+  return st.state ?? st.instance?.state ?? null;
+}
+
+/**
+ * 'fetch_qr' = pode chamar getChannelQrCode; 'wait' = só aguardar; 'already_connected' = pareado, sem QR.
+ */
+function classifyStatusForQr(statusResult) {
+  if (statusResult?.evolutionOffline || statusResult?.instanceNotFound) {
+    return 'wait';
+  }
+
+  const ns = String(statusResult?.normalizedStatus || '').toLowerCase();
+  const raw = rawEvolutionStateFromStatusResult(statusResult);
+  const rawLower = raw != null ? String(raw).trim().toLowerCase() : '';
+
+  if (ns === 'connected' || rawLower === 'open') {
+    return 'already_connected';
+  }
+
+  const ready =
+    ns === 'connecting' ||
+    ns === 'qr' ||
+    rawLower === 'connecting' ||
+    rawLower === 'qr';
+
+  if (ready) return 'fetch_qr';
+  return 'wait';
+}
+
+/**
+ * Repete status → (se pronto) QR até obter payload exibível (máx. 10 tentativas, 1s entre cada).
+ * Evita getChannelQrCode enquanto a Evolution não estiver em connecting/qr.
+ */
+async function waitForQrCode(channel, maxAttempts = 10, delayMs = 1000) {
+  const id = channel.id;
+  const tenantId = channel.tenant_id;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    const ch = await channelRepo.findById(id, tenantId);
+    if (!ch) return { qrCode: null, alreadyConnected: false };
+
+    try {
+      const statusResult = await channelConnectionService.getChannelStatus(ch);
+      const channelForQr = statusResult.channel ?? ch;
+
+      const phase = classifyStatusForQr(statusResult);
+      if (phase === 'already_connected') {
+        return { qrCode: null, alreadyConnected: true };
+      }
+
+      if (phase === 'wait') {
+        if (i < maxAttempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        continue;
+      }
+
+      const qrRaw = await channelConnectionService.getChannelQrCode(channelForQr);
+      const code = qrCodeForConnection(qrRaw);
+      if (code) {
+        return { qrCode: code, alreadyConnected: false };
+      }
+    } catch {
+      /* próxima tentativa após delay */
+    }
+
+    if (i < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  return { qrCode: null, alreadyConnected: false };
+}
+
 router.use(agentAuth);
 
 /** Status de UI para WhatsApp (Evolution): alinha evolution_status + status interno active/inactive. */
@@ -154,8 +243,8 @@ router.get('/:id', requireActiveTenant, async (req, res) => {
 
 /**
  * POST /api/channels
- * Cria apenas o registro do canal no banco. Instância na Evolution não é criada aqui
- * (evita duplicatas e desconexões); use fluxo explícito / conexão com external_id já definido.
+ * Cria o canal no banco e, em seguida, fluxo Evolution: instância (se não existir) → connect → QR.
+ * Não remove o canal se a Evolution falhar na criação da instância.
  *
  * Body recomendado (Client App):
  *   { name, agentId }
@@ -192,10 +281,67 @@ router.post('/', requireActiveTenant, async (req, res) => {
       active: active ?? true,
     });
 
-    return res.status(201).json({
-      success: true,
-      channel,
-    });
+    const channelWithTenant = { ...channel, tenant_id: tenantId };
+
+    try {
+      const createResult = await channelConnectionService.createWhatsAppInstance(channelWithTenant);
+      let latest = createResult.channel ?? (await channelRepo.findById(channel.id, tenantId));
+
+      let warning = null;
+      try {
+        const connectResult = await channelConnectionService.connectWhatsAppChannel(latest);
+        latest = connectResult.channel ?? latest;
+      } catch (connErr) {
+        console.error('[channels] POST / connect:', connErr.message);
+        warning = connErr.message || 'Falha ao iniciar conexão com a Evolution.';
+        latest = await channelRepo.findById(channel.id, tenantId);
+      }
+
+      let qrCode = null;
+      try {
+        const qrOutcome = await waitForQrCode(latest);
+        qrCode = qrOutcome.qrCode;
+        if (!qrCode && !qrOutcome.alreadyConnected) {
+          warning =
+            warning ||
+            'QR Code ainda não disponível após várias tentativas. Atualize a tela ou use o fluxo de conexão.';
+        }
+      } catch (qrErr) {
+        console.error('[channels] POST / qrcode:', qrErr.message);
+        warning = warning || qrErr.message || 'Falha ao obter QR Code.';
+      }
+
+      invalidateTenantChannels(tenantId);
+
+      const fullChannel = normalizeChannelForApi(await channelRepo.findById(channel.id, tenantId));
+
+      return res.status(200).json({
+        success: true,
+        channel: fullChannel,
+        connection: {
+          status: 'connecting',
+          qrCode,
+        },
+        ...(warning ? { warning } : {}),
+      });
+    } catch (evoErr) {
+      console.error('[channels] POST / evolution:', evoErr.message);
+      const fresh = await channelRepo.findById(channel.id, tenantId);
+      const axData = evoErr.response?.data;
+      const detail =
+        (typeof axData === 'string' && axData) ||
+        axData?.message ||
+        axData?.error ||
+        evoErr.message ||
+        'Falha ao criar instância na Evolution.';
+
+      return res.status(200).json({
+        success: false,
+        error: true,
+        message: detail,
+        channel: normalizeChannelForApi(fresh),
+      });
+    }
   } catch (err) {
     console.error('[channels] POST /:', err.message);
     res.status(500).json({ error: 'Erro ao criar canal.' });
