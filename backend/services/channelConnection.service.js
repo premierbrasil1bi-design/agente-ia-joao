@@ -8,6 +8,7 @@ import * as evolutionService from './evolutionService.js';
 import * as channelRepo from '../repositories/channel.repository.js';
 import { pool } from '../db/pool.js';
 import { normalizeEvolutionState } from '../utils/evolutionState.js';
+import { mapEvolutionStatus, toEvolutionStatusColumn } from '../utils/mapEvolutionStatus.js';
 import { logger } from '../utils/logger.js';
 
 /** Sanitiza string para nome de instância (apenas alfanumérico e _). */
@@ -122,10 +123,16 @@ export async function createWhatsAppInstance(channel) {
     createResponse?.instanceId ||
     instanceName;
 
+  const rawEvolutionStatus = inst.status || inst.state || null;
+  const normalizedStatus = mapEvolutionStatus(rawEvolutionStatus);
+  console.log('[channels] evolution status raw:', rawEvolutionStatus);
+  console.log('[channels] status normalized:', rawEvolutionStatus, '→', normalizedStatus);
+
   const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
     external_id: externalId,
     provider: 'evolution',
-    status: 'created',
+    status: normalizedStatus,
+    evolution_status: toEvolutionStatusColumn(rawEvolutionStatus),
   });
 
   logger.instanceCreated(instanceName, channel.id);
@@ -146,10 +153,14 @@ export async function connectWhatsAppChannel(channel) {
 
   const connectResponse = await evolutionService.connectInstance(instanceName);
 
+  const connectingDbStatus = mapEvolutionStatus('connecting');
+  console.log('[channels] status normalized:', 'connecting', '→', connectingDbStatus);
+
   const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
     external_id: instanceName,
     provider: 'evolution',
-    status: 'connecting',
+    status: connectingDbStatus,
+    evolution_status: 'connecting',
   });
 
   return {
@@ -184,18 +195,21 @@ export async function getChannelStatus(channel) {
   const state = await evolutionService.getInstanceStatus(instanceName);
   const rawState = state?.state ?? state?.instance?.state ?? null;
   const normalizedStatus = normalizeEvolutionState(rawState);
+  const dbStatus = mapEvolutionStatus(rawState);
+  console.log('[channels] status normalized:', rawState, '→', dbStatus);
 
   const previousStatus = channel.status ?? null;
-  if (normalizedStatus !== previousStatus) {
+  if (dbStatus !== previousStatus) {
     logger.statusChange(instanceName, channel.id, previousStatus, normalizedStatus);
   }
 
-  await channelRepo.updateConnection(channel.id, channel.tenant_id, {
-    status: normalizedStatus,
-    ...(normalizedStatus === 'connected' ? { connected_at: new Date(), last_error: null } : {}),
+  const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
+    status: dbStatus,
+    evolution_status: toEvolutionStatusColumn(rawState),
+    ...(dbStatus === 'active' ? { connected_at: new Date(), last_error: null } : {}),
   });
 
-  return { normalizedStatus, state, channel };
+  return { normalizedStatus, state, channel: updatedChannel ?? channel };
 }
 
 /**
@@ -204,7 +218,10 @@ export async function getChannelStatus(channel) {
 export async function disconnectChannel(channel) {
   const instanceName = getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
   if (!instanceName) {
-    await channelRepo.updateConnection(channel.id, channel.tenant_id, { status: 'disconnected' });
+    await channelRepo.updateConnection(channel.id, channel.tenant_id, {
+      status: mapEvolutionStatus('disconnected'),
+      evolution_status: 'disconnected',
+    });
     return;
   }
 
@@ -215,7 +232,8 @@ export async function disconnectChannel(channel) {
   }
 
   await channelRepo.updateConnection(channel.id, channel.tenant_id, {
-    status: 'disconnected',
+    status: mapEvolutionStatus('disconnected'),
+    evolution_status: 'disconnected',
     external_id: null,
     connected_at: null,
   });

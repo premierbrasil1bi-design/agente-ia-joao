@@ -7,6 +7,7 @@ import { pool } from '../db/pool.js';
 import * as evolutionService from './evolutionService.js';
 import * as channelRepo from '../repositories/channel.repository.js';
 import { normalizeEvolutionState } from '../utils/evolutionState.js';
+import { mapEvolutionStatus, toEvolutionStatusColumn } from '../utils/mapEvolutionStatus.js';
 import { logger } from '../utils/logger.js';
 
 const INTERVAL_MS = 60 * 1000;
@@ -46,22 +47,30 @@ export async function runMonitorCycle() {
       const state = await evolutionService.getConnectionStatus(instanceName);
       const rawState = state?.state ?? state?.instance?.state ?? null;
       const normalizedStatus = normalizeEvolutionState(rawState);
+      const dbStatus = mapEvolutionStatus(rawState);
+      console.log('[channels] status normalized:', rawState, '→', dbStatus);
 
       const previousStatus = ch.status ?? null;
-      if (normalizedStatus !== previousStatus) {
+      if (dbStatus !== previousStatus) {
         logger.statusChange(instanceName, ch.id, previousStatus, normalizedStatus);
       }
 
       await channelRepo.updateConnection(ch.id, ch.tenant_id, {
-        status: normalizedStatus,
-        ...(normalizedStatus === 'connected' ? { connected_at: new Date(), last_error: null } : {}),
+        status: dbStatus,
+        evolution_status: toEvolutionStatusColumn(rawState),
+        ...(dbStatus === 'active' ? { connected_at: new Date(), last_error: null } : {}),
       });
 
       if (normalizedStatus === 'disconnected' && ch.active === true) {
         try {
           await evolutionService.connectInstance(instanceName);
           logger.reconnect(instanceName, ch.id);
-          await channelRepo.updateConnection(ch.id, ch.tenant_id, { status: 'connecting' });
+          const connectingDb = mapEvolutionStatus('connecting');
+          console.log('[channels] status normalized:', 'connecting', '→', connectingDb);
+          await channelRepo.updateConnection(ch.id, ch.tenant_id, {
+            status: connectingDb,
+            evolution_status: 'connecting',
+          });
         } catch (reconnectErr) {
           logger.apiError('reconnect', instanceName, reconnectErr.message);
         }
