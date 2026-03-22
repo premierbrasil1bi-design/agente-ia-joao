@@ -3,6 +3,7 @@
  * Ex.: node workers/evolution.standalone.js
  */
 
+import '../bootstrap/dns-ipv4first.js';
 import 'dotenv/config';
 import { initEvolutionQueueInfra } from '../queues/evolution.queue.js';
 import { startEvolutionWorker } from './evolution.worker.js';
