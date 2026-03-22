@@ -22,10 +22,11 @@ let evolutionQueue = null;
 let queueEvents = null;
 
 export function getRedisUrl() {
-  return (
-    process.env.REDIS_URL ||
-    `redis://${process.env.REDIS_HOST || 'saas_redis'}:${process.env.REDIS_PORT || '6379'}`
-  );
+  const raw = process.env.REDIS_URL;
+  if (raw != null && String(raw).trim() !== '') {
+    return String(raw).trim();
+  }
+  return 'redis://saas_redis:6379';
 }
 
 export function getRedisConnection() {

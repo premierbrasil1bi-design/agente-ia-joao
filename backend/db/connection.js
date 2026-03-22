@@ -6,12 +6,13 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
-});
+const connectionString = process.env.DATABASE_URL;
+const poolOpts = { connectionString };
+if (!/sslmode=disable/i.test(connectionString)) {
+  poolOpts.ssl = { rejectUnauthorized: false };
+}
+
+const pool = new Pool(poolOpts);
 
 export async function query(text, params) {
   return pool.query(text, params);

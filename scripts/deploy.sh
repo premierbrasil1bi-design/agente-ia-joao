@@ -162,8 +162,8 @@ _redis_effective="${REDIS_URL:-}"
 _redis_effective="${_redis_effective#"${_redis_effective%%[![:space:]]*}"}"
 _redis_effective="${_redis_effective%"${_redis_effective##*[![:space:]]}"}"
 if [[ -z "$_redis_effective" ]]; then
-  export REDIS_URL="redis://127.0.0.1:6379"
-  warn "fallback aplicado: REDIS_URL ausente ou só espaços → redis://127.0.0.1:6379"
+  export REDIS_URL="redis://saas_redis:6379"
+  warn "fallback aplicado: REDIS_URL ausente ou só espaços → redis://saas_redis:6379"
 else
   export REDIS_URL="${_redis_effective}"
   log "REDIS_URL definido (ambiente ou .env)"

@@ -1,7 +1,8 @@
-# Evolution + PostgreSQL + Redis (produção SaaS)
+# Evolution + PostgreSQL + Redis + API Node (produção SaaS)
 #
 # Postgres: POSTGRES_USER/PASSWORD/DB alinhados às URIs da Evolution.
 # Evolution: atendai/evolution-api — Prisma usa DATABASE_CONNECTION_URI (sem DATABASE_URL duplicado).
+# saas_backend: API + worker BullMQ na rede Docker (REDIS_URL → saas_redis; Postgres interno sem TLS).
 #
 # Reset dev (apaga dados): docker compose down -v && docker compose pull && docker compose up -d
 
@@ -63,6 +64,27 @@ services:
     volumes:
       - evolution_store:/evolution/store
       - ./docker/evolution/entrypoint.sh:/evolution-entrypoint.sh:ro
+
+  saas_backend:
+    build: ./backend
+    container_name: saas_backend
+    restart: always
+    depends_on:
+      saas_postgres:
+        condition: service_healthy
+      saas_redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://saas_redis:6379
+      DATABASE_URL: postgresql://postgres:postgres@saas_postgres:5432/evolution?sslmode=disable
+      EVOLUTION_API_URL: http://saas_evolution:8080
+      EVOLUTION_API_KEY: default_key
+    ports:
+      - "3000:3000"
+    env_file:
+      - path: ./backend/.env
+        required: false
 
 volumes:
   postgres_data:
