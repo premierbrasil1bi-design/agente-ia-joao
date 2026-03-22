@@ -1,21 +1,10 @@
-# Evolution + PostgreSQL (produção SaaS)
+# Evolution + PostgreSQL + Redis (produção SaaS)
 #
-# Prisma P1000 / Evolution não sobe:
-# - Bug conhecido: .env interno da imagem sobrescreve env do Compose (EvolutionAPI#1474).
-# - Volume Postgres antigo sem role `evolution` → "password authentication failed".
+# Postgres: POSTGRES_USER/PASSWORD/DB alinhados às URIs da Evolution.
+# Evolution: Prisma v2 usa DATABASE_CONNECTION_URI; DATABASE_URL espelha a mesma string.
+# DATABASE_AUTO_MIGRATE / DATABASE_SYNC: pedido pela imagem para aplicar schema na subida.
 #
-# O que este compose + entrypoint fazem:
-# - Healthcheck Postgres + depends_on: service_healthy
-# - Usuário dedicado evolution / evolution123 (init em docker/postgres-init — só na 1ª criação do volume)
-# - Entrypoint: remove .env legados, grava .env canônico espelhando o Compose, testa auth com `pg`
-#
-# DATABASE_CONNECTION_URI é a variável que o Prisma da Evolution v2 lê (não use só DATABASE_URL).
-#
-# MIGRAÇÃO de volume antigo (postgres:postgres):
-#   docker compose exec saas_postgres psql -U postgres -d evolution -c "CREATE ROLE evolution LOGIN PASSWORD 'evolution123';"
-#   ... GRANTs (ver 01-evolution-app-user.sql) OU docker compose down -v (apaga dados) e subir de novo.
-#
-# Reset completo (dev): docker compose down -v && docker compose pull && docker compose up -d
+# Reset dev (apaga dados): docker compose down -v && docker compose pull && docker compose up -d
 
 version: '3.9'
 
@@ -40,7 +29,7 @@ services:
     ports:
       - "5432:5432"
 
-  redis:
+  saas_redis:
     image: redis:7
     container_name: saas_redis
     restart: always
@@ -54,37 +43,36 @@ services:
       - "6379:6379"
 
   saas_evolution:
-    # Pin opcional: substitua :latest por digest/tag estável após um pull que funcione.
     image: atendai/evolution-api:latest
     container_name: saas_evolution
     restart: always
     depends_on:
       saas_postgres:
         condition: service_healthy
-      redis:
+      saas_redis:
         condition: service_healthy
     entrypoint: ["/bin/sh", "/evolution-entrypoint.sh"]
     environment:
       PGHOST: saas_postgres
       PGPORT: "5432"
-      # Obrigatório para persistência Prisma (doc v2)
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: postgresql
       DATABASE_CONNECTION_CLIENT_NAME: evolution_saas
-      # Host = nome do serviço Docker (saas_postgres). Mesma URI no Compose e no .env gerado no boot.
-      DATABASE_CONNECTION_URI: postgresql://evolution:evolution123@saas_postgres:5432/evolution?schema=public&connection_limit=5&pool_timeout=20&connect_timeout=30
+      # Mesma connection string em ambas (Prisma Evolution v2 lê DATABASE_CONNECTION_URI)
+      DATABASE_URL: postgresql://postgres:postgres@saas_postgres:5432/evolution
+      DATABASE_CONNECTION_URI: postgresql://postgres:postgres@saas_postgres:5432/evolution
+      DATABASE_AUTO_MIGRATE: "true"
+      DATABASE_SYNC: "true"
       AUTHENTICATION_TYPE: apikey
       AUTHENTICATION_API_KEY: EVOLUTION_2026_JOAO_998877
       AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
       SERVER_TYPE: http
       SERVER_PORT: "8080"
       CACHE_REDIS_ENABLED: "true"
-      CACHE_REDIS_URI: redis://redis:6379/1
+      CACHE_REDIS_URI: redis://saas_redis:6379/1
       CACHE_REDIS_PREFIX_KEY: evolution_saas
       CACHE_LOCAL_ENABLED: "false"
-      # Segundos de espera após TCP antes do teste pg + Node (ajuste se o DB for lento)
       POSTGRES_STABILIZE_SEC: "10"
-      # true = remove node_modules/.prisma no boot (útil se trocou DATABASE_* e o client ficou cacheado)
       CLEAR_PRISMA_CLIENT_CACHE: "false"
     ports:
       - "8080:8080"
