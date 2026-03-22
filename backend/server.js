@@ -75,6 +75,14 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Backend is running' });
 });
 
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'backend',
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.get('/api/health/db', async (req, res) => {
   try {
     const connected = await isDbConnected();
