@@ -5,7 +5,7 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node scripts/ensure-db-schema.js && node server.js",
     "dev": "node server.js",
     "worker:evolution": "node workers/evolution.standalone.js"
   },

@@ -12,6 +12,32 @@ DROP TABLE IF EXISTS channels CASCADE;
 DROP TABLE IF EXISTS agents CASCADE;
 DROP TABLE IF EXISTS clients CASCADE;
 DROP TABLE IF EXISTS admins CASCADE;
+DROP TABLE IF EXISTS tenants CASCADE;
+
+-- 0. Tenants (raiz multi-tenant)
+CREATE TABLE IF NOT EXISTS tenants (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL DEFAULT 'Default',
+  slug VARCHAR(100) UNIQUE,
+  plan VARCHAR(50),
+  max_agents INTEGER,
+  max_messages INTEGER,
+  active BOOLEAN NOT NULL DEFAULT true,
+  agents_used_current_period INTEGER NOT NULL DEFAULT 0,
+  messages_used_current_period INTEGER NOT NULL DEFAULT 0,
+  billing_cycle_start TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO tenants (id, name, slug, active)
+VALUES (
+  '00000000-0000-0000-0000-000000000001'::uuid,
+  'Default',
+  'default',
+  true
+)
+ON CONFLICT (id) DO NOTHING;
 
 -- 1. Admins (no FK)
 CREATE TABLE IF NOT EXISTS admins (
@@ -116,6 +142,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Triggers updated_at (idempotent)
+DROP TRIGGER IF EXISTS tenants_updated_at ON tenants;
+CREATE TRIGGER tenants_updated_at BEFORE UPDATE ON tenants FOR EACH ROW EXECUTE PROCEDURE set_updated_at();
 DROP TRIGGER IF EXISTS admins_updated_at ON admins;
 CREATE TRIGGER admins_updated_at BEFORE UPDATE ON admins FOR EACH ROW EXECUTE PROCEDURE set_updated_at();
 DROP TRIGGER IF EXISTS clients_updated_at ON clients;
@@ -128,7 +156,8 @@ DROP TRIGGER IF EXISTS prompts_updated_at ON prompts;
 CREATE TRIGGER prompts_updated_at BEFORE UPDATE ON prompts FOR EACH ROW EXECUTE PROCEDURE set_updated_at();
 
 -- Default admin (password: admin123). Change in production.
-INSERT INTO admins (email, password_hash, name) VALUES (
+INSERT INTO admins (tenant_id, email, password_hash, name) VALUES (
+  '00000000-0000-0000-0000-000000000001'::uuid,
   'admin@exemplo.com',
   '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy',
   'Administrador'

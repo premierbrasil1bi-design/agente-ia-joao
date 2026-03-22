@@ -14,9 +14,9 @@ services:
     container_name: saas_postgres
     restart: always
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: evolution
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+      POSTGRES_DB: "evolution"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d evolution"]
       interval: 5s
@@ -86,7 +86,7 @@ services:
     environment:
       NODE_ENV: production
       REDIS_URL: redis://saas_redis:6379
-      DATABASE_URL: postgresql://postgres:postgres@saas_postgres:5432/evolution?sslmode=disable
+      DATABASE_URL: "postgresql://postgres:postgres@saas_postgres:5432/evolution?sslmode=disable"
       EVOLUTION_API_URL: http://saas_evolution:8080
       EVOLUTION_API_KEY: default_key
     ports:
