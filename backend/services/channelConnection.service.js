@@ -288,11 +288,23 @@ export async function getChannelStatus(channel) {
         };
       } catch (recErr) {
         console.error('[channelConnection] auto-recovery status falhou:', recErr.message);
-        throw recErr;
+        return {
+          normalizedStatus: 'unknown',
+          state: null,
+          channel,
+          evolutionOffline: true,
+          error: recErr.message || 'Falha ao recuperar instância na Evolution.',
+        };
       }
     }
 
-    throw err;
+    return {
+      normalizedStatus: 'unknown',
+      state: null,
+      channel,
+      evolutionOffline: true,
+      error: err.message || 'Evolution API temporariamente indisponível',
+    };
   }
 }
 

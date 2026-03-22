@@ -10,7 +10,7 @@ import { config } from './config/env.js';
 import { isDbConnected } from './db/connection.js';
 import { pool } from './db/pool.js';
 import { requireTenant } from './middleware/requireTenant.js';
-import { sendNotFound, sendServerError, sendBadRequest } from './utils/errorResponses.js';
+import { sendNotFound } from './utils/errorResponses.js';
 
 import contextRoutes from './routes/contextRoutes.js';
 import evolutionWebhookRoutes from './routes/evolutionWebhook.routes.js';
@@ -36,27 +36,43 @@ import { initEvolutionQueueInfra } from './queues/evolution.queue.js';
 import { startEvolutionWorker } from './workers/evolution.worker.js';
 import * as evolutionService from './services/evolutionService.js';
 
+process.on('unhandledRejection', console.error);
+process.on('uncaughtException', console.error);
+
 const app = express();
 const PORT = config.port || 3000;
 
 const allowedOrigins = [
+  'https://app.omnia1biai.com.br',
   'https://admin.omnia1biai.com.br',
-  'https://app.omnia1biai.com.br'
+  'http://localhost:5173'
 ];
 
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS: ' + origin));
-    }
-  },
-  credentials: true
-}));
+// 1) CORS único — sem segundo app.use(cors) nem app.options(cors)
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, false);
+      }
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    credentials: true
+  })
+);
 
-app.options('*', cors());
+// 2) Complemento mínimo (sem repetir Allow-Origin / Allow-Methods / Allow-Headers)
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Credentials', 'true');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+
+  next();
+});
 
 app.use(express.json());
 
@@ -174,15 +190,16 @@ app.use((req, res) => sendNotFound(res, 'Rota não encontrada.'));
 ========================================================= */
 
 app.use((err, req, res, next) => {
-  const msg = err?.message || String(err);
-  console.error('[API error]', msg);
+  console.error('Erro global:', err);
 
-  const clientMsg =
-    config.env !== 'production' && msg
-      ? msg
-      : 'Erro interno do servidor.';
+  if (res.headersSent) {
+    return next(err);
+  }
 
-  sendServerError(res, clientMsg, err);
+  res.status(200).json({
+    error: true,
+    message: err.message || 'Erro interno'
+  });
 });
 
 /* =========================================================

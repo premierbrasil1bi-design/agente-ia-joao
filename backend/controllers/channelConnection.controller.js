@@ -105,12 +105,12 @@ export async function getStatus(req, res) {
     const result = await channelConnectionService.getChannelStatus(channel);
 
     if (result.evolutionOffline) {
-      return res.status(503).json({
-        success: false,
-        error: result.error || 'Evolution API indisponível.',
-        status: 'unknown',
-        normalizedStatus: 'unknown',
-        channel: result.channel,
+      return res.status(200).json({
+        success: true,
+        status: 'disconnected',
+        normalizedStatus: 'offline',
+        evolutionOffline: true,
+        message: 'Serviço temporariamente indisponível'
       });
     }
 
@@ -125,16 +125,12 @@ export async function getStatus(req, res) {
     });
   } catch (err) {
     console.error('[channelConnection] getStatus:', err.message, err.response?.status || err.code || '');
-    if (isEvolutionOffline(err)) {
-      return res.status(503).json({
-        success: false,
-        error: 'Evolution API está offline ou inacessível.',
-        status: 'unknown',
-      });
-    }
-    res.status(500).json({
-      success: false,
-      error: err.message || 'Erro ao obter status.',
+    return res.status(200).json({
+      success: true,
+      status: 'disconnected',
+      normalizedStatus: 'offline',
+      evolutionOffline: true,
+      message: 'Serviço temporariamente indisponível'
     });
   }
 }
