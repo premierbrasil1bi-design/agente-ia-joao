@@ -1,3 +1,7 @@
+# Evolution API: imagem com tag fixa (ex.: v2.3.7), nunca "latest", para builds reproduzíveis e menos surpresas em produção.
+# Redis: dentro da rede Docker o host é o NOME DO SERVIÇO (aqui "redis"), não localhost — localhost seria o próprio container da Evolution.
+# Debug sem Redis: descomente/ajuste no bloco saas_evolution — CACHE_REDIS_ENABLED=false e CACHE_LOCAL_ENABLED=true.
+
 version: '3.9'
 
 services:
@@ -19,7 +23,7 @@ services:
     ports:
       - "5432:5432"
 
-  saas_redis:
+  redis:
     image: redis:7
     container_name: saas_redis
     restart: always
@@ -27,22 +31,24 @@ services:
       - "6379:6379"
 
   saas_evolution:
-    image: atendai/evolution-api:latest
+    image: atendai/evolution-api:v2.3.7
     container_name: saas_evolution
     restart: always
     depends_on:
       saas_postgres:
         condition: service_healthy
-      saas_redis:
+      redis:
         condition: service_started
     environment:
       DATABASE_PROVIDER: postgresql
       DATABASE_CONNECTION_URI: postgresql://postgres:postgres@saas_postgres:5432/evolution
+      AUTHENTICATION_TYPE: apikey
+      AUTHENTICATION_API_KEY: EVOLUTION_2026_JOAO_998877
       CACHE_REDIS_ENABLED: "true"
-      CACHE_REDIS_URI: redis://saas_redis:6379/6
+      CACHE_REDIS_URI: redis://redis:6379
       CACHE_REDIS_PREFIX_KEY: evolution
       CACHE_REDIS_SAVE_INSTANCES: "true"
-      AUTHENTICATION_API_KEY: EVOLUTION_2026_JOAO_998877
+      # Debug (caso Redis cause erro): use CACHE_REDIS_ENABLED=false e CACHE_LOCAL_ENABLED=true
     ports:
       - "8080:8080"
     volumes:
