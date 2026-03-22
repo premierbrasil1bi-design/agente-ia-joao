@@ -64,12 +64,28 @@ jobs:
             fi
 
             cd "${DEPLOY_PATH}"
-            if [ ! -f scripts/deploy.sh ]; then
-              echo "[gha][ERRO] scripts/deploy.sh não encontrado. Clone o repositório neste caminho."
+            echo "[gha] Diretório de deploy (pwd): $(pwd)"
+            echo "[gha] DEPLOY_PATH=${DEPLOY_PATH}"
+            echo "📁 Conteúdo do diretório atual:"
+            ls -la
+            echo "📁 Conteúdo da pasta scripts (se existir):"
+            ls -la scripts || true
+            echo "🔍 Procurando deploy.sh..."
+
+            if [ -f scripts/deploy.sh ]; then
+              echo "✅ Encontrado em scripts/deploy.sh"
+              chmod +x scripts/deploy.sh
+              echo "🚀 Iniciando deploy..."
+              bash scripts/deploy.sh
+            elif [ -f deploy.sh ]; then
+              echo "✅ Encontrado em deploy.sh (raiz)"
+              chmod +x deploy.sh
+              echo "🚀 Iniciando deploy..."
+              bash deploy.sh
+            else
+              echo "❌ ERRO: deploy.sh não encontrado nem na raiz nem em scripts/"
               exit 1
             fi
-            chmod +x scripts/deploy.sh
-            bash scripts/deploy.sh
             echo "[gha] Tentativa 1 OK."
 
       - name: Deploy via SSH — 2ª tentativa (retry)
@@ -93,13 +109,42 @@ jobs:
             sleep 15
 
             DEPLOY_PATH="${{ secrets.VPS_REPO_PATH }}"
+            if [ -z "${DEPLOY_PATH}" ]; then
+              echo "[gha][ERRO] Secret VPS_REPO_PATH não definido."
+              exit 1
+            fi
+            if [ ! -d "${DEPLOY_PATH}" ]; then
+              echo "[gha][ERRO] Diretório inexistente: ${DEPLOY_PATH}"
+              exit 1
+            fi
             export DEPLOY_BRANCH="${{ secrets.VPS_DEPLOY_BRANCH }}"
             if [ -z "${DEPLOY_BRANCH}" ]; then
               export DEPLOY_BRANCH="main"
             fi
+
             cd "${DEPLOY_PATH}"
-            chmod +x scripts/deploy.sh
-            bash scripts/deploy.sh
+            echo "[gha] Diretório de deploy (pwd): $(pwd)"
+            echo "[gha] DEPLOY_PATH=${DEPLOY_PATH}"
+            echo "📁 Conteúdo do diretório atual:"
+            ls -la
+            echo "📁 Conteúdo da pasta scripts (se existir):"
+            ls -la scripts || true
+            echo "🔍 Procurando deploy.sh..."
+
+            if [ -f scripts/deploy.sh ]; then
+              echo "✅ Encontrado em scripts/deploy.sh"
+              chmod +x scripts/deploy.sh
+              echo "🚀 Iniciando deploy..."
+              bash scripts/deploy.sh
+            elif [ -f deploy.sh ]; then
+              echo "✅ Encontrado em deploy.sh (raiz)"
+              chmod +x deploy.sh
+              echo "🚀 Iniciando deploy..."
+              bash deploy.sh
+            else
+              echo "❌ ERRO: deploy.sh não encontrado nem na raiz nem em scripts/"
+              exit 1
+            fi
             echo "[gha] Tentativa 2 OK."
 
       - name: Verificar resultado

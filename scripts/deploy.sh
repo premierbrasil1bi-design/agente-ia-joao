@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploy idempotente: lock + validação Redis/BullMQ + backend + PM2 + frontend + www + healthcheck
-# Uso: cd /caminho/do/repo && bash scripts/deploy.sh
+# Uso: na raiz do repositório — bash scripts/deploy.sh  OU  bash deploy.sh (se cópia na raiz)
 #
 # Variáveis opcionais:
 #   DEPLOY_BRANCH (default: main)
@@ -32,8 +32,15 @@ maybe_sudo() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [[ -f "$SCRIPT_DIR/../package.json" ]]; then
+  REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+  REPO_ROOT="$SCRIPT_DIR"
+fi
 cd "$REPO_ROOT"
+
+# Caminho absoluto canônico do script (symlinks, caminhos relativos; requer readlink -f — GNU/Linux no VPS)
+DEPLOY_SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 WWW_ROOT="${DEPLOY_WWW_ROOT:-/var/www}"
@@ -68,7 +75,7 @@ if [[ "${DEPLOY_SKIP_REEXEC:-0}" != "1" ]] && [[ "${DEPLOY_REEXEC_DONE:-0}" != "
   git fetch --all --prune
   log "git reset --hard origin/${DEPLOY_BRANCH}"
   git reset --hard "origin/${DEPLOY_BRANCH}"
-  exec bash "$REPO_ROOT/scripts/deploy.sh"
+  exec bash "$DEPLOY_SELF"
 fi
 
 # --- 2) Lock anti-concorrência ---
