@@ -48,37 +48,28 @@ const allowedOrigins = [
   'http://localhost:5173'
 ];
 
-// 1) CORS único
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin) {
-        return callback(null, true);
-      }
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(null, false);
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+};
 
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+// 1) CORS (antes de body parser e rotas)
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
-      return callback(null, false);
-    },
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    credentials: true
-  })
-);
-
-// 2) Garante Access-Control-Allow-Origin em toda resposta (curl, proxies, etc.)
+// 2) Debug temporário — remover após validar em produção
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
-
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  } else {
-    res.header('Access-Control-Allow-Origin', 'https://app.omnia1biai.com.br');
-  }
-
-  res.header('Access-Control-Allow-Credentials', 'true');
-
+  console.log('[CORS debug] Origin:', req.headers.origin ?? '(none)');
   next();
 });
 
