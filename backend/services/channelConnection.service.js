@@ -1,21 +1,15 @@
 /**
  * Serviço de conexão de canais WhatsApp via Evolution API.
- * Orquestra criação de instância, QR, status e desconexão.
- * Criação idempotente (409 = instância já existe).
+ * Orquestra conexão, QR, status e desconexão.
+ * Criação na Evolution: apenas fluxo explícito (createWhatsAppInstance), nunca automática em status/connect.
  */
 
 import * as evolutionService from './evolutionService.js';
 import * as channelRepo from '../repositories/channel.repository.js';
-import { pool } from '../db/pool.js';
 import { normalizeEvolutionState } from '../utils/evolutionState.js';
 import { mapEvolutionStatus, toEvolutionStatusColumn } from '../utils/mapEvolutionStatus.js';
 import { logger } from '../utils/logger.js';
-
-/** Sanitiza string para nome de instância (apenas alfanumérico e _). */
-function sanitizeInstancePart(s) {
-  if (s == null || typeof s !== 'string') return 'unknown';
-  return String(s).replace(/-/g, '_').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 50) || 'unknown';
-}
+import { DEFAULT_EVOLUTION_INSTANCE_NAME } from '../config/evolutionInstance.js';
 
 /**
  * Converte o campo instance do canal para nome de instância Evolution (slug).
@@ -34,37 +28,57 @@ function slugifyInstance(instance) {
 
 /**
  * Retorna o nome da instância Evolution para o canal.
- * Ordem: external_id (já salvo) → slugify(instance) → fallback via tenant/agent (connect).
+ * Ordem: external_id → slugify(instance) → nome padrão global (uma instância canônica).
  */
 function getEvolutionInstanceName(channel) {
-  if (channel?.external_id) return channel.external_id;
+  const ext = channel?.external_id != null ? String(channel.external_id).trim() : '';
+  if (ext) return ext;
   const fromInstance = slugifyInstance(channel?.instance);
   if (fromInstance) return fromInstance;
-  return null;
+  return DEFAULT_EVOLUTION_INSTANCE_NAME;
 }
 
-/**
- * Gera o nome da instância no formato tenantSlug_agentSlug_channelId.
- * Garante contexto tenant_id e agent_id. Fallback: omnia_{channelId}.
- */
-async function instanceNameForChannel(channel) {
+/** Coleta nomes de instância a partir da resposta de fetchInstances (formatos variados da Evolution). */
+function collectInstanceNamesFromFetch(data) {
+  const names = new Set();
+  const seen = new WeakSet();
+
+  function visit(obj, depth) {
+    if (depth > 12 || obj == null) return;
+    if (typeof obj !== 'object') return;
+    if (seen.has(obj)) return;
+    seen.add(obj);
+
+    if (Array.isArray(obj)) {
+      obj.forEach((item) => visit(item, depth + 1));
+      return;
+    }
+
+    const candidates = [
+      obj.instanceName,
+      obj.name,
+      obj.instance?.instanceName,
+      obj.instance?.name,
+    ];
+    for (const n of candidates) {
+      if (typeof n === 'string' && n.trim()) names.add(n.trim());
+    }
+
+    for (const v of Object.values(obj)) {
+      if (v && typeof v === 'object') visit(v, depth + 1);
+    }
+  }
+
+  visit(data, 0);
+  return names;
+}
+
+async function evolutionAlreadyHasInstance(instanceName) {
   try {
-    const { rows } = await pool.query(
-      `SELECT t.slug AS tenant_slug, a.slug AS agent_slug
-       FROM channels c
-       JOIN tenants t ON t.id = c.tenant_id
-       JOIN agents a ON a.id = c.agent_id
-       WHERE c.id = $1 AND c.tenant_id = $2`,
-      [channel.id, channel.tenant_id]
-    );
-    const row = rows[0];
-    const tenantSlug = row ? sanitizeInstancePart(row.tenant_slug) : 'tenant';
-    const agentSlug = row ? sanitizeInstancePart(row.agent_slug) : 'agent';
-    const channelPart = sanitizeInstancePart(String(channel.id));
-    return `${tenantSlug}_${agentSlug}_${channelPart}`;
-  } catch (err) {
-    console.warn('[channelConnection] instanceNameForChannel fallback:', err.message);
-    return `omnia_${sanitizeInstancePart(String(channel.id))}`;
+    const data = await evolutionService.checkEvolutionHealth();
+    return collectInstanceNamesFromFetch(data).has(instanceName);
+  } catch {
+    return false;
   }
 }
 
@@ -84,15 +98,30 @@ function evolutionCreateHasInstance(body) {
 }
 
 /**
- * Cria (ou garante) a instância WhatsApp na Evolution para o canal,
- * sem conectar. Atualiza o canal com provider/external_id/status = created.
- * Fluxo: usado na criação do canal (POST /api/channels).
+ * Cria (ou associa) a instância WhatsApp na Evolution para o canal, sem conectar.
+ * Chamada explícita apenas — não é usada em status nem em connect automático.
+ * Se a instância já existir na Evolution, não chama POST /instance/create.
  */
 export async function createWhatsAppInstance(channel) {
   const instanceName =
-    (channel?.instance && slugifyInstance(channel.instance)) ||
-    channel?.external_id ||
-    (await instanceNameForChannel(channel));
+    String(channel?.external_id || '').trim() ||
+    slugifyInstance(channel?.instance) ||
+    DEFAULT_EVOLUTION_INSTANCE_NAME;
+
+  if (await evolutionAlreadyHasInstance(instanceName)) {
+    console.warn('[evolution] Instância já existe na Evolution; não chama /instance/create:', instanceName);
+    const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
+      external_id: instanceName,
+      provider: 'evolution',
+      status: mapEvolutionStatus('disconnected'),
+      evolution_status: 'disconnected',
+    });
+    return {
+      instanceName,
+      createResponse: { skipped: true, reason: 'instance_already_exists' },
+      channel: updatedChannel,
+    };
+  }
 
   let createResponse;
   try {
@@ -144,28 +173,21 @@ export async function createWhatsAppInstance(channel) {
 }
 
 /**
- * POST connect: sem external_id → createInstance (persiste); sempre → connectInstance (QR).
+ * POST connect: exige external_id já persistido (instância criada manualmente / fluxo explícito).
+ * Não cria instância automaticamente.
  */
 export async function connectWhatsAppChannel(channel) {
   const tenantId = channel.tenant_id;
-  let instanceName =
-    getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
-  if (!instanceName) {
-    instanceName = await instanceNameForChannel(channel);
-  }
-
   const ext = channel.external_id != null ? String(channel.external_id).trim() : '';
-  let createResponse = null;
-  let baseChannel = channel;
 
   if (!ext) {
-    const created = await createWhatsAppInstance({ ...channel, tenant_id: tenantId });
-    instanceName = created.instanceName;
-    createResponse = created.createResponse;
-    baseChannel = created.channel;
-  } else {
-    instanceName = ext;
+    console.warn('Tentativa de criação automática bloqueada');
+    const err = new Error('Instance not created');
+    err.code = 'INSTANCE_NOT_FOUND';
+    throw err;
   }
+
+  const instanceName = ext;
 
   console.log('[evolution] CONNECT START', instanceName);
   const connectResponse = await evolutionService.connectInstance(instanceName);
@@ -174,7 +196,7 @@ export async function connectWhatsAppChannel(channel) {
   const connectingDbStatus = mapEvolutionStatus('connecting');
   console.log('[channels] connectWhatsAppChannel → connecting DB:', connectingDbStatus);
 
-  const updatedChannel = await channelRepo.updateConnection(baseChannel.id, tenantId, {
+  const updatedChannel = await channelRepo.updateConnection(channel.id, tenantId, {
     external_id: instanceName,
     provider: 'evolution',
     status: connectingDbStatus,
@@ -183,27 +205,18 @@ export async function connectWhatsAppChannel(channel) {
 
   return {
     instanceName,
-    createResponse,
+    createResponse: null,
     connectResponse,
     channel: updatedChannel,
   };
 }
 
 /**
- * Obtém QR Code para o canal.
- * Usa external_id ou slug do campo instance (permite QR sem ter clicado Connect antes).
+ * Obtém QR Code para o canal (instância já deve existir na Evolution).
  */
 export async function getChannelQrCode(channel) {
-  let instanceName =
-    getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
-  if (!instanceName) {
-    instanceName = await instanceNameForChannel(channel);
-  }
-  if (!instanceName) {
-    throw new Error('Configure o campo Instance do canal (ex.: Dra Ana Paula).');
-  }
+  const instanceName = getEvolutionInstanceName(channel);
 
-  // Sempre coloca a instância em fluxo de pairing antes de buscar o QR
   console.log('[evolution] PRE-QR connectInstance', instanceName);
   await evolutionService.connectInstance(instanceName);
 
@@ -212,12 +225,10 @@ export async function getChannelQrCode(channel) {
 
 /**
  * Obtém status na Evolution e atualiza banco com status normalizado (connected/disconnected/connecting).
+ * Nunca cria instância em resposta a 404 ou ausência na Evolution.
  */
 export async function getChannelStatus(channel) {
-  const instanceName = getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
-  if (!instanceName) {
-    return { normalizedStatus: 'unknown', channel };
-  }
+  const instanceName = getEvolutionInstanceName(channel);
 
   try {
     let state = await evolutionService.getStatus(instanceName);
@@ -264,38 +275,15 @@ export async function getChannelStatus(channel) {
     }
 
     if (axStatus === 404) {
-      console.log('[channelConnection] getStatus 404 → createInstance + connectInstance', instanceName);
-      try {
-        await createWhatsAppInstance({ ...channel, tenant_id: channel.tenant_id });
-        const afterCreate = await channelRepo.findById(channel.id, channel.tenant_id);
-        const name =
-          afterCreate?.external_id?.trim() ||
-          getEvolutionInstanceName(afterCreate) ||
-          instanceName;
-        await evolutionService.connectInstance(name);
-
-        const connectingDb = mapEvolutionStatus('connecting');
-        const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
-          status: connectingDb,
-          evolution_status: 'connecting',
-        });
-
-        return {
-          normalizedStatus: 'recreated',
-          state: null,
-          channel: updatedChannel ?? afterCreate ?? channel,
-          recreated: true,
-        };
-      } catch (recErr) {
-        console.error('[channelConnection] auto-recovery status falhou:', recErr.message);
-        return {
-          normalizedStatus: 'unknown',
-          state: null,
-          channel,
-          evolutionOffline: true,
-          error: recErr.message || 'Falha ao recuperar instância na Evolution.',
-        };
-      }
+      console.warn('Tentativa de criação automática bloqueada');
+      return {
+        normalizedStatus: 'unknown',
+        state: null,
+        channel,
+        instanceNotFound: true,
+        code: 'INSTANCE_NOT_FOUND',
+        message: 'Instance not created',
+      };
     }
 
     return {
@@ -310,10 +298,12 @@ export async function getChannelStatus(channel) {
 
 /**
  * Desconecta instância na Evolution e atualiza banco.
+ * Só chama a Evolution se houver external_id (evita logout no nome padrão sem vínculo real).
  */
 export async function disconnectChannel(channel) {
-  const instanceName = getEvolutionInstanceName(channel) || (channel?.instance ? slugifyInstance(channel.instance) : null);
-  if (!instanceName) {
+  const ext = channel?.external_id != null ? String(channel.external_id).trim() : '';
+
+  if (!ext) {
     await channelRepo.updateConnection(channel.id, channel.tenant_id, {
       status: mapEvolutionStatus('disconnected'),
       evolution_status: 'disconnected',
@@ -322,7 +312,7 @@ export async function disconnectChannel(channel) {
   }
 
   try {
-    await evolutionService.disconnectInstance(instanceName);
+    await evolutionService.disconnectInstance(ext);
   } catch (err) {
     console.error('[channelConnection] disconnectInstance error:', err.message);
   }
@@ -333,5 +323,5 @@ export async function disconnectChannel(channel) {
     external_id: null,
     connected_at: null,
   });
-  logger.statusChange(instanceName, channel.id, channel.status, 'disconnected');
+  logger.statusChange(ext, channel.id, channel.status, 'disconnected');
 }

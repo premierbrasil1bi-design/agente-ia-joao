@@ -46,6 +46,14 @@ export async function connectChannel(req, res) {
     });
   } catch (err) {
     console.error('[channelConnection] connectChannel:', err.message, err.response?.status || err.code || '');
+    if (err.code === 'INSTANCE_NOT_FOUND') {
+      return res.status(200).json({
+        success: false,
+        error: true,
+        message: err.message || 'Instance not created',
+        code: 'INSTANCE_NOT_FOUND',
+      });
+    }
     if (isEvolutionOffline(err)) {
       return res.status(503).json({
         success: false,
@@ -103,6 +111,15 @@ export async function getStatus(req, res) {
 
     console.log('[CHECK_STATUS] channelId:', channel.id);
     const result = await channelConnectionService.getChannelStatus(channel);
+
+    if (result.instanceNotFound) {
+      return res.status(200).json({
+        success: false,
+        error: true,
+        message: result.message || 'Instance not created',
+        code: result.code || 'INSTANCE_NOT_FOUND',
+      });
+    }
 
     if (result.evolutionOffline) {
       return res.status(200).json({

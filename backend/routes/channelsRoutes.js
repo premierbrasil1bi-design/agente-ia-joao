@@ -69,6 +69,69 @@ router.get('/', requireActiveTenant, async (req, res) => {
 });
 
 /**
+ * POST /api/channels/:id/create-instance
+ * Criação manual da instância na Evolution (não automática em connect/status).
+ */
+router.post('/:id/create-instance', requireActiveTenant, async (req, res) => {
+  try {
+    const tenantId = req.tenantId || req.user?.tenantId;
+    if (!tenantId) {
+      return res.status(401).json({ error: 'Tenant não identificado.' });
+    }
+
+    const channel = await channelRepo.findById(req.params.id, tenantId);
+    if (!channel) {
+      return sendNotFound(res, 'Canal não encontrado.');
+    }
+
+    const ext = channel.external_id != null ? String(channel.external_id).trim() : '';
+    if (ext) {
+      return res.status(200).json({
+        success: false,
+        error: true,
+        message: 'Instance already exists',
+      });
+    }
+
+    const result = await channelConnectionService.createWhatsAppInstance({
+      ...channel,
+      tenant_id: tenantId,
+    });
+
+    if (result.createResponse?.skipped && result.createResponse?.reason === 'instance_already_exists') {
+      return res.status(200).json({
+        success: false,
+        error: true,
+        message: 'Instance already exists',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Instance created successfully',
+      instanceName: result.instanceName,
+    });
+  } catch (err) {
+    console.error('[channels] POST /:id/create-instance:', err.message);
+    const axStatus = err.response?.status;
+    const detail =
+      err.response?.data?.message || err.response?.data?.error || err.message || 'Falha ao criar instância.';
+    if (axStatus === 409) {
+      return res.status(200).json({
+        success: false,
+        error: true,
+        message: 'Instance already exists',
+      });
+    }
+    return res.status(502).json({
+      success: false,
+      error: true,
+      message: detail,
+    });
+  }
+});
+
+/**
  * GET /api/channels/:id
  * Retorna o canal com o campo "type" garantido (contrato do frontend).
  */
@@ -91,10 +154,8 @@ router.get('/:id', requireActiveTenant, async (req, res) => {
 
 /**
  * POST /api/channels
- * Fluxo completo de criação de canal WhatsApp via Evolution:
- * 1) Cria canal no banco
- * 2) Cria/usa instância na Evolution API
- * 3) Atualiza dados externos (provider, external_id, status, config)
+ * Cria apenas o registro do canal no banco. Instância na Evolution não é criada aqui
+ * (evita duplicatas e desconexões); use fluxo explícito / conexão com external_id já definido.
  *
  * Body recomendado (Client App):
  *   { name, agentId }
@@ -123,7 +184,6 @@ router.post('/', requireActiveTenant, async (req, res) => {
       return sendBadRequest(res, 'Agente não encontrado ou não pertence ao tenant.');
     }
 
-    // Criação do canal no banco (type/instance opcionais; padrão para WhatsApp Evolution)
     const channel = await channelRepo.create({
       tenant_id: tenantId,
       agent_id: finalAgentId,
@@ -132,63 +192,10 @@ router.post('/', requireActiveTenant, async (req, res) => {
       active: active ?? true,
     });
 
-    try {
-      // Cria a instância na Evolution SEM conectar (status: created).
-      const evolutionResult = await channelConnectionService.createWhatsAppInstance({
-        ...channel,
-        tenant_id: tenantId,
-      });
-
-      const fullChannel =
-        evolutionResult.channel ??
-        (await channelRepo.findById(channel.id, tenantId));
-
-      return res.status(201).json({
-        success: true,
-        channel: fullChannel,
-        evolution: {
-          instance: evolutionResult.instanceName,
-          create: evolutionResult.createResponse,
-        },
-      });
-    } catch (e) {
-      await channelRepo.deleteById(channel.id, tenantId);
-      const axStatus = e.response?.status;
-      const axData = e.response?.data;
-      const detail =
-        (typeof axData === 'string' && axData) ||
-        axData?.message ||
-        axData?.error ||
-        e.message;
-      console.error('[channels] POST / (evolution error):', detail, axStatus ? `HTTP ${axStatus}` : '');
-
-      if (axStatus === 400) {
-        return res.status(400).json({
-          success: false,
-          error: detail || 'Requisição rejeitada pela Evolution API.',
-        });
-      }
-      if (axStatus === 401 || axStatus === 403) {
-        return res.status(502).json({
-          success: false,
-          error: 'Falha de autenticação com a Evolution API.',
-          details: detail,
-        });
-      }
-      if (axStatus != null && axStatus >= 500) {
-        return res.status(502).json({
-          success: false,
-          error: 'Evolution API retornou erro no servidor.',
-          details: detail,
-        });
-      }
-
-      return res.status(502).json({
-        success: false,
-        error: 'Falha ao criar instância na Evolution. Canal não foi criado.',
-        details: detail,
-      });
-    }
+    return res.status(201).json({
+      success: true,
+      channel,
+    });
   } catch (err) {
     console.error('[channels] POST /:', err.message);
     res.status(500).json({ error: 'Erro ao criar canal.' });
