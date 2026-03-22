@@ -12,8 +12,10 @@
 #
 # Lock: aplicado APÓS a fase git/re-exec — evita arquivo preso quando o bash faz `exec` na 1ª passagem.
 #
-# Ordem: lock → pré-requisitos → npm ci → .env → Redis → BullMQ estrutural (getJobCounts) → PM2 →
-# BullMQ funcional (health-check) → frontend → www → nginx → health HTTP.
+# Ordem: lock → pré-requisitos → npm ci →
+#   (1) .env parser → (2) NODE_ENV → (3) REDIS_URL + fallback → (4) log estado →
+#   (5) redis-cli opcional → (6) Redis Node fail-fast → BullMQ estrutural → PM2 (--update-env) →
+#   BullMQ funcional → frontend → www → nginx → health HTTP.
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -21,7 +23,8 @@ IFS=$'\n\t'
 LOCK_FILE="${DEPLOY_LOCK_FILE:-/tmp/omnia_deploy.lock}"
 
 log() { echo "[deploy] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }
-fail() { echo "[deploy][ERRO] $*" >&2; exit 1; }
+fail() { echo "[deploy][error] $*" >&2; exit 1; }
+warn() { echo "[deploy][warn] $*" >&2; }
 
 maybe_sudo() {
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -114,8 +117,7 @@ fi
 
 # --- 2) Lock anti-concorrência ---
 if [[ -f "$LOCK_FILE" ]]; then
-  log "Deploy já está em execução (lock: ${LOCK_FILE}). Abortando."
-  exit 1
+  fail "Deploy já está em execução (lock: ${LOCK_FILE}). Abortando."
 fi
 touch "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
@@ -142,24 +144,55 @@ log "backend: npm ci"
   npm ci
 )
 
-# --- 5) Carregar .env (REDIS_URL etc.) — parser seguro (não usar source: URLs com & e textos com espaços) ---
+# --- 5) Ambiente para Redis / PM2 (ordem fixa) ---
+# 5.1 Parser seguro do .env (sem source — evita & e espaços quebrarem o shell)
 if [[ -f "$REPO_ROOT/backend/.env" ]]; then
-  log "carregando backend/.env (parser seguro)"
+  log "env: carregando backend/.env (parser seguro)"
   load_env_file_safely "$REPO_ROOT/backend/.env"
 else
-  log "aviso: backend/.env não encontrado — REDIS_URL deve estar no ambiente"
+  log "env: backend/.env ausente — usando apenas variáveis já exportadas no shell"
 fi
 
+# 5.2 NODE_ENV (produção no deploy)
 export NODE_ENV="${NODE_ENV:-production}"
+log "env: NODE_ENV=${NODE_ENV}"
 
-[[ -n "${REDIS_URL:-}" ]] || fail "REDIS_URL não definido (backend/.env ou ambiente)"
+# 5.3 REDIS_URL — não sobrescreve valor existente; trim nas pontas; fallback só se vazio
+_redis_effective="${REDIS_URL:-}"
+_redis_effective="${_redis_effective#"${_redis_effective%%[![:space:]]*}"}"
+_redis_effective="${_redis_effective%"${_redis_effective##*[![:space:]]}"}"
+if [[ -z "$_redis_effective" ]]; then
+  export REDIS_URL="redis://127.0.0.1:6379"
+  warn "fallback aplicado: REDIS_URL ausente ou só espaços → redis://127.0.0.1:6379"
+else
+  export REDIS_URL="${_redis_effective}"
+  log "REDIS_URL definido (ambiente ou .env)"
+fi
 
-# --- 6) Validação Redis (fail fast) ---
-log "Verificando conexão com Redis..."
+# 5.4 Estado explícito (sem segredos em URL simples; mascarar se no futuro houver senha na URI)
+log "estado Redis: REDIS_URL=${REDIS_URL}"
+
+# 5.5 redis-cli opcional (nunca bloqueia o deploy)
+if command -v redis-cli >/dev/null 2>&1; then
+  if redis_cli_out=$(redis-cli -u "$REDIS_URL" ping 2>/dev/null) && [[ "$redis_cli_out" == "PONG" ]]; then
+    log "redis-cli: PING OK"
+  else
+    warn "redis-cli: PING falhou ou opção -u indisponível (seguindo para validação Node)"
+  fi
+else
+  log "redis-cli não encontrado — ignorando verificação local"
+fi
+
+# 5.6 Validação Redis com Node (obrigatória — fail fast)
+log "Redis: validação ioredis (obrigatória)..."
 export NODE_PATH="$REPO_ROOT/backend/node_modules${NODE_PATH:+:${NODE_PATH}}"
-node -e "
+if ! node -e "
 const Redis = require('ioredis');
 const url = process.env.REDIS_URL;
+if (!url || String(url).trim() === '') {
+  console.error('REDIS_URL vazio');
+  process.exit(1);
+}
 const redis = new Redis(url, {
   maxRetriesPerRequest: null,
   connectTimeout: 15000,
@@ -169,21 +202,20 @@ redis
   .ping()
   .then((p) => {
     if (p !== 'PONG') {
-      console.error('Redis FAIL: resposta inesperada:', p);
+      console.error('resposta inesperada:', p);
       return redis.quit().then(() => process.exit(1));
     }
     return redis.quit();
   })
-  .then(() => {
-    console.log('Redis OK');
-    process.exit(0);
-  })
+  .then(() => process.exit(0))
   .catch((err) => {
-    console.error('Redis FAIL', err && err.message ? err.message : err);
+    console.error(err && err.message ? err.message : err);
     process.exit(1);
   });
-" || fail "validação Redis falhou"
-log "Redis OK"
+"; then
+  fail "Falha ao conectar no Redis. Abortando deploy."
+fi
+log "Redis: conexão OK (ioredis)"
 
 # --- 7) BullMQ: validação estrutural (Redis + metadados da fila, sem worker) ---
 log "BullMQ: validação estrutural (getJobCounts)..."
@@ -211,22 +243,25 @@ queue
 " || fail "validação estrutural BullMQ falhou"
 log "Fila estrutural OK"
 
-# --- 8) PM2 (ecosystem) ---
+# --- 8) PM2 (ecosystem) — injeta env do shell atual (REDIS_URL, NODE_ENV, …) via --update-env
 log "pm2: diretório de logs"
 mkdir -p "$REPO_ROOT/logs"
 
 cd "$REPO_ROOT"
-log "PM2: garantindo que todos os processos do ecosystem estejam ativos..."
+# Garante export explícito das variáveis críticas para o processo do PM2 / ecosystem.config.js
+export REDIS_URL NODE_ENV
 
-log "PM2: start ecosystem"
-pm2 start ecosystem.config.js || true
+log "PM2: garantindo processos do ecosystem (start + reload com --update-env)..."
 
-log "PM2: reload ecosystem"
+log "PM2: start ecosystem.config.js --update-env"
+pm2 start ecosystem.config.js --update-env || true
+
+log "PM2: reload ecosystem.config.js --update-env"
 pm2 reload ecosystem.config.js --update-env
 
 if ! pm2 describe worker-evolution >/dev/null 2>&1; then
-  log "PM2: worker-evolution não encontrado, iniciando manualmente..."
-  pm2 start ecosystem.config.js --only worker-evolution
+  log "PM2: worker-evolution ausente — start --only com --update-env"
+  pm2 start ecosystem.config.js --only worker-evolution --update-env
 fi
 
 pm2 describe agente-backend >/dev/null 2>&1 || fail "PM2: agente-backend não está ativo"
