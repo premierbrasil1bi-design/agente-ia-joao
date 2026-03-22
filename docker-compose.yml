@@ -5,26 +5,22 @@ services:
     image: postgres:15
     container_name: saas_postgres
     restart: always
-
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: evolution
-
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
-
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
     ports:
       - "5432:5432"
 
   saas_redis:
-    image: redis:6.2
+    image: redis:7
     container_name: saas_redis
     restart: always
     ports:
@@ -39,11 +35,13 @@ services:
         condition: service_healthy
       saas_redis:
         condition: service_started
-
     environment:
       DATABASE_PROVIDER: postgresql
       DATABASE_CONNECTION_URI: postgresql://postgres:postgres@saas_postgres:5432/evolution
-      REDIS_URI: redis://saas_redis:6379
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://saas_redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "true"
       AUTHENTICATION_API_KEY: EVOLUTION_2026_JOAO_998877
     ports:
       - "8080:8080"
