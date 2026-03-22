@@ -98,27 +98,25 @@ function listMigrationFiles() {
   return out;
 }
 
-async function waitForPostgres(pool, { attempts = 30, delayMs = 2000 } = {}) {
-  for (let i = 0; i < attempts; i++) {
+async function waitForPostgres(pool, retries = 30, delay = 2000) {
+  for (let i = 0; i < retries; i++) {
     try {
       await pool.query('SELECT 1');
-      console.log('[db-setup] Postgres disponível.');
+      console.log('[DB] PostgreSQL conectado');
       return;
     } catch (err) {
-      console.warn(
-        `[db-setup] aguardando Postgres (${i + 1}/${attempts}): ${err.message || err}`
-      );
-      await new Promise((r) => setTimeout(r, delayMs));
+      console.log(`[DB] aguardando PostgreSQL... tentativa ${i + 1}/${retries}`);
+      await new Promise((res) => setTimeout(res, delay));
     }
   }
-  throw new Error('[db-setup] timeout aguardando Postgres');
+  throw new Error('PostgreSQL não respondeu após várias tentativas');
 }
 
 /**
- * @param {{ waitForPostgres?: boolean }} options
+ * @param {{ waitForPostgres?: boolean }} options — waitForPostgres: aguardar o banco antes do schema
  */
 export async function setupDatabase(options = {}) {
-  const { waitForPostgres = false } = options;
+  const { waitForPostgres: shouldWaitForPostgres = false } = options;
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString || String(connectionString).trim() === '') {
     console.error('[db-setup] DATABASE_URL não definida.');
@@ -128,7 +126,7 @@ export async function setupDatabase(options = {}) {
   const pool = new pg.Pool(poolOptions(connectionString));
 
   try {
-    if (waitForPostgres) {
+    if (shouldWaitForPostgres) {
       await waitForPostgres(pool);
     }
 
