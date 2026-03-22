@@ -3,7 +3,10 @@
 # Secrets obrigatórios:
 #   VPS_HOST, VPS_USER, VPS_SSH_KEY, VPS_REPO_PATH (ex.: /root/agente-ia-omnicanal)
 # Secrets opcionais:
-#   VPS_DEPLOY_BRANCH (se vazio, o script usa main)
+#   VPS_DEPLOY_BRANCH (se vazio, usa main)
+#   GIT_CLONE_TOKEN — PAT com leitura do repositório (repo privado); se vazio, clone HTTPS anônimo (só público)
+#
+# Clone inicial: usa github.repository deste workflow. Repositório privado exige GIT_CLONE_TOKEN.
 # Porta SSH não padrão: altere o workflow (appleboy `port:`) ou use ~/.ssh/config no runner (não coberto aqui).
 #
 # No servidor: usuário SSH com permissão em $VPS_REPO_PATH, sudo sem senha para nginx/chown em /var/www
@@ -53,9 +56,24 @@ jobs:
               echo "[gha][ERRO] Secret VPS_REPO_PATH não definido."
               exit 1
             fi
-            if [ ! -d "${DEPLOY_PATH}" ]; then
-              echo "[gha][ERRO] Diretório inexistente: ${DEPLOY_PATH}"
-              exit 1
+
+            mkdir -p "${DEPLOY_PATH}"
+            cd "${DEPLOY_PATH}"
+
+            if [ ! -d ".git" ]; then
+              echo "⚠️ Repositório não encontrado. Clonando..."
+              if [ -n "$(ls -A . 2>/dev/null)" ]; then
+                echo "[gha][ERRO] ${DEPLOY_PATH} não é um clone git e o diretório não está vazio. Esvazie ou use outro VPS_REPO_PATH."
+                exit 1
+              fi
+              GIT_TOKEN='${{ secrets.GIT_CLONE_TOKEN }}'
+              REPO_SLUG='${{ github.repository }}'
+              if [ -n "${GIT_TOKEN}" ]; then
+                git clone "https://x-access-token:${GIT_TOKEN}@github.com/${REPO_SLUG}.git" .
+              else
+                git clone "https://github.com/${REPO_SLUG}.git" .
+              fi
+              echo "✅ Repositório clonado."
             fi
 
             export DEPLOY_BRANCH="${{ secrets.VPS_DEPLOY_BRANCH }}"
@@ -63,7 +81,11 @@ jobs:
               export DEPLOY_BRANCH="main"
             fi
 
-            cd "${DEPLOY_PATH}"
+            echo "🔄 Atualizando repositório..."
+            git fetch origin
+            git reset --hard "origin/${DEPLOY_BRANCH}"
+            echo "📦 Código atualizado com sucesso."
+
             echo "[gha] Diretório de deploy (pwd): $(pwd)"
             echo "[gha] DEPLOY_PATH=${DEPLOY_PATH}"
             echo "📁 Conteúdo do diretório atual:"
@@ -113,16 +135,36 @@ jobs:
               echo "[gha][ERRO] Secret VPS_REPO_PATH não definido."
               exit 1
             fi
-            if [ ! -d "${DEPLOY_PATH}" ]; then
-              echo "[gha][ERRO] Diretório inexistente: ${DEPLOY_PATH}"
-              exit 1
+
+            mkdir -p "${DEPLOY_PATH}"
+            cd "${DEPLOY_PATH}"
+
+            if [ ! -d ".git" ]; then
+              echo "⚠️ Repositório não encontrado. Clonando..."
+              if [ -n "$(ls -A . 2>/dev/null)" ]; then
+                echo "[gha][ERRO] ${DEPLOY_PATH} não é um clone git e o diretório não está vazio. Esvazie ou use outro VPS_REPO_PATH."
+                exit 1
+              fi
+              GIT_TOKEN='${{ secrets.GIT_CLONE_TOKEN }}'
+              REPO_SLUG='${{ github.repository }}'
+              if [ -n "${GIT_TOKEN}" ]; then
+                git clone "https://x-access-token:${GIT_TOKEN}@github.com/${REPO_SLUG}.git" .
+              else
+                git clone "https://github.com/${REPO_SLUG}.git" .
+              fi
+              echo "✅ Repositório clonado."
             fi
+
             export DEPLOY_BRANCH="${{ secrets.VPS_DEPLOY_BRANCH }}"
             if [ -z "${DEPLOY_BRANCH}" ]; then
               export DEPLOY_BRANCH="main"
             fi
 
-            cd "${DEPLOY_PATH}"
+            echo "🔄 Atualizando repositório..."
+            git fetch origin
+            git reset --hard "origin/${DEPLOY_BRANCH}"
+            echo "📦 Código atualizado com sucesso."
+
             echo "[gha] Diretório de deploy (pwd): $(pwd)"
             echo "[gha] DEPLOY_PATH=${DEPLOY_PATH}"
             echo "📁 Conteúdo do diretório atual:"
