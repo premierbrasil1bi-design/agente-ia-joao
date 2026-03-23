@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { socket } from '../lib/socket.js';
 import { agentApi } from '../services/agentApi.js';
+import { channelsService } from '../services/channels.service.js';
 import StatusBadge from '../components/StatusBadge.jsx';
 import useAutoReconnect from '../hooks/useAutoReconnect.js';
 
@@ -293,7 +294,7 @@ export function Channels() {
   const pollingRefs = useRef({});
 
   async function loadChannels() {
-    const data = await agentApi.request('/api/agent/channels');
+    const data = await channelsService.listAgentChannels();
     setChannels(Array.isArray(data) ? data : []);
   }
 
@@ -310,10 +311,7 @@ export function Channels() {
 
     setLoadingCreate(true);
     try {
-      const data = await agentApi.request('/api/channels', {
-        method: 'POST',
-        body: { name, agentId, type: channelType },
-      });
+      const data = await channelsService.createChannel({ name, agentId, type: channelType });
 
       toast.success('Canal criado com sucesso');
 
@@ -362,7 +360,7 @@ export function Channels() {
   async function getQr(channelId) {
     setLoadingQr(channelId);
     try {
-      const data = await agentApi.request(`/api/channels/${channelId}/qrcode`, { method: 'GET' });
+      const data = await channelsService.getQrCode(channelId);
       applyQrFromResponse(channelId, data);
       startPolling(channelId);
     } catch (err) {
@@ -381,8 +379,8 @@ export function Channels() {
   async function connectThenQr(channelId) {
     setLoadingConnectId(channelId);
     try {
-      await agentApi.request(`/api/channels/${channelId}/connect`, { method: 'POST' });
-      const data = await agentApi.request(`/api/channels/${channelId}/qrcode`, { method: 'GET' });
+      await channelsService.connectChannel(channelId);
+      const data = await channelsService.getQrCode(channelId);
       applyQrFromResponse(channelId, data);
       startPolling(channelId);
       toast.success('Escaneie o QR Code com o WhatsApp.');
@@ -403,7 +401,7 @@ export function Channels() {
 
     pollingRefs.current[channelId] = setInterval(async () => {
       try {
-        const data = await agentApi.request(`/api/channels/${channelId}/status`, { method: 'GET' });
+        const data = await channelsService.getStatus(channelId);
         const nextStatus = data.normalizedStatus ?? data.status;
         const updated = data.channel;
 
@@ -688,7 +686,7 @@ export function Channels() {
     const id = deleteChannel.id;
     try {
       setLoadingDeleteId(id);
-      await agentApi.request(`/api/channels/${id}`, { method: 'DELETE' });
+      await channelsService.deleteChannel(id);
       setChannels((prev) => prev.filter((c) => c.id !== id));
       setDeleteChannel(null);
       toast.success('Canal excluído com sucesso.');
@@ -706,10 +704,7 @@ export function Channels() {
     const nextActive = !currentlyOn;
     try {
       setLoadingToggleId(id);
-      const updated = await agentApi.request(`/api/channels/${id}`, {
-        method: 'PUT',
-        body: { active: nextActive },
-      });
+      const updated = await channelsService.updateChannel(id, { active: nextActive });
       setChannels((prev) =>
         prev.map((c) => (c.id === id ? { ...c, ...updated } : c)),
       );
@@ -727,13 +722,10 @@ export function Channels() {
     const id = editChannel.id;
     try {
       setLoadingEditId(id);
-      const updated = await agentApi.request(`/api/channels/${id}`, {
-        method: 'PUT',
-        body: {
-          name: editName,
-          type: editType,
-          agent_id: editAgentId,
-        },
+      const updated = await channelsService.updateChannel(id, {
+        name: editName,
+        type: editType,
+        agent_id: editAgentId,
       });
       setChannels((prev) =>
         prev.map((c) => (c.id === id ? { ...c, ...updated } : c)),

@@ -1,0 +1,45 @@
+import { agentApi } from './agentApi.js';
+
+export const channelsService = {
+  listAgentChannels() {
+    return agentApi.request('/api/agent/channels');
+  },
+
+  createChannel(payload) {
+    return agentApi.request('/api/channels', {
+      method: 'POST',
+      body: payload,
+    });
+  },
+
+  updateChannel(channelId, payload) {
+    return agentApi.request(`/api/channels/${channelId}`, {
+      method: 'PUT',
+      body: payload,
+    });
+  },
+
+  deleteChannel(channelId) {
+    return agentApi.request(`/api/channels/${channelId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  connectChannel(channelId) {
+    return agentApi.request(`/api/channels/${channelId}/connect`, {
+      method: 'POST',
+    });
+  },
+
+  getQrCode(channelId) {
+    return agentApi.request(`/api/channels/${channelId}/qrcode`, {
+      method: 'GET',
+    });
+  },
+
+  getStatus(channelId) {
+    return agentApi.request(`/api/channels/${channelId}/status`, {
+      method: 'GET',
+    });
+  },
+};

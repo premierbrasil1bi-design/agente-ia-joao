@@ -15,12 +15,21 @@ const getBaseUrl = () => {
   return url.replace(/\/$/, '');
 };
 
+const getApiKey = () => {
+  const key = process.env.EVOLUTION_API_KEY;
+  if (!key || String(key).trim() === '') {
+    throw new Error('EVOLUTION_API_KEY deve estar definida.');
+  }
+  return String(key).trim();
+};
+
 const getHeaders = () => ({
-  apikey: process.env.EVOLUTION_API_KEY || '',
+  Authorization: `Bearer ${getApiKey()}`,
+  apikey: getApiKey(),
   'Content-Type': 'application/json',
 });
 
-const opts = () => ({ timeout: 25000, headers: getHeaders() });
+const opts = (timeout = 25000) => ({ timeout, headers: getHeaders() });
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -244,9 +253,8 @@ export async function fetchInstances() {
 
 export async function sendText(instance, number, text) {
   const EVOLUTION_URL = process.env.EVOLUTION_URL || process.env.EVOLUTION_API_URL;
-  const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY;
 
-  if (!EVOLUTION_URL || !EVOLUTION_API_KEY) {
+  if (!EVOLUTION_URL || !process.env.EVOLUTION_API_KEY) {
     throw new Error('EVOLUTION_URL and EVOLUTION_API_KEY must be set');
   }
 
@@ -268,10 +276,7 @@ export async function sendText(instance, number, text) {
       axios.post(
         url,
         { number, text },
-        {
-          headers: { apikey: EVOLUTION_API_KEY },
-          timeout: 20000,
-        }
+        opts(20000)
       ),
     'SEND_TEXT',
     instance
