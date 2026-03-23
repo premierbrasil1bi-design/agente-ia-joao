@@ -1,6 +1,12 @@
 # Evolution + PostgreSQL + Redis + API Node (produção SaaS)
 #
-# Postgres: POSTGRES_USER/PASSWORD/DB alinhados às URIs da Evolution.
+# Postgres: imagem ankane/pgvector:latest (CREATE EXTENSION vector nas migrations do backend).
+# Se o volume postgres_data foi criado com postgres oficial (sem pgvector), recrie-o uma vez:
+#   docker compose down -v && docker compose up -d --build
+# Caso contrário o erro SQLSTATE 0A000 ("extension vector is not available") persiste no dado antigo.
+# Validar extensão após subir: docker compose exec saas_postgres psql -U postgres -d evolution -c "SELECT extname FROM pg_extension WHERE extname = 'vector';"
+#
+# POSTGRES_USER/PASSWORD/DB alinhados às URIs da Evolution e ao backend.
 # Evolution: atendai/evolution-api — Prisma usa DATABASE_CONNECTION_URI (sem DATABASE_URL duplicado).
 # saas_backend: API + worker BullMQ na rede Docker (REDIS_URL → saas_redis; Postgres interno sem TLS).
 #
@@ -10,7 +16,7 @@ version: '3.9'
 
 services:
   saas_postgres:
-    image: postgres:15
+    image: ankane/pgvector:latest
     container_name: saas_postgres
     restart: always
     environment:
