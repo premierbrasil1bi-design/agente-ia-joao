@@ -176,9 +176,9 @@ router.post('/webhook/evolution', async (req, res) => {
     console.warn('[EVOLUTION WARNING] Número suspeito:', numberRaw, '->', number);
   }
 
-  const { EVOLUTION_URL, EVOLUTION_INSTANCE, EVOLUTION_API_KEY } = process.env;
+  const { EVOLUTION_URL, EVOLUTION_INSTANCE, AUTHENTICATION_API_KEY } = process.env;
 
-  if (!EVOLUTION_URL || !EVOLUTION_INSTANCE || !EVOLUTION_API_KEY) {
+  if (!EVOLUTION_URL || !EVOLUTION_INSTANCE || !AUTHENTICATION_API_KEY) {
     console.error('[ENV ERROR] Variáveis da Evolution não configuradas.');
     return res.status(200).json({ success: true });
   }
@@ -192,7 +192,8 @@ router.post('/webhook/evolution', async (req, res) => {
   const evolutionUrl = `${EVOLUTION_URL}/message/sendText/${instanceEncoded}`;
 
   // Log seguro da apikey
-  const apiKeySafe = EVOLUTION_API_KEY.length > 4 ? `**${EVOLUTION_API_KEY.slice(-4)}` : '***';
+  const apiKeySafe =
+    AUTHENTICATION_API_KEY.length > 4 ? `**${AUTHENTICATION_API_KEY.slice(-4)}` : '***';
 
   // Logs detalhados
   console.log('[EVOLUTION DEBUG] Número bruto:', numberRaw);
@@ -232,7 +233,7 @@ router.post('/webhook/evolution', async (req, res) => {
       },
       {
         headers: {
-          apikey: EVOLUTION_API_KEY
+          apikey: AUTHENTICATION_API_KEY
         },
         timeout: 15000
       }

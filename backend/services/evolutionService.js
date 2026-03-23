@@ -1,7 +1,7 @@
 /**
  * Evolution API 2.x – WhatsApp (WHATSAPP-BAILEYS).
  * Todas as chamadas HTTP passam pela fila BullMQ + worker (nunca axios direto aqui).
- * Header apikey: EVOLUTION_API_KEY.
+ * Header apikey: AUTHENTICATION_API_KEY.
  */
 
 import { EvolutionCircuitBreaker } from '../utils/evolutionCircuitBreaker.js';

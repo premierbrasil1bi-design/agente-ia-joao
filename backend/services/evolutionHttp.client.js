@@ -10,21 +10,22 @@ const EXP_MAX = 5;
 const BASE_DELAY_MS = 1000;
 
 const getBaseUrl = () => {
-  const url = process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL;
-  if (!url) throw new Error('EVOLUTION_API_URL ou EVOLUTION_URL deve estar definida.');
+  const url =
+    process.env.EVOLUTION_API_URL ||
+    process.env.EVOLUTION_URL ||
+    'http://saas_evolution:8080';
   return url.replace(/\/$/, '');
 };
 
 const getApiKey = () => {
-  const key = process.env.EVOLUTION_API_KEY;
+  const key = process.env.AUTHENTICATION_API_KEY;
   if (!key || String(key).trim() === '') {
-    throw new Error('EVOLUTION_API_KEY deve estar definida.');
+    throw new Error('AUTHENTICATION_API_KEY deve estar definida.');
   }
   return String(key).trim();
 };
 
 const getHeaders = () => ({
-  Authorization: `Bearer ${getApiKey()}`,
   apikey: getApiKey(),
   'Content-Type': 'application/json',
 });
@@ -254,8 +255,8 @@ export async function fetchInstances() {
 export async function sendText(instance, number, text) {
   const EVOLUTION_URL = process.env.EVOLUTION_URL || process.env.EVOLUTION_API_URL;
 
-  if (!EVOLUTION_URL || !process.env.EVOLUTION_API_KEY) {
-    throw new Error('EVOLUTION_URL and EVOLUTION_API_KEY must be set');
+  if (!EVOLUTION_URL || !process.env.AUTHENTICATION_API_KEY) {
+    throw new Error('EVOLUTION_URL and AUTHENTICATION_API_KEY must be set');
   }
 
   let instanceEncoded = instance;
