@@ -52,17 +52,11 @@ const allowedOrigins = [
 ];
 
 const corsOptions = {
-  origin(origin, callback) {
-    if (!origin) {
-      return callback(null, true);
-    }
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    return callback(null, false);
-  },
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  origin: [
+    'https://app.omnia1biai.com.br',
+    'https://admin.omnia1biai.com.br'
+  ],
+  allowedHeaders: ['Content-Type', 'Authorization', 'apikey'],
   credentials: true
 };
 

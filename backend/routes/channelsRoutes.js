@@ -144,16 +144,13 @@ function normalizeChannelForApi(ch) {
  */
 router.get('/', requireActiveTenant, async (req, res) => {
   try {
-    const tenantId = req.tenantId || req.user?.tenantId;
-    if (!tenantId) {
-      return res.status(401).json({ error: 'Tenant não identificado.' });
-    }
-    const list = await channelRepo.findAllByTenant(tenantId);
-    const normalized = Array.isArray(list) ? list.map(normalizeChannelForApi) : [];
-    res.status(200).json(normalized);
+    const evolutionData = await evolutionService.checkEvolutionHealth();
+    res.status(200).json(evolutionData);
   } catch (err) {
     console.error('[channels] GET /:', err.message);
-    res.status(500).json({ error: 'Erro ao listar canais.' });
+    const status = err.response?.status || 500;
+    const payload = err.response?.data ?? { error: err.message || 'Erro ao listar canais.' };
+    res.status(status).json(payload);
   }
 });
 
@@ -273,19 +270,31 @@ router.post('/', requireActiveTenant, async (req, res) => {
       return sendBadRequest(res, 'Agente não encontrado ou não pertence ao tenant.');
     }
 
+    const instanceFromInput = String(instance || name || '')
+      .trim()
+      .replace(/\s+/g, '-');
+    const safeInstanceName = instanceFromInput || `channel-${Date.now()}`;
+
     const channel = await channelRepo.create({
       tenant_id: tenantId,
       agent_id: finalAgentId,
       type: type || 'whatsapp',
-      instance: instance || name || null,
+      instance: safeInstanceName,
       active: active ?? true,
     });
 
-    const channelWithTenant = { ...channel, tenant_id: tenantId };
-
     try {
-      const createResult = await channelConnectionService.createWhatsAppInstance(channelWithTenant);
-      let latest = createResult.channel ?? (await channelRepo.findById(channel.id, tenantId));
+      await evolutionService.createInstance(safeInstanceName);
+
+      let latest = await channelRepo.updateConnection(channel.id, tenantId, {
+        provider: 'evolution',
+        external_id: safeInstanceName,
+        status: 'inactive',
+        evolution_status: 'created',
+      });
+      if (!latest) {
+        latest = await channelRepo.findById(channel.id, tenantId);
+      }
 
       let warning = null;
       try {
@@ -335,7 +344,8 @@ router.post('/', requireActiveTenant, async (req, res) => {
         evoErr.message ||
         'Falha ao criar instância na Evolution.';
 
-      return res.status(200).json({
+      const status = evoErr.response?.status || 200;
+      return res.status(status).json({
         success: false,
         error: true,
         message: detail,
