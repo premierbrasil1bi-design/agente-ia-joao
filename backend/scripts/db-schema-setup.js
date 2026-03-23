@@ -114,10 +114,15 @@ async function waitForPostgres(pool, retries = 30, delay = 2000) {
 }
 
 /**
- * @param {{ waitForPostgres?: boolean }} options — waitForPostgres: aguardar o banco antes do schema
+ * @param {{ waitForPostgres?: boolean, bootstrapMode?: 'full' | 'safe' }} options
+ * - waitForPostgres: aguardar o banco antes do bootstrap
+ * - bootstrapMode:
+ *   - full: aplica schema.sql + schema-extensions.sql + migrations
+ *   - safe: não aplica schema base (evita DROP TABLE), aplica apenas migrations
  */
 export async function setupDatabase(options = {}) {
   const { waitForPostgres: shouldWaitForPostgres = false } = options;
+  const bootstrapMode = options.bootstrapMode === 'full' ? 'full' : 'safe';
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString || String(connectionString).trim() === '') {
     console.error('[db-setup] DATABASE_URL não definida.');
@@ -131,11 +136,16 @@ export async function setupDatabase(options = {}) {
       await waitForPostgres(pool);
     }
 
-    console.log('[db-setup] Aplicando schema.sql...');
-    await runFile(pool, path.join(dbDir, 'schema.sql'), 'schema.sql');
+    console.log(`[db-setup] modo de bootstrap: ${bootstrapMode}`);
+    if (bootstrapMode === 'full') {
+      console.log('[db-setup] Aplicando schema.sql...');
+      await runFile(pool, path.join(dbDir, 'schema.sql'), 'schema.sql');
 
-    console.log('[db-setup] Aplicando schema-extensions.sql...');
-    await runFile(pool, path.join(dbDir, 'schema-extensions.sql'), 'schema-extensions.sql');
+      console.log('[db-setup] Aplicando schema-extensions.sql...');
+      await runFile(pool, path.join(dbDir, 'schema-extensions.sql'), 'schema-extensions.sql');
+    } else {
+      console.log('[db-setup] modo safe: pulando schema.sql e schema-extensions.sql');
+    }
 
     const migrations = listMigrationFiles();
     for (const file of migrations) {
