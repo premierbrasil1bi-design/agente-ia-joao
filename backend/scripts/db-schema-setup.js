@@ -109,7 +109,8 @@ async function waitForPostgres(pool, retries = 30, delay = 2000) {
       await new Promise((res) => setTimeout(res, delay));
     }
   }
-  throw new Error('PostgreSQL não respondeu após várias tentativas');
+  console.error('PostgreSQL não respondeu, backend continuará tentando após subir');
+  return;
 }
 
 /**
