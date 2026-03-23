@@ -54,7 +54,8 @@ const allowedOrigins = [
 const corsOptions = {
   origin: [
     'https://app.omnia1biai.com.br',
-    'https://admin.omnia1biai.com.br'
+    'https://admin.omnia1biai.com.br',
+    'http://localhost:3000'
   ],
   allowedHeaders: ['Content-Type', 'Authorization', 'apikey'],
   credentials: true
