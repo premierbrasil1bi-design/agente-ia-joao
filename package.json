@@ -5,7 +5,8 @@
   "description": "Agente de IA Omni-Channel",
   "scripts": {
     "start": "npm run start --prefix backend",
-    "dev": "npm run dev --prefix backend"
+    "dev": "npm run dev --prefix backend",
+    "seed:admin": "node scripts/seed-admin.js"
   },
   "dependencies": {
     "bullmq": "^5.71.0",
