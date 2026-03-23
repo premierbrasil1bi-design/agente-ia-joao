@@ -22,13 +22,7 @@ function getClientConfig() {
     throw new Error('DATABASE_URL ausente no ambiente (.env).');
   }
 
-  if (/sslmode=disable/i.test(connectionString)) {
-    return { connectionString };
-  }
-  return {
-    connectionString,
-    ssl: { rejectUnauthorized: false },
-  };
+  return { connectionString, ssl: false };
 }
 
 async function getColumns(client) {

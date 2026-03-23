@@ -1,6 +1,6 @@
 /**
- * Cliente Neon (PostgreSQL) – conexão única reutilizável.
- * Usar DATABASE_URL no .env (connection string do Neon).
+ * Cliente PostgreSQL – conexão única reutilizável.
+ * Usa DATABASE_URL do ambiente.
  */
 
 import pg from 'pg';
@@ -17,11 +17,11 @@ export function getPool() {
   if (!pool) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
-      throw new Error('DATABASE_URL não definida no .env (Neon connection string)');
+      throw new Error('DATABASE_URL não definida no ambiente.');
     }
-    // ...REMOVIDO: criação de Pool duplicada...
+    pool = new Pool({
       connectionString,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false,
+      ssl: false,
     });
   }
   return pool;
