@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS message_embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_message_embeddings_agent_sender ON message_embeddings(agent_id, sender_id);
 
--- ivfflat index for cosine similarity search (lists = 100; increase if table grows large).
+-- ivfflat index for cosine similarity search (lists = 100, increase lists if table grows large).
 -- If this fails on empty table (some hosts), run after inserting at least a few rows.
 CREATE INDEX IF NOT EXISTS idx_message_embeddings_embedding_cosine
   ON message_embeddings USING ivfflat (embedding vector_cosine_ops)
