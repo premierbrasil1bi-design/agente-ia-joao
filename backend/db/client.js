@@ -21,7 +21,9 @@ export function getPool() {
     }
     pool = new Pool({
       connectionString,
-      ssl: false,
+      ssl: {
+        rejectUnauthorized: false,
+      },
     });
   }
   return pool;

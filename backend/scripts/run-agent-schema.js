@@ -18,7 +18,12 @@ async function main() {
     process.exit(1);
   }
 
-  const client = new pg.Client({ connectionString: process.env.DATABASE_URL, ssl: false });
+  const client = new pg.Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false,
+    },
+  });
   await client.connect();
 
   const sql = readFileSync(join(dbDir, 'schema-agent-users.sql'), 'utf8');

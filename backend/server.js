@@ -37,6 +37,8 @@ import { initEvolutionQueueInfra } from './queues/evolution.queue.js';
 import { startEvolutionWorker } from './workers/evolution.worker.js';
 import * as evolutionService from './services/evolutionService.js';
 
+console.log("DB CONNECTED:", process.env.DATABASE_URL?.includes("neon"));
+
 process.on('unhandledRejection', console.error);
 process.on('uncaughtException', console.error);
 

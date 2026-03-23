@@ -7,7 +7,12 @@ if (!process.env.DATABASE_URL) {
 }
 
 const connectionString = process.env.DATABASE_URL;
-const poolOpts = { connectionString, ssl: false };
+const poolOpts = {
+  connectionString,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+};
 
 const pool = new Pool(poolOpts);
 

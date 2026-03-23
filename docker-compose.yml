@@ -83,6 +83,7 @@ services:
   saas_backend:
     build: ./backend
     container_name: saas_backend
+    command: ["node", "server.js"]
     depends_on:
       saas_postgres:
         condition: service_healthy
@@ -92,7 +93,7 @@ services:
       NODE_ENV: production
       DB_BOOTSTRAP_MODE: safe
       REDIS_URL: redis://saas_redis:6379
-      DATABASE_URL: "postgresql://postgres:postgres@saas_postgres:5432/evolution"
+      DATABASE_URL: "postgresql://neondb_owner:npg_JC9VIyrMFo1U@ep-wandering-paper-ahogquzh.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
       EVOLUTION_API_URL: http://saas_evolution:8080
       EVOLUTION_API_KEY: default_key
     ports:

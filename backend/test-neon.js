@@ -8,7 +8,9 @@ const { Client } = pg;
 async function testConnection() {
   const client = new Client({
     connectionString: process.env.DATABASE_URL,
-    ssl: false
+    ssl: {
+      rejectUnauthorized: false
+    }
   }); // Padronizado para usar apenas DATABASE_URL
 
   try {

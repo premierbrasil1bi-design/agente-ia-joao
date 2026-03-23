@@ -15,7 +15,12 @@ const backendRoot = path.join(__dirname, '..');
 const dbDir = path.join(backendRoot, 'db');
 
 function poolOptions(connectionString) {
-  return { connectionString, ssl: false };
+  return {
+    connectionString,
+    ssl: {
+      rejectUnauthorized: false,
+    },
+  };
 }
 
 function splitSql(sql) {
