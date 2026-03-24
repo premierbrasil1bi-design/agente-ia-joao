@@ -47,6 +47,61 @@ function responseText(err) {
   }
 }
 
+/**
+ * Evolution API v2 (InstanceDto): comportamentos vêm no corpo raiz do POST /instance/create,
+ * não em um objeto "settings" aninhado — ver documentação oficial.
+ */
+function getDefaultBaileysSettings() {
+  return {
+    rejectCall: false,
+    msgCall: '',
+    groupsIgnore: false,
+    alwaysOnline: false,
+    readMessages: false,
+    readStatus: false,
+    syncFullHistory: false,
+  };
+}
+
+function stripUndefinedDeep(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (Array.isArray(value)) {
+    return value.map(stripUndefinedDeep).filter((v) => v !== undefined);
+  }
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (v === undefined) continue;
+      const cleaned = stripUndefinedDeep(v);
+      if (cleaned !== undefined) out[k] = cleaned;
+    }
+    return out;
+  }
+  return value;
+}
+
+function logEvolutionHttpError(context, err) {
+  const res = err.response;
+  console.error(
+    `[evolution-http] ${context}`,
+    JSON.stringify(
+      {
+        message: err.message,
+        code: err.code,
+        status: res?.status,
+        statusText: res?.statusText,
+        data: res?.data,
+        headers: res?.headers ? { ...res.headers } : undefined,
+        url: err.config?.url,
+        method: err.config?.method,
+      },
+      null,
+      2
+    )
+  );
+}
+
 function isTransientError(err) {
   const st = err.response?.status;
   const txt = (responseText(err) + (err.message || '')).toLowerCase();
@@ -81,31 +136,51 @@ export async function withExponentialRetry(fn, operation, instanceName) {
 }
 
 export async function createInstance(instanceName) {
+  const safeName = String(instanceName ?? '').trim();
+  if (!safeName) {
+    throw new Error('instanceName é obrigatório para criar instância na Evolution.');
+  }
+
   const baseUrl = getBaseUrl();
   const webhookUrl =
     process.env.EVOLUTION_WEBHOOK_URL || process.env.PUBLIC_EVOLUTION_WEBHOOK_URL || null;
 
-  const payload = {
-    instanceName,
+  const settings = getDefaultBaileysSettings();
+
+  const raw = {
+    instanceName: safeName,
     integration: 'WHATSAPP-BAILEYS',
+    qrcode: true,
+    ...settings,
+    ...(webhookUrl
+      ? {
+          webhook: {
+            url: String(webhookUrl).trim(),
+            byEvents: true,
+            base64: false,
+            events: ['MESSAGES_UPSERT', 'QRCODE_UPDATED', 'CONNECTION_UPDATE'],
+          },
+        }
+      : {}),
   };
 
-  if (webhookUrl) {
-    payload.webhook = {
-      url: webhookUrl,
-      events: ['messages.upsert'],
-    };
-  }
+  const payload = stripUndefinedDeep(raw);
 
-  evolutionLog('CREATE_HTTP', instanceName);
+  evolutionLog('CREATE_HTTP', safeName);
   return withExponentialRetry(
     () =>
-      axios.post(`${baseUrl}/instance/create`, payload, opts()).then((r) => {
-        evolutionLog('CREATE_HTTP_OK', instanceName);
-        return r.data;
-      }),
+      axios
+        .post(`${baseUrl}/instance/create`, payload, opts())
+        .then((r) => {
+          evolutionLog('CREATE_HTTP_OK', safeName);
+          return r.data;
+        })
+        .catch((err) => {
+          logEvolutionHttpError('POST /instance/create falhou', err);
+          throw err;
+        }),
     'CREATE',
-    instanceName
+    safeName
   );
 }
 
