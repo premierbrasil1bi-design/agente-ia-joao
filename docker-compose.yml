@@ -54,11 +54,6 @@ services:
     image: atendai/evolution-api:v2.1.1
     container_name: saas_evolution
     restart: always
-    command: >
-      sh -c "
-      npx prisma db push --accept-data-loss || true;
-      node ./dist/main.js
-      "
     depends_on:
       saas_postgres:
         condition: service_healthy
@@ -66,21 +61,26 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/sh", "/evolution-entrypoint.sh"]
     environment:
+      # Obrigatórios: a imagem chama .split() em CORS_* — valores vazios/undefined derrubam o processo.
+      SERVER_TYPE: "http"
+      SERVER_PORT: "8080"
+      SERVER_HOST: "0.0.0.0"
+      SERVER_URL: "https://evolution.omnia1biai.com.br"
+
+      CORS_ORIGIN: "*"
+      CORS_METHODS: "POST,GET,PUT,DELETE"
+      CORS_CREDENTIALS: "true"
+
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: "postgresql"
-      # Schema separado para Evolution para evitar conflito com backend
-      DATABASE_URL: "postgresql://neondb_owner:npg_JC9VIyrMFo1U@ep-wandering-paper-ahogquzh.c-3.us-east-1.aws.neon.tech/neondb?schema=evolution&sslmode=require"
-      DATABASE_CONNECTION_URI: "postgresql://neondb_owner:npg_JC9VIyrMFo1U@ep-wandering-paper-ahogquzh.c-3.us-east-1.aws.neon.tech/neondb?schema=evolution&sslmode=require"
+      DATABASE_URL: "postgresql://postgres:postgres@saas_postgres:5432/evolution"
+      DATABASE_CONNECTION_URI: "postgresql://postgres:postgres@saas_postgres:5432/evolution"
 
       CACHE_REDIS_ENABLED: "true"
       CACHE_REDIS_URI: "redis://saas_redis:6379/1"
 
       AUTHENTICATION_TYPE: "apikey"
       AUTHENTICATION_API_KEY: "default_key"
-
-      SERVER_TYPE: "http"
-      SERVER_PORT: "8080"
-      SERVER_HOST: "0.0.0.0"
 
       LOG_LEVEL: "INFO"
     ports:
