@@ -65,8 +65,9 @@ services:
     environment:
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: "postgresql"
-      DATABASE_URL: "postgresql://neondb_owner:npg_JC9VIyrMFo1U@ep-wandering-paper-ahogquzh.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require"
-      DATABASE_CONNECTION_URI: "postgresql://neondb_owner:npg_JC9VIyrMFo1U@ep-wandering-paper-ahogquzh.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require"
+      # Schema separado para Evolution para evitar conflito com backend
+      DATABASE_URL: "postgresql://neondb_owner:npg_JC9VIyrMFo1U@ep-wandering-paper-ahogquzh.c-3.us-east-1.aws.neon.tech/neondb?schema=evolution&sslmode=require"
+      DATABASE_CONNECTION_URI: "postgresql://neondb_owner:npg_JC9VIyrMFo1U@ep-wandering-paper-ahogquzh.c-3.us-east-1.aws.neon.tech/neondb?schema=evolution&sslmode=require"
 
       CACHE_REDIS_ENABLED: "true"
       CACHE_REDIS_URI: "redis://saas_redis:6379/1"
