@@ -7,7 +7,7 @@
 # Validar extensão após subir: docker compose exec saas_postgres psql -U postgres -d evolution -c "SELECT extname FROM pg_extension WHERE extname = 'vector';"
 #
 # POSTGRES_USER/PASSWORD/DB alinhados às URIs da Evolution e ao backend.
-# Evolution: atendai/evolution-api — Prisma usa DATABASE_CONNECTION_URI (sem DATABASE_URL duplicado).
+# Evolution: imagem e versão detalhadas no bloco saas_evolution (Prisma usa DATABASE_CONNECTION_URI).
 # saas_backend: API + worker BullMQ na rede Docker (REDIS_URL → saas_redis; Postgres interno sem TLS).
 #
 # Reset dev (apaga dados): docker compose down -v && docker compose pull && docker compose up -d
@@ -47,8 +47,11 @@ services:
     ports:
       - "6379:6379"
 
+  # Evolution API: trocado de evoapicloud/evolution-api:v2.2.3 para atendai/evolution-api:v2.1.1 porque a
+  # v2.2.3 falhava na criação de instâncias (erro interno ao ler connectionStatus.state indefinido). A v2.1.1
+  # (atendai) mantém integração estável com WHATSAPP-BAILEYS (Baileys) e fluxo de QR/pairing sem impactar Neon/Redis.
   saas_evolution:
-    image: evoapicloud/evolution-api:v2.2.3
+    image: atendai/evolution-api:v2.1.1
     container_name: saas_evolution
     restart: always
     command: >
