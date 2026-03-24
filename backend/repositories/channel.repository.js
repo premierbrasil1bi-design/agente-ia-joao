@@ -5,7 +5,7 @@
 
 import { pool } from '../db/pool.js';
 
-const CHANNEL_SELECT = `id, tenant_id, agent_id, type, instance, is_active AS active,
+const CHANNEL_SELECT = `id, tenant_id, agent_id, name, type, instance, is_active AS active,
   provider, config, external_id, connected_at, last_error, status, evolution_status,
   created_at, updated_at`;
 
@@ -25,8 +25,18 @@ export async function findById(id, tenantId) {
   return rows[0] ?? null;
 }
 
+/** Evita duplicate key em idx_channels_type_instance (mesmo tenant, mesmo type+instance). */
+export async function findByTenantTypeAndInstance(tenantId, type, instance) {
+  if (!tenantId || !type || instance == null || String(instance).trim() === '') return null;
+  const { rows } = await pool.query(
+    `SELECT ${CHANNEL_SELECT} FROM channels WHERE tenant_id = $1 AND type = $2 AND instance = $3 LIMIT 1`,
+    [tenantId, String(type).toLowerCase().trim(), String(instance).trim()]
+  );
+  return rows[0] ?? null;
+}
+
 /**
- * @param {Object} data - { tenant_id, agent_id, type, instance?, active? }
+ * @param {Object} data - { tenant_id, agent_id, type, instance?, name?, active? }
  */
 export async function create(data) {
   const tenantId = data.tenant_id;
@@ -34,7 +44,10 @@ export async function create(data) {
   const type = String(data.type || 'api').toLowerCase().trim();
   const instance = data.instance != null ? String(data.instance).trim() : null;
   const active = data.active !== undefined ? Boolean(data.active) : true;
-  const name = (instance || type).slice(0, 100);
+  const name =
+    data.name != null && String(data.name).trim() !== ''
+      ? String(data.name).trim().slice(0, 100)
+      : (instance || type).slice(0, 100);
 
   const { rows } = await pool.query(
     `INSERT INTO channels (tenant_id, agent_id, name, type, instance, is_active)

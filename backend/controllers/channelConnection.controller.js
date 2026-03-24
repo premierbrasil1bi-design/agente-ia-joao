@@ -6,7 +6,11 @@
 import * as channelRepo from '../repositories/channel.repository.js';
 import * as channelConnectionService from '../services/channelConnection.service.js';
 import { sendNotFound } from '../utils/errorResponses.js';
+import {
+  extractConnectArtifactFromPayload,
+} from '../services/channelConnection.service.js';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
+import { deriveFlowPhase } from '../utils/whatsappChannelFlow.js';
 
 async function getChannelFromReq(req, res) {
   const tenantId = req.tenantId || req.user?.tenantId;
@@ -35,14 +39,24 @@ export async function connectChannel(req, res) {
     console.log('[CONNECT_CHANNEL] channelId:', channel.id, 'tenantId:', channel.tenant_id);
     const result = await channelConnectionService.connectWhatsAppChannel(channel);
 
+    const { artifactType, artifact } = extractConnectArtifactFromPayload(result.connectResponse);
+    const flowPhase = deriveFlowPhase(result.channel);
+
     res.status(200).json({
       success: true,
+      channelId: result.channel.id,
       instance: result.instanceName,
-      evolution: {
-        create: result.createResponse,
-        connect: result.connectResponse,
-      },
+      status: flowPhase,
+      artifactType,
+      artifact,
       channel: result.channel,
+      skippedDueToCooldown: Boolean(result.connectResponse?.skippedDueToCooldown),
+      ...(result.connectResponse?.skippedDueToCooldown
+        ? {
+            message:
+              'A conexão do WhatsApp ainda está aguardando QR ou código. Aguarde alguns segundos antes de tentar de novo.',
+          }
+        : {}),
     });
   } catch (err) {
     console.error('[channelConnection] connectChannel:', err.message, err.response?.status || err.code || '');
@@ -50,7 +64,7 @@ export async function connectChannel(req, res) {
       return res.status(200).json({
         success: false,
         error: true,
-        message: err.message || 'Instance not created',
+        message: err.userMessage || err.message || 'Instance not created',
         code: 'INSTANCE_NOT_FOUND',
       });
     }
@@ -109,7 +123,7 @@ export async function getStatus(req, res) {
     const channel = await getChannelFromReq(req, res);
     if (!channel) return;
 
-    console.log('[CHECK_STATUS] channelId:', channel.id);
+    console.log('[WHATSAPP_STATUS] check', { channelId: channel.id, tenantId: channel.tenant_id });
     const result = await channelConnectionService.getChannelStatus(channel);
 
     if (result.instanceNotFound) {
@@ -126,16 +140,27 @@ export async function getStatus(req, res) {
         success: true,
         status: 'disconnected',
         normalizedStatus: 'offline',
+        publicStatus: 'inactive',
         evolutionOffline: true,
-        message: 'Serviço temporariamente indisponível'
+        message: 'Serviço temporariamente indisponível',
       });
     }
 
     const rawState = result.state?.state ?? result.state?.instance?.state ?? null;
+    const publicStatus = result.publicStatus ?? result.normalizedStatus;
+    let userMessage = null;
+    const ps = String(publicStatus || '').toLowerCase();
+    if (ps === 'connected') userMessage = 'Canal já conectado.';
+    else if (ps === 'awaiting_connection') {
+      userMessage = 'A conexão do WhatsApp ainda está aguardando QR ou código.';
+    }
+
     res.status(200).json({
       success: true,
       status: result.normalizedStatus,
       normalizedStatus: result.normalizedStatus,
+      publicStatus,
+      userMessage,
       evolutionState: rawState,
       channel: result.channel,
       recreated: Boolean(result.recreated),
@@ -148,6 +173,58 @@ export async function getStatus(req, res) {
       normalizedStatus: 'offline',
       evolutionOffline: true,
       message: 'Serviço temporariamente indisponível'
+    });
+  }
+}
+
+export async function getConnectionArtifact(req, res) {
+  try {
+    const channel = await getChannelFromReq(req, res);
+    if (!channel) return;
+
+    console.log('[WHATSAPP_ARTIFACT] GET handler', {
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+    });
+    const out = await channelConnectionService.getChannelConnectionArtifact(channel);
+
+    if (out.status === 'connected') {
+      return res.status(200).json({
+        success: true,
+        ...out,
+        message: 'Canal já conectado.',
+      });
+    }
+
+    if (out.status === 'error') {
+      return res.status(200).json({
+        success: false,
+        error: true,
+        message: 'Não foi possível obter o artefato de conexão.',
+        ...out,
+      });
+    }
+
+    if (!out.artifact && out.status === 'awaiting_connection') {
+      return res.status(200).json({
+        success: true,
+        ...out,
+        message: 'A conexão do WhatsApp ainda está aguardando QR ou código.',
+      });
+    }
+
+    res.status(200).json({ success: true, ...out });
+  } catch (err) {
+    console.error('[channelConnection] getConnectionArtifact:', err.message);
+    if (isEvolutionOffline(err)) {
+      return res.status(503).json({
+        success: false,
+        error: 'Evolution API está offline ou inacessível.',
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Erro ao obter artefato de conexão.',
     });
   }
 }

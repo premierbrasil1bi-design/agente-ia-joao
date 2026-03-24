@@ -52,7 +52,10 @@ export function startEvolutionWorker() {
         case EVOLUTION_JOB.CREATE:
           return wrap('CREATE', d.instanceName, () => http.createInstance(d.instanceName));
         case EVOLUTION_JOB.CONNECT:
-          return wrap('CONNECT', d.instanceName, () => http.connectInstance(d.instanceName));
+          if (d.reset === true) {
+            return wrap('CONNECT_RESET', d.instanceName, () => http.connectInstanceWithReset(d.instanceName));
+          }
+          return wrap('CONNECT_SOFT', d.instanceName, () => http.connectInstanceSoft(d.instanceName));
         case EVOLUTION_JOB.QRCODE:
           return wrap('QRCODE', d.instanceName, () => http.getQRCode(d.instanceName));
         case EVOLUTION_JOB.DELETE:

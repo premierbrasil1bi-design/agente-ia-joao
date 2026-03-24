@@ -11,100 +11,40 @@ import { sendBadRequest, sendNotFound } from '../utils/errorResponses.js';
 import { pool } from '../db/pool.js';
 import * as channelConnectionService from '../services/channelConnection.service.js';
 import * as evolutionService from '../services/evolutionService.js';
+import * as evolutionProvision from '../services/evolutionProvision.service.js';
 import { normalizeEvolutionState } from '../utils/evolutionState.js';
+import {
+  deriveFlowPhase,
+  nextActionForChannel,
+  WHATSAPP_PHASE,
+  mergeWhatsappConfig,
+} from '../utils/whatsappChannelFlow.js';
 import { invalidateTenantChannels } from '../utils/channelCache.js';
-import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
+import { mapEvolutionStatus, toEvolutionStatusColumn } from '../utils/mapEvolutionStatus.js';
 
 const router = Router();
 
-/** Valor para `connection.qrCode`: base64 cru da Evolution ou data URL para `<img src>`. */
-function qrCodeForConnection(qrRaw) {
-  if (qrRaw == null) return null;
-  if (typeof qrRaw === 'object' && typeof qrRaw.base64 === 'string' && qrRaw.base64.trim()) {
-    return qrRaw.base64.trim();
-  }
-  return toQrDataUrl(extractQrPayload(qrRaw));
-}
-
-/** Estado bruto da Evolution no objeto retornado por getChannelStatus. */
-function rawEvolutionStateFromStatusResult(statusResult) {
-  const st = statusResult?.state;
-  if (st == null) return null;
-  return st.state ?? st.instance?.state ?? null;
-}
-
-/**
- * 'fetch_qr' = pode chamar getChannelQrCode; 'wait' = só aguardar; 'already_connected' = pareado, sem QR.
- */
-function classifyStatusForQr(statusResult) {
-  if (statusResult?.evolutionOffline || statusResult?.instanceNotFound) {
-    return 'wait';
-  }
-
-  const ns = String(statusResult?.normalizedStatus || '').toLowerCase();
-  const raw = rawEvolutionStateFromStatusResult(statusResult);
-  const rawLower = raw != null ? String(raw).trim().toLowerCase() : '';
-
-  if (ns === 'connected' || rawLower === 'open') {
-    return 'already_connected';
-  }
-
-  const ready =
-    ns === 'connecting' ||
-    ns === 'qr' ||
-    rawLower === 'connecting' ||
-    rawLower === 'qr';
-
-  if (ready) return 'fetch_qr';
-  return 'wait';
-}
-
-/**
- * Repete status → (se pronto) QR até obter payload exibível (máx. 10 tentativas, 1s entre cada).
- * Evita getChannelQrCode enquanto a Evolution não estiver em connecting/qr.
- */
-async function waitForQrCode(channel, maxAttempts = 10, delayMs = 1000) {
-  const id = channel.id;
-  const tenantId = channel.tenant_id;
-
-  for (let i = 0; i < maxAttempts; i++) {
-    const ch = await channelRepo.findById(id, tenantId);
-    if (!ch) return { qrCode: null, alreadyConnected: false };
-
-    try {
-      const statusResult = await channelConnectionService.getChannelStatus(ch);
-      const channelForQr = statusResult.channel ?? ch;
-
-      const phase = classifyStatusForQr(statusResult);
-      if (phase === 'already_connected') {
-        return { qrCode: null, alreadyConnected: true };
-      }
-
-      if (phase === 'wait') {
-        if (i < maxAttempts - 1) {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-        }
-        continue;
-      }
-
-      const qrRaw = await channelConnectionService.getChannelQrCode(channelForQr);
-      const code = qrCodeForConnection(qrRaw);
-      if (code) {
-        return { qrCode: code, alreadyConnected: false };
-      }
-    } catch {
-      /* próxima tentativa após delay */
-    }
-
-    if (i < maxAttempts - 1) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-  }
-
-  return { qrCode: null, alreadyConnected: false };
-}
-
 router.use(agentAuth);
+
+/**
+ * GET /api/channels/evolution-instances
+ * Proxy de GET /instance/fetchInstances — lista instâncias já criadas na Evolution (seleção no Client App).
+ * Deve ficar antes de GET /:id para não capturar "evolution-instances" como id.
+ */
+router.get('/evolution-instances', requireActiveTenant, async (req, res) => {
+  try {
+    const data = await evolutionService.fetchEvolutionInstances();
+    const instanceNames = [...channelConnectionService.collectInstanceNamesFromFetch(data)].sort();
+    res.status(200).json({ evolution: data, instanceNames });
+  } catch (err) {
+    console.error('[channels] GET /evolution-instances:', err.message);
+    const status = err.response?.status || 502;
+    res.status(status).json({
+      error: err.message || 'Erro ao listar instâncias na Evolution.',
+      details: err.response?.data ?? null,
+    });
+  }
+});
 
 /** Status de UI para WhatsApp (Evolution): alinha evolution_status + status interno active/inactive. */
 function evolutionUiStatus(ch) {
@@ -137,26 +77,38 @@ function normalizeChannelForApi(ch) {
   return { ...ch, type };
 }
 
+/** Inclui flowPhase / nextAction para WhatsApp (SaaS). */
+function enrichChannelForApi(ch) {
+  const base = normalizeChannelForApi(ch);
+  const t = (base.type || ch.type || '').toLowerCase();
+  if (t === 'whatsapp') {
+    base.flowPhase = deriveFlowPhase(ch);
+    base.nextAction = nextActionForChannel(ch);
+  }
+  return base;
+}
+
 /**
  * GET /api/channels (e GET /api/agent/channels – mesma rota)
- * Retorna todos os canais do tenant do usuário logado.
- * Garante que cada item inclua o campo "type" para o frontend exibir os botões WhatsApp.
+ * Lista canais do tenant no banco. Para instâncias na Evolution use GET /evolution-instances.
  */
 router.get('/', requireActiveTenant, async (req, res) => {
   try {
-    const evolutionData = await evolutionService.checkEvolutionHealth();
-    res.status(200).json(evolutionData);
+    const tenantId = req.tenantId || req.user?.tenantId;
+    if (!tenantId) {
+      return res.status(401).json({ error: 'Tenant não identificado.' });
+    }
+    const rows = await channelRepo.findAllByTenant(tenantId);
+    res.status(200).json(rows.map((ch) => enrichChannelForApi(ch)));
   } catch (err) {
     console.error('[channels] GET /:', err.message);
-    const status = err.response?.status || 500;
-    const payload = err.response?.data ?? { error: err.message || 'Erro ao listar canais.' };
-    res.status(status).json(payload);
+    res.status(500).json({ error: err.message || 'Erro ao listar canais.' });
   }
 });
 
 /**
  * POST /api/channels/:id/create-instance
- * Criação manual da instância na Evolution (não automática em connect/status).
+ * Compat: redireciona para o fluxo de provisionamento automático.
  */
 router.post('/:id/create-instance', requireActiveTenant, async (req, res) => {
   try {
@@ -164,55 +116,57 @@ router.post('/:id/create-instance', requireActiveTenant, async (req, res) => {
     if (!tenantId) {
       return res.status(401).json({ error: 'Tenant não identificado.' });
     }
-
-    const channel = await channelRepo.findById(req.params.id, tenantId);
-    if (!channel) {
-      return sendNotFound(res, 'Canal não encontrado.');
+    const result = await evolutionProvision.provisionWhatsAppInstance(req.params.id, tenantId);
+    if (!result.ok) {
+      return res.status(400).json({ success: false, error: true, message: result.error });
     }
-
-    const ext = channel.external_id != null ? String(channel.external_id).trim() : '';
-    if (ext) {
-      return res.status(200).json({
-        success: false,
-        error: true,
-        message: 'Instance already exists',
-      });
-    }
-
-    const result = await channelConnectionService.createWhatsAppInstance({
-      ...channel,
-      tenant_id: tenantId,
-    });
-
-    if (result.createResponse?.skipped && result.createResponse?.reason === 'instance_already_exists') {
-      return res.status(200).json({
-        success: false,
-        error: true,
-        message: 'Instance already exists',
-      });
-    }
-
+    const ch = await channelRepo.findById(req.params.id, tenantId);
     return res.status(200).json({
       success: true,
-      message: 'Instance created successfully',
-      instanceName: result.instanceName,
+      channel: enrichChannelForApi(ch),
+      skipped: Boolean(result.skipped),
+      ...(result.reason ? { reason: result.reason } : {}),
+      nextAction: 'connect',
+      legacyAlias: true,
     });
   } catch (err) {
-    console.error('[channels] POST /:id/create-instance:', err.message);
-    const axStatus = err.response?.status;
-    const detail =
-      err.response?.data?.message || err.response?.data?.error || err.message || 'Falha ao criar instância.';
-    if (axStatus === 409) {
-      return res.status(200).json({
+    console.error('[channels] create-instance:', err.message);
+    return res.status(500).json({ success: false, error: true, message: 'Erro ao provisionar.' });
+  }
+});
+
+/**
+ * POST /api/channels/:id/provision-instance
+ * Provisiona instância na Evolution (após POST /channels em modo SaaS).
+ */
+router.post('/:id/provision-instance', requireActiveTenant, async (req, res) => {
+  try {
+    const tenantId = req.tenantId || req.user?.tenantId;
+    if (!tenantId) {
+      return res.status(401).json({ error: 'Tenant não identificado.' });
+    }
+    const result = await evolutionProvision.provisionWhatsAppInstance(req.params.id, tenantId);
+    if (!result.ok) {
+      return res.status(400).json({
         success: false,
         error: true,
-        message: 'Instance already exists',
+        message: result.error || 'Não foi possível provisionar a instância do WhatsApp.',
       });
     }
-    return res.status(502).json({
+    const ch = await channelRepo.findById(req.params.id, tenantId);
+    return res.status(200).json({
+      success: true,
+      channel: enrichChannelForApi(ch),
+      skipped: Boolean(result.skipped),
+      ...(result.reason ? { reason: result.reason } : {}),
+      nextAction: 'connect',
+    });
+  } catch (err) {
+    console.error('[channels] provision-instance:', err.message);
+    return res.status(500).json({
       success: false,
       error: true,
-      message: detail,
+      message: 'Não foi possível provisionar a instância do WhatsApp.',
     });
   }
 });
@@ -231,7 +185,7 @@ router.get('/:id', requireActiveTenant, async (req, res) => {
     if (!channel) {
       return sendNotFound(res, 'Canal não encontrado.');
     }
-    res.status(200).json(normalizeChannelForApi(channel));
+    res.status(200).json(enrichChannelForApi(channel));
   } catch (err) {
     console.error('[channels] GET /:id:', err.message);
     res.status(500).json({ error: 'Erro ao buscar canal.' });
@@ -240,13 +194,8 @@ router.get('/:id', requireActiveTenant, async (req, res) => {
 
 /**
  * POST /api/channels
- * Cria o canal no banco e, em seguida, fluxo Evolution: instância (se não existir) → connect → QR.
- * Não remove o canal se a Evolution falhar na criação da instância.
- *
- * Body recomendado (Client App):
- *   { name, agentId }
- *
- * Compatibilidade: ainda aceita { type, instance, agent_id, active }.
+ * WhatsApp (SaaS): cria só o registro; provisionamento em POST /:id/provision-instance.
+ * WhatsApp (legado): com `instance` preenchido, valida instância na Evolution e persiste vínculo (sem create na Evolution aqui).
  */
 router.post('/', requireActiveTenant, async (req, res) => {
   try {
@@ -270,88 +219,112 @@ router.post('/', requireActiveTenant, async (req, res) => {
       return sendBadRequest(res, 'Agente não encontrado ou não pertence ao tenant.');
     }
 
-    const instanceFromInput = String(instance || name || '')
-      .trim()
-      .replace(/\s+/g, '-');
-    const safeInstanceName = instanceFromInput || `channel-${Date.now()}`;
+    const channelType = String(type || 'whatsapp').toLowerCase().trim();
+    const normalizedInstance =
+      instance != null && String(instance).trim() !== ''
+        ? String(instance).trim().replace(/\s+/g, '-')
+        : '';
 
-    const channel = await channelRepo.create({
-      tenant_id: tenantId,
-      agent_id: finalAgentId,
-      type: type || 'whatsapp',
-      instance: safeInstanceName,
-      active: active ?? true,
-    });
+    const displayName =
+      name != null && String(name).trim() !== ''
+        ? String(name).trim().slice(0, 100)
+        : (normalizedInstance || channelType).slice(0, 100);
 
+    if (channelType === 'whatsapp' && !normalizedInstance) {
+      if (!displayName || displayName === channelType) {
+        return sendBadRequest(res, 'Informe o nome do canal.');
+      }
+    }
+
+    if (channelType === 'whatsapp' && normalizedInstance) {
+      const exists = await channelConnectionService.evolutionInstanceExists(normalizedInstance);
+      if (!exists) {
+        return sendBadRequest(
+          res,
+          'Instância não encontrada na Evolution. Verifique o nome ou use o fluxo automático sem informar instância.'
+        );
+      }
+      const dup = await channelRepo.findByTenantTypeAndInstance(tenantId, channelType, normalizedInstance);
+      if (dup) {
+        return sendBadRequest(
+          res,
+          'Já existe um canal neste tenant com este tipo e nome de instância.'
+        );
+      }
+    }
+
+    const instanceForDb =
+      channelType === 'whatsapp'
+        ? normalizedInstance || null
+        : normalizedInstance || null;
+
+    let channel;
     try {
-      await evolutionService.createInstance(safeInstanceName);
-
-      let latest = await channelRepo.updateConnection(channel.id, tenantId, {
-        provider: 'evolution',
-        external_id: safeInstanceName,
-        status: 'inactive',
-        evolution_status: 'created',
+      channel = await channelRepo.create({
+        tenant_id: tenantId,
+        agent_id: finalAgentId,
+        type: channelType,
+        instance:
+          instanceForDb != null
+            ? instanceForDb
+            : channelType === 'whatsapp'
+              ? null
+              : displayName.slice(0, 100),
+        name: displayName,
+        active: active ?? true,
       });
-      if (!latest) {
-        latest = await channelRepo.findById(channel.id, tenantId);
+    } catch (insErr) {
+      if (insErr.code === '23505') {
+        return sendBadRequest(
+          res,
+          'Já existe um canal com este tipo e instância (restrição única no banco).'
+        );
       }
+      throw insErr;
+    }
 
-      let warning = null;
-      try {
-        const connectResult = await channelConnectionService.connectWhatsAppChannel(latest);
-        latest = connectResult.channel ?? latest;
-      } catch (connErr) {
-        console.error('[channels] POST / connect:', connErr.message);
-        warning = connErr.message || 'Falha ao iniciar conexão com a Evolution.';
-        latest = await channelRepo.findById(channel.id, tenantId);
-      }
-
-      let qrCode = null;
-      try {
-        const qrOutcome = await waitForQrCode(latest);
-        qrCode = qrOutcome.qrCode;
-        if (!qrCode && !qrOutcome.alreadyConnected) {
-          warning =
-            warning ||
-            'QR Code ainda não disponível após várias tentativas. Atualize a tela ou use o fluxo de conexão.';
-        }
-      } catch (qrErr) {
-        console.error('[channels] POST / qrcode:', qrErr.message);
-        warning = warning || qrErr.message || 'Falha ao obter QR Code.';
-      }
-
+    if (channelType !== 'whatsapp') {
       invalidateTenantChannels(tenantId);
+      const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
+      return res.status(200).json({ success: true, channel: full });
+    }
 
-      const fullChannel = normalizeChannelForApi(await channelRepo.findById(channel.id, tenantId));
-
+    if (normalizedInstance) {
+      const cfgLegacy = mergeWhatsappConfig({}, {
+        phase: WHATSAPP_PHASE.AWAITING_CONNECTION,
+      });
+      await channelRepo.updateConnection(channel.id, tenantId, {
+        provider: 'evolution',
+        external_id: normalizedInstance,
+        instance: normalizedInstance,
+        status: mapEvolutionStatus('disconnected'),
+        evolution_status: toEvolutionStatusColumn('close'),
+        config: cfgLegacy,
+        last_error: null,
+      });
+      invalidateTenantChannels(tenantId);
+      const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
       return res.status(200).json({
         success: true,
-        channel: fullChannel,
-        connection: {
-          status: 'connecting',
-          qrCode,
-        },
-        ...(warning ? { warning } : {}),
-      });
-    } catch (evoErr) {
-      console.error('[channels] POST / evolution:', evoErr.message);
-      const fresh = await channelRepo.findById(channel.id, tenantId);
-      const axData = evoErr.response?.data;
-      const detail =
-        (typeof axData === 'string' && axData) ||
-        axData?.message ||
-        axData?.error ||
-        evoErr.message ||
-        'Falha ao criar instância na Evolution.';
-
-      const status = evoErr.response?.status || 200;
-      return res.status(status).json({
-        success: false,
-        error: true,
-        message: detail,
-        channel: normalizeChannelForApi(fresh),
+        channel: full,
+        nextAction: 'connect',
+        mode: 'legacy_instance',
       });
     }
+
+    const cfgDraft = mergeWhatsappConfig({}, { phase: WHATSAPP_PHASE.DRAFT });
+    await channelRepo.updateConnection(channel.id, tenantId, {
+      config: cfgDraft,
+      last_error: null,
+    });
+
+    invalidateTenantChannels(tenantId);
+    const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
+    return res.status(200).json({
+      success: true,
+      channel: full,
+      nextAction: 'provision_instance',
+    });
   } catch (err) {
     console.error('[channels] POST /:', err.message);
     res.status(500).json({ error: 'Erro ao criar canal.' });

@@ -5,6 +5,11 @@ export const channelsService = {
     return agentApi.request('/api/agent/channels');
   },
 
+  /** Instâncias já existentes na Evolution (proxy fetchInstances). */
+  listEvolutionInstances() {
+    return agentApi.request('/api/channels/evolution-instances');
+  },
+
   createChannel(payload) {
     return agentApi.request('/api/channels', {
       method: 'POST',
@@ -28,6 +33,18 @@ export const channelsService = {
   connectChannel(channelId) {
     return agentApi.request(`/api/channels/${channelId}/connect`, {
       method: 'POST',
+    });
+  },
+
+  provisionInstance(channelId) {
+    return agentApi.request(`/api/channels/${channelId}/provision-instance`, {
+      method: 'POST',
+    });
+  },
+
+  getConnectionArtifact(channelId) {
+    return agentApi.request(`/api/channels/${channelId}/connection-artifact`, {
+      method: 'GET',
     });
   },
 

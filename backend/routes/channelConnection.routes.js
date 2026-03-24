@@ -9,6 +9,7 @@ import {
   connectChannel,
   getQrCode,
   getStatus,
+  getConnectionArtifact,
   disconnectChannel,
 } from '../controllers/channelConnection.controller.js';
 
@@ -16,6 +17,7 @@ const router = Router();
 
 router.post('/:id/connect', connectChannel);
 router.get('/:id/qrcode', getQrCode);
+router.get('/:id/connection-artifact', getConnectionArtifact);
 router.get('/:id/status', getStatus);
 router.post('/:id/disconnect', disconnectChannel);
 

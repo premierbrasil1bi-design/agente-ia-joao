@@ -10,6 +10,7 @@ import {
   EVOLUTION_JOB,
   addEvolutionJobAndWait,
 } from '../queues/evolution.queue.js';
+import { fetchEvolutionInstancesWithCache, invalidateEvolutionInstancesCache } from './evolutionInstancesCache.js';
 
 const breaker = new EvolutionCircuitBreaker({
   failureThreshold: parseInt(process.env.EVOLUTION_CIRCUIT_FAILURES || '5', 10),
@@ -29,19 +30,23 @@ export async function createInstance(instanceName) {
 }
 
 /**
+ * Inicia sessão WhatsApp. Por padrão **sem** logout prévio (fluxo SaaS).
+ * Use { reset: true } só para reset explícito.
+ */
+export async function connectInstance(instanceName, options = {}) {
+  const reset = options?.reset === true;
+  evolutionLog(reset ? 'CONNECT_RESET' : 'CONNECT_SOFT', instanceName);
+  return throughQueue(EVOLUTION_JOB.CONNECT, { instanceName, reset }, { timeoutMs: 180000 });
+}
+
+export { invalidateEvolutionInstancesCache };
+
+/**
  * GET /instance/logout/:instance — se 405, tenta DELETE (versões antigas).
  */
 export async function disconnectInstance(instanceName) {
   evolutionLog('DISCONNECT', instanceName);
   return throughQueue(EVOLUTION_JOB.DISCONNECT, { instanceName }, { timeoutMs: 90000 });
-}
-
-/**
- * Fluxo obrigatório: disconnect (ignora erro) → connect — evita instância presa em "close".
- */
-export async function connectInstance(instanceName) {
-  evolutionLog('CONNECT', instanceName);
-  return throughQueue(EVOLUTION_JOB.CONNECT, { instanceName }, { timeoutMs: 180000 });
 }
 
 /**
@@ -87,10 +92,20 @@ export async function sendText(instance, number, text) {
   );
 }
 
-/**
- * Health real: GET /instance/fetchInstances (via fila).
- */
-export async function checkEvolutionHealth() {
+async function fetchInstancesUncached() {
   evolutionLog('HEALTH', null);
   return throughQueue(EVOLUTION_JOB.HEALTH, {}, { timeoutMs: 35000 });
+}
+
+/**
+ * GET /instance/fetchInstances (via fila) — lista instâncias na Evolution.
+ * Usa cache Redis (TTL 10–30s) + singleflight para reduzir carga e latência.
+ */
+export async function checkEvolutionHealth() {
+  return fetchEvolutionInstancesWithCache(fetchInstancesUncached);
+}
+
+/** Alias semântico para listagem usada ao associar canais a instâncias existentes. */
+export async function fetchEvolutionInstances() {
+  return checkEvolutionHealth();
 }

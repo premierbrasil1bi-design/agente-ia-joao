@@ -276,10 +276,18 @@ export function Channels() {
   const [name, setName] = useState('');
   const [agentId, setAgentId] = useState('');
   const [channelType, setChannelType] = useState('whatsapp');
+  const [evolutionInstanceNames, setEvolutionInstanceNames] = useState([]);
+  const [whatsappInstanceSelect, setWhatsappInstanceSelect] = useState('');
+  const [whatsappInstanceManual, setWhatsappInstanceManual] = useState('');
   const [qrCode, setQrCode] = useState(null);
   const [loadingCreate, setLoadingCreate] = useState(false);
   const [loadingQr, setLoadingQr] = useState(null);
   const [loadingConnectId, setLoadingConnectId] = useState(null);
+  const [loadingProvisionId, setLoadingProvisionId] = useState(null);
+  const [whatsappAdvanced, setWhatsappAdvanced] = useState(false);
+  const [pairingModal, setPairingModal] = useState(null);
+  const [connectStepMessage, setConnectStepMessage] = useState('');
+  const artifactPollRefs = useRef({});
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
@@ -303,27 +311,161 @@ export function Channels() {
     setAgents(Array.isArray(data) ? data : []);
   }
 
+  useEffect(() => {
+    if (channelType !== 'whatsapp' || !whatsappAdvanced) {
+      setEvolutionInstanceNames([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await channelsService.listEvolutionInstances();
+        if (!cancelled && data?.instanceNames && Array.isArray(data.instanceNames)) {
+          setEvolutionInstanceNames(data.instanceNames);
+        }
+      } catch (e) {
+        console.warn('[channels] listEvolutionInstances:', e.message);
+        if (!cancelled) setEvolutionInstanceNames([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [channelType, whatsappAdvanced]);
+
+  function stopArtifactPolling(channelId) {
+    const id = channelId;
+    if (artifactPollRefs.current[id]) {
+      clearInterval(artifactPollRefs.current[id]);
+      delete artifactPollRefs.current[id];
+    }
+  }
+
+  function applyArtifactPayload(channelId, data) {
+    if (data?.artifactType === 'pairing_code' && data?.artifact) {
+      const code = String(data.artifact).trim();
+      setPairingModal({ code, channelId });
+      sessionStorage.setItem(`pairing_${channelId}`, code);
+      setQrCode(null);
+      return;
+    }
+    const src = data?.artifact || data?.qr || data?.qrcode;
+    if (!src || (typeof src === 'string' && !src.trim())) return;
+    const raw = typeof src === 'string' ? src : src?.base64 ?? src?.code ?? '';
+    if (!raw || (typeof raw === 'string' && !raw.trim())) return;
+    const qr =
+      raw.startsWith('data:image') || /^https?:\/\//i.test(raw)
+        ? raw
+        : `data:image/png;base64,${raw.replace(/^data:image\/\w+;base64,/, '')}`;
+    sessionStorage.setItem(`qr_${channelId}`, qr);
+    setQrCode(qr);
+    setPairingModal(null);
+  }
+
+  async function runSaasProvisionConnect(channelId) {
+    setLoadingProvisionId(channelId);
+    setConnectStepMessage('Preparando instância…');
+    try {
+      await channelsService.provisionInstance(channelId);
+      setConnectStepMessage('Aguardando conexão…');
+      const cr = await channelsService.connectChannel(channelId);
+      if (cr?.skippedDueToCooldown) {
+        toast(cr?.message || 'Aguarde alguns segundos antes de conectar de novo.');
+      }
+      if (cr?.artifactType && cr?.artifact) {
+        applyArtifactPayload(channelId, cr);
+      }
+      startArtifactPolling(channelId);
+      startPolling(channelId);
+      await loadChannels();
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'Erro no fluxo do WhatsApp.');
+    } finally {
+      setLoadingProvisionId(null);
+      setConnectStepMessage('');
+    }
+  }
+
+  function startArtifactPolling(channelId) {
+    if (artifactPollRefs.current[channelId]) return;
+    artifactPollRefs.current[channelId] = setInterval(async () => {
+      try {
+        const d = await channelsService.getConnectionArtifact(channelId);
+        if (String(d.status || '').toLowerCase() === 'connected') {
+          stopArtifactPolling(channelId);
+          await loadChannels();
+          toast.success('WhatsApp conectado.');
+          setQrCode(null);
+          setPairingModal(null);
+          return;
+        }
+        if (d.artifactType && d.artifact) {
+          applyArtifactPayload(channelId, d);
+        }
+      } catch (e) {
+        console.warn('[channels] artifact poll:', e.message);
+      }
+    }, 2800);
+  }
+
   async function createChannel() {
-    if (!name || !agentId) {
+    if (!agentId) {
+      toast.error('Selecione um agente');
+      return;
+    }
+    if (channelType === 'whatsapp') {
+      if (!name.trim()) {
+        toast.error('Informe o nome do canal');
+        return;
+      }
+      if (whatsappAdvanced) {
+        const instRaw = (whatsappInstanceManual || whatsappInstanceSelect || '').trim();
+        if (!instRaw) {
+          toast.error('No modo avançado, informe ou selecione a instância Evolution.');
+          return;
+        }
+      }
+    } else if (!name || !agentId) {
       toast.error('Preencha todos os campos');
       return;
     }
 
     setLoadingCreate(true);
     try {
-      const data = await channelsService.createChannel({ name, agentId, type: channelType });
+      const payload = {
+        name: name.trim(),
+        agentId,
+        type: channelType,
+      };
+      if (channelType === 'whatsapp' && whatsappAdvanced) {
+        const inst = (whatsappInstanceManual || whatsappInstanceSelect || '').trim().replace(/\s+/g, '-');
+        payload.instance = inst;
+      }
 
-      toast.success('Canal criado com sucesso');
+      const data = await channelsService.createChannel(payload);
+      const newId = data?.channel?.id;
+      const next = data?.nextAction;
 
       setShowModal(false);
       setName('');
       setAgentId('');
       setChannelType('whatsapp');
+      setWhatsappInstanceSelect('');
+      setWhatsappInstanceManual('');
+      setWhatsappAdvanced(false);
 
       await loadChannels();
 
-      if (data?.channel?.id) {
-        startPolling(data.channel.id);
+      if (newId && channelType === 'whatsapp' && next === 'provision_instance') {
+        toast.success('Canal criado. Preparando WhatsApp…');
+        await runSaasProvisionConnect(newId);
+      } else if (newId && channelType === 'whatsapp' && next === 'connect') {
+        toast.success('Canal criado. Iniciando conexão…');
+        await connectThenQr(newId);
+      } else {
+        toast.success('Canal criado com sucesso');
+        if (newId) startPolling(newId);
       }
     } catch (err) {
       console.error(err);
@@ -338,6 +480,12 @@ export function Channels() {
     if (saved) {
       setQrCode(saved);
     }
+  }
+
+  function restorePairingOrQr(channelId) {
+    restoreQr(channelId);
+    const p = sessionStorage.getItem(`pairing_${channelId}`);
+    if (p) setPairingModal({ code: p, channelId });
   }
 
   function applyQrFromResponse(channelId, data) {
@@ -375,15 +523,37 @@ export function Channels() {
     }
   }
 
-  /** Conecta na Evolution (create + connect) e em seguida obtém o QR Code. */
+  /** Conecta (sem recriar instância) e obtém QR ou código de pareamento. */
   async function connectThenQr(channelId) {
     setLoadingConnectId(channelId);
     try {
-      await channelsService.connectChannel(channelId);
-      const data = await channelsService.getQrCode(channelId);
-      applyQrFromResponse(channelId, data);
+      const cr = await channelsService.connectChannel(channelId);
+      if (cr?.skippedDueToCooldown) {
+        toast(cr?.message || 'Aguarde alguns segundos antes de conectar de novo.');
+      }
+      if (cr?.artifactType && cr?.artifact) {
+        applyArtifactPayload(channelId, cr);
+      } else {
+        try {
+          const art = await channelsService.getConnectionArtifact(channelId);
+          if (art?.artifactType && art?.artifact) {
+            applyArtifactPayload(channelId, art);
+          } else {
+            const data = await channelsService.getQrCode(channelId);
+            applyQrFromResponse(channelId, data);
+          }
+        } catch (inner) {
+          try {
+            const data = await channelsService.getQrCode(channelId);
+            applyQrFromResponse(channelId, data);
+          } catch {
+            throw inner;
+          }
+        }
+      }
+      startArtifactPolling(channelId);
       startPolling(channelId);
-      toast.success('Escaneie o QR Code com o WhatsApp.');
+      toast.success('Escaneie o QR ou use o código de pareamento no WhatsApp.');
     } catch (err) {
       console.error(err);
       toast.error(
@@ -393,6 +563,28 @@ export function Channels() {
       );
     } finally {
       setLoadingConnectId(null);
+    }
+  }
+
+  async function refreshArtifact(channelId) {
+    setLoadingQr(channelId);
+    try {
+      const art = await channelsService.getConnectionArtifact(channelId);
+      if (art?.artifactType && art?.artifact) {
+        applyArtifactPayload(channelId, art);
+      } else if (art?.status === 'connected') {
+        toast.success('WhatsApp já está conectado.');
+        await loadChannels();
+      } else {
+        toast(art?.message || 'A conexão do WhatsApp ainda está aguardando QR ou código.');
+      }
+      startArtifactPolling(channelId);
+      startPolling(channelId);
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'Não foi possível obter o artefato de conexão.');
+    } finally {
+      setLoadingQr(null);
     }
   }
 
@@ -415,13 +607,15 @@ export function Channels() {
           }),
         );
 
-        if (['connected', 'disconnected', 'open', 'close'].includes(String(nextStatus || '').toLowerCase())) {
+        const pub = String(data.publicStatus || '').toLowerCase();
+        const ns = String(nextStatus || '').toLowerCase();
+        if (pub === 'connected' || ns === 'connected' || ns === 'open') {
           clearInterval(pollingRefs.current[channelId]);
           delete pollingRefs.current[channelId];
-          if (String(nextStatus).toLowerCase() === 'connected' || String(nextStatus).toLowerCase() === 'open') {
-            toast.success('WhatsApp conectado.');
-            setQrCode(null);
-          }
+          stopArtifactPolling(channelId);
+          toast.success('WhatsApp conectado.');
+          setQrCode(null);
+          setPairingModal(null);
         }
       } catch (e) {
         console.warn('[channels] polling status:', e.message);
@@ -444,6 +638,7 @@ export function Channels() {
     return () => {
       socket.off('channel_status_update');
       Object.values(pollingRefs.current).forEach(clearInterval);
+      Object.values(artifactPollRefs.current).forEach(clearInterval);
     };
   }, []);
 
@@ -465,19 +660,32 @@ export function Channels() {
     const s = (ch.status || '').toLowerCase();
 
     if (t === 'whatsapp') {
-      if (s === 'connected') {
+      const fp = ch.flowPhase;
+      if (fp === 'draft') {
+        return 'Canal criado. Use “Preparar WhatsApp” ou crie outro canal — a instância será gerada automaticamente.';
+      }
+      if (fp === 'provisioning') {
+        return 'Preparando instância… aguarde.';
+      }
+      if (fp === 'error') {
+        return 'Não foi possível provisionar a instância. Use “Tentar de novo” ou contate o suporte.';
+      }
+      if (fp === 'awaiting_connection') {
+        return 'Aguardando conexão: escaneie o QR ou use o código de pareamento no WhatsApp.';
+      }
+      if (fp === 'connected' || s === 'connected' || s === 'open') {
         return 'Canal WhatsApp conectado. Mensagens serão roteadas automaticamente para o agente vinculado.';
       }
       if (s === 'connecting') {
         return 'Escaneie o QR Code no WhatsApp para finalizar a conexão desta instância.';
       }
       if (s === 'created') {
-        return 'Instância criada. Gere o QR Code e conecte a sessão do WhatsApp.';
+        return 'Instância pronta. Gere o QR Code ou código e conecte o WhatsApp.';
       }
       if (s === 'error') {
-        return 'Houve um erro na conexão com a Evolution. Verifique as credenciais e a instância.';
+        return 'Houve um erro na conexão. Verifique o canal ou tente preparar de novo.';
       }
-      return 'Configure a instância na Evolution e conecte o WhatsApp para iniciar o atendimento.';
+      return 'Use Conectar para iniciar a sessão WhatsApp (fluxo automático, sem acessar a Evolution).';
     }
     if (t === 'instagram') {
       return 'Conecte sua conta Instagram via Meta OAuth para receber e responder mensagens do Direct.';
@@ -497,14 +705,49 @@ export function Channels() {
   const renderTypeActions = (ch) => {
     const t = (ch.type || '').toLowerCase();
     if (t === 'whatsapp') {
+      const phase = ch.flowPhase;
       const st = (ch.status || '').toLowerCase();
+      const busy =
+        loadingConnectId === ch.id ||
+        loadingQr === ch.id ||
+        loadingCreate ||
+        loadingProvisionId === ch.id;
+      const isConnected = st === 'connected' || st === 'open' || phase === 'connected';
+
+      if (phase === 'draft' || phase === 'error') {
+        return (
+          <button
+            type="button"
+            style={{ ...styles.actionButton, ...styles.actionButtonPrimary }}
+            disabled={busy}
+            onClick={() => runSaasProvisionConnect(ch.id)}
+          >
+            {loadingProvisionId === ch.id
+              ? 'Preparando…'
+              : phase === 'error'
+                ? 'Tentar de novo'
+                : 'Preparar WhatsApp'}
+          </button>
+        );
+      }
+
       const showConnect =
-        ['created', 'connecting', 'disconnected', 'close', 'unknown', ''].includes(st) || !ch.status;
-      const busy = loadingConnectId === ch.id || loadingQr === ch.id || loadingCreate;
+        !isConnected &&
+        (phase === 'awaiting_connection' ||
+          phase == null ||
+          ['created', 'connecting', 'disconnected', 'close', 'unknown', ''].includes(st) ||
+          !ch.status);
+
+      const showArtifactBtn =
+        !isConnected &&
+        (st === 'connecting' ||
+          st === 'created' ||
+          phase === 'awaiting_connection' ||
+          (phase == null && ch.external_id));
 
       return (
         <>
-          {showConnect && st !== 'connected' && st !== 'open' && (
+          {showConnect && (
             <button
               type="button"
               style={{
@@ -513,24 +756,24 @@ export function Channels() {
               }}
               disabled={busy}
               onClick={() => {
-                restoreQr(ch.id);
+                restorePairingOrQr(ch.id);
                 connectThenQr(ch.id);
               }}
             >
               {loadingConnectId === ch.id ? 'Conectando...' : 'Conectar'}
             </button>
           )}
-          {(st === 'connecting' || st === 'created') && (
+          {showArtifactBtn && (
             <button
               type="button"
               style={styles.actionButton}
               disabled={busy}
               onClick={() => {
-                restoreQr(ch.id);
-                getQr(ch.id);
+                restorePairingOrQr(ch.id);
+                refreshArtifact(ch.id);
               }}
             >
-              {loadingQr === ch.id ? 'Atualizando...' : 'Ver QR Code'}
+              {loadingQr === ch.id ? 'Atualizando...' : 'Ver QR / código'}
             </button>
           )}
         </>
@@ -747,6 +990,11 @@ export function Channels() {
           <div style={styles.titleBlock}>
             <h1 style={styles.title}>Canais</h1>
             <p style={styles.subtitle}>Centralize e administre todos os canais de atendimento do seu agente omnichannel.</p>
+            {connectStepMessage ? (
+              <p style={{ margin: '0.35rem 0 0', fontSize: '0.85rem', color: 'var(--accent)' }}>
+                {connectStepMessage}
+              </p>
+            ) : null}
           </div>
           <button
             type="button"
@@ -888,7 +1136,12 @@ export function Channels() {
                   <select
                     style={styles.select}
                     value={channelType}
-                    onChange={(e) => setChannelType(e.target.value)}
+                    onChange={(e) => {
+                      setChannelType(e.target.value);
+                      setWhatsappInstanceSelect('');
+                      setWhatsappInstanceManual('');
+                      setWhatsappAdvanced(false);
+                    }}
                   >
                     <option value="whatsapp">WhatsApp</option>
                     <option value="instagram">Instagram</option>
@@ -897,6 +1150,53 @@ export function Channels() {
                     <option value="api">API / Webhook</option>
                   </select>
                 </div>
+                {channelType === 'whatsapp' && (
+                  <div style={styles.field}>
+                    <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={whatsappAdvanced}
+                        onChange={(e) => {
+                          setWhatsappAdvanced(e.target.checked);
+                          setWhatsappInstanceSelect('');
+                          setWhatsappInstanceManual('');
+                        }}
+                      />
+                      Modo avançado: vincular instância Evolution já existente
+                    </label>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.35rem 0 0' }}>
+                      Fluxo normal: criamos a instância automaticamente. Avançado só para integrações que exijam nome manual.
+                    </p>
+                  </div>
+                )}
+                {channelType === 'whatsapp' && whatsappAdvanced && (
+                  <>
+                    <div style={styles.field}>
+                      <label style={styles.label}>Instância Evolution</label>
+                      <select
+                        style={styles.select}
+                        value={whatsappInstanceSelect}
+                        onChange={(e) => setWhatsappInstanceSelect(e.target.value)}
+                      >
+                        <option value="">Selecione uma instância existente</option>
+                        {evolutionInstanceNames.map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={styles.field}>
+                      <label style={styles.label}>Ou nome exato da instância</label>
+                      <input
+                        style={styles.input}
+                        placeholder="Se não estiver na lista acima"
+                        value={whatsappInstanceManual}
+                        onChange={(e) => setWhatsappInstanceManual(e.target.value)}
+                      />
+                    </div>
+                  </>
+                )}
                 <div style={styles.field}>
                   <label style={styles.label}>Agente</label>
                   <select
@@ -921,6 +1221,9 @@ export function Channels() {
                   onClick={() => {
                     setName('');
                     setAgentId('');
+                    setWhatsappInstanceSelect('');
+                    setWhatsappInstanceManual('');
+                    setWhatsappAdvanced(false);
                   }}
                 >
                   Limpar
@@ -963,7 +1266,12 @@ export function Channels() {
                   <select
                     style={styles.select}
                     value={channelType}
-                    onChange={(e) => setChannelType(e.target.value)}
+                    onChange={(e) => {
+                      setChannelType(e.target.value);
+                      setWhatsappInstanceSelect('');
+                      setWhatsappInstanceManual('');
+                      setWhatsappAdvanced(false);
+                    }}
                   >
                     <option value="whatsapp">WhatsApp</option>
                     <option value="instagram">Instagram</option>
@@ -972,6 +1280,50 @@ export function Channels() {
                     <option value="api">API / Webhook</option>
                   </select>
                 </div>
+                {channelType === 'whatsapp' && (
+                  <div style={styles.field}>
+                    <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={whatsappAdvanced}
+                        onChange={(e) => {
+                          setWhatsappAdvanced(e.target.checked);
+                          setWhatsappInstanceSelect('');
+                          setWhatsappInstanceManual('');
+                        }}
+                      />
+                      Modo avançado: instância Evolution manual
+                    </label>
+                  </div>
+                )}
+                {channelType === 'whatsapp' && whatsappAdvanced && (
+                  <>
+                    <div style={styles.field}>
+                      <label style={styles.label}>Instância Evolution</label>
+                      <select
+                        style={styles.select}
+                        value={whatsappInstanceSelect}
+                        onChange={(e) => setWhatsappInstanceSelect(e.target.value)}
+                      >
+                        <option value="">Selecione uma instância existente</option>
+                        {evolutionInstanceNames.map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={styles.field}>
+                      <label style={styles.label}>Ou nome exato</label>
+                      <input
+                        style={styles.input}
+                        placeholder="Instância criada na API"
+                        value={whatsappInstanceManual}
+                        onChange={(e) => setWhatsappInstanceManual(e.target.value)}
+                      />
+                    </div>
+                  </>
+                )}
                 <div style={styles.field}>
                   <label style={styles.label}>Agente</label>
                   <select
@@ -992,7 +1344,12 @@ export function Channels() {
                 <button
                   type="button"
                   style={styles.buttonSecondary}
-                  onClick={() => setShowModal(false)}
+                  onClick={() => {
+                    setShowModal(false);
+                    setWhatsappInstanceSelect('');
+                    setWhatsappInstanceManual('');
+                    setWhatsappAdvanced(false);
+                  }}
                 >
                   Cancelar
                 </button>
@@ -1031,6 +1388,47 @@ export function Channels() {
                   type="button"
                   style={styles.buttonPrimary}
                   onClick={() => setQrCode(null)}
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {pairingModal && (
+          <div
+            style={styles.modalOverlay}
+            onClick={() => setPairingModal(null)}
+          >
+            <div
+              style={styles.modalCard}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 style={styles.modalTitle}>Código de pareamento</h2>
+              <p style={{ fontSize: '0.88rem', color: 'var(--text-muted)', margin: '0 0 0.75rem' }}>
+                No WhatsApp: Configurações → Aparelhos conectados → Conectar um aparelho → use “Conectar com número” e
+                informe o código abaixo.
+              </p>
+              <div
+                style={{
+                  fontSize: '1.4rem',
+                  fontWeight: 700,
+                  textAlign: 'center',
+                  letterSpacing: '0.2em',
+                  padding: '0.75rem',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  fontFamily: 'ui-monospace, monospace',
+                }}
+              >
+                {pairingModal.code}
+              </div>
+              <div style={styles.modalFooter}>
+                <button
+                  type="button"
+                  style={styles.buttonPrimary}
+                  onClick={() => setPairingModal(null)}
                 >
                   Fechar
                 </button>

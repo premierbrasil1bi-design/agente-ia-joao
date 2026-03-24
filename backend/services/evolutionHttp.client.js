@@ -47,20 +47,18 @@ function responseText(err) {
   }
 }
 
-/**
- * Evolution API v2 (InstanceDto): comportamentos vêm no corpo raiz do POST /instance/create,
- * não em um objeto "settings" aninhado — ver documentação oficial.
- */
-function getDefaultBaileysSettings() {
-  return {
-    rejectCall: false,
-    msgCall: '',
-    groupsIgnore: false,
-    alwaysOnline: false,
-    readMessages: false,
-    readStatus: false,
-    syncFullHistory: false,
-  };
+export function isEvolutionTransientError(err) {
+  const st = err.response?.status;
+  const txt = (responseText(err) + (err.message || '')).toLowerCase();
+  if (!err.response && (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ECONNREFUSED'))
+    return true;
+  if (st === 502 || st === 503 || st === 504) return true;
+  if (st === 500 && /prisma|authentication failed|database|timeout|connect|query/i.test(txt)) return true;
+  return false;
+}
+
+function isTransientError(err) {
+  return isEvolutionTransientError(err);
 }
 
 function stripUndefinedDeep(value) {
@@ -81,6 +79,18 @@ function stripUndefinedDeep(value) {
   return value;
 }
 
+function getDefaultBaileysSettings() {
+  return {
+    rejectCall: false,
+    msgCall: '',
+    groupsIgnore: false,
+    alwaysOnline: false,
+    readMessages: false,
+    readStatus: false,
+    syncFullHistory: false,
+  };
+}
+
 function logEvolutionHttpError(context, err) {
   const res = err.response;
   console.error(
@@ -92,7 +102,6 @@ function logEvolutionHttpError(context, err) {
         status: res?.status,
         statusText: res?.statusText,
         data: res?.data,
-        headers: res?.headers ? { ...res.headers } : undefined,
         url: err.config?.url,
         method: err.config?.method,
       },
@@ -100,16 +109,6 @@ function logEvolutionHttpError(context, err) {
       2
     )
   );
-}
-
-function isTransientError(err) {
-  const st = err.response?.status;
-  const txt = (responseText(err) + (err.message || '')).toLowerCase();
-  if (!err.response && (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ECONNREFUSED'))
-    return true;
-  if (st === 502 || st === 503 || st === 504) return true;
-  if (st === 500 && /prisma|authentication failed|database|timeout|connect|query/i.test(txt)) return true;
-  return false;
 }
 
 /**
@@ -135,6 +134,9 @@ export async function withExponentialRetry(fn, operation, instanceName) {
   throw lastErr;
 }
 
+/**
+ * POST /instance/create — payload Evolution v2 (WHATSAPP-BAILEYS), sem undefined.
+ */
 export async function createInstance(instanceName) {
   const safeName = String(instanceName ?? '').trim();
   if (!safeName) {
@@ -145,43 +147,36 @@ export async function createInstance(instanceName) {
   const webhookUrl =
     process.env.EVOLUTION_WEBHOOK_URL || process.env.PUBLIC_EVOLUTION_WEBHOOK_URL || null;
 
-  const settings = getDefaultBaileysSettings();
-
   const raw = {
     instanceName: safeName,
     integration: 'WHATSAPP-BAILEYS',
-    qrcode: true,
-    ...settings,
+    qrcode: false,
+    ...getDefaultBaileysSettings(),
     ...(webhookUrl
       ? {
-          webhook: {
+          webhook: stripUndefinedDeep({
             url: String(webhookUrl).trim(),
             byEvents: true,
             base64: false,
             events: ['MESSAGES_UPSERT', 'QRCODE_UPDATED', 'CONNECTION_UPDATE'],
-          },
+          }),
         }
       : {}),
   };
 
   const payload = stripUndefinedDeep(raw);
+  console.log('[WHATSAPP_PROVISION] POST /instance/create', { instanceName: safeName, payloadKeys: Object.keys(payload) });
 
   evolutionLog('CREATE_HTTP', safeName);
-  return withExponentialRetry(
-    () =>
-      axios
-        .post(`${baseUrl}/instance/create`, payload, opts())
-        .then((r) => {
-          evolutionLog('CREATE_HTTP_OK', safeName);
-          return r.data;
-        })
-        .catch((err) => {
-          logEvolutionHttpError('POST /instance/create falhou', err);
-          throw err;
-        }),
-    'CREATE',
-    safeName
-  );
+  try {
+    const r = await axios.post(`${baseUrl}/instance/create`, payload, opts(60000));
+    evolutionLog('CREATE_HTTP_OK', safeName);
+    console.log('[WHATSAPP_PROVISION] create response ok', { instanceName: safeName, status: r.status });
+    return r.data;
+  } catch (err) {
+    logEvolutionHttpError('POST /instance/create falhou', err);
+    throw err;
+  }
 }
 
 export async function disconnectInstance(instanceName) {
@@ -219,38 +214,49 @@ async function disconnectBestEffort(instanceName) {
   }
 }
 
-async function performConnect(instanceName) {
+export async function connectInstanceSoft(instanceName) {
   const baseUrl = getBaseUrl();
   const path = `/instance/connect/${encodeURIComponent(instanceName)}`;
   const url = `${baseUrl}${path}`;
-  evolutionLog('CONNECT_PAIR_HTTP', instanceName);
+  console.log('[WHATSAPP_CONNECT] POST|GET /instance/connect', { instance: instanceName, mode: 'soft' });
+  evolutionLog('CONNECT_SOFT_HTTP', instanceName);
 
   return withExponentialRetry(
     async () => {
       try {
         const r = await axios.post(url, {}, opts());
-        evolutionLog('CONNECT_PAIR_HTTP_OK', instanceName);
+        evolutionLog('CONNECT_SOFT_HTTP_OK', instanceName);
         return r.data;
       } catch (err) {
         const st = err.response?.status;
         if (st === 405 || st === 404) {
           const r = await axios.get(url, opts());
-          evolutionLog('CONNECT_PAIR_HTTP_OK', instanceName);
+          evolutionLog('CONNECT_SOFT_HTTP_OK', instanceName);
           return r.data;
         }
         throw err;
       }
     },
-    'CONNECT',
+    'CONNECT_SOFT',
     instanceName
   );
 }
 
-export async function connectInstance(instanceName) {
+async function performConnect(instanceName) {
+  return connectInstanceSoft(instanceName);
+}
+
+/** Disconnect + connect — usar só em reset explícito (evita loop no fluxo SaaS). */
+export async function connectInstanceWithReset(instanceName) {
   evolutionLog('CONNECT_RESET', instanceName);
+  console.log('[WHATSAPP_CONNECT] connect com reset (logout antes)', { instance: instanceName });
   await disconnectBestEffort(instanceName);
   evolutionLog('CONNECT_AFTER_RESET', instanceName);
   return performConnect(instanceName);
+}
+
+export async function connectInstance(instanceName) {
+  return connectInstanceWithReset(instanceName);
 }
 
 async function fetchQrOnce(instanceName) {
@@ -271,7 +277,8 @@ export async function getQRCode(instanceName) {
         const st = err.response?.status;
         if (st === 404 || st === 500) {
           evolutionLog('QRCODE_RECOVER', instanceName, { httpStatus: st });
-          await connectInstance(instanceName);
+          console.log('[WHATSAPP_ARTIFACT] QR 404/500 → um connect soft antes de repetir', { instance: instanceName });
+          await connectInstanceSoft(instanceName);
           return await fetchQrOnce(instanceName);
         }
         throw err;

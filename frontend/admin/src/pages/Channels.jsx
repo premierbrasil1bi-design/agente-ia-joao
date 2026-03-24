@@ -346,6 +346,11 @@ export function Channels() {
         setFormError('Selecione um agente.');
         return;
       }
+      const t = (modal.type || 'whatsapp').toLowerCase();
+      if (t === 'whatsapp' && !(modal.instance || '').trim()) {
+        setFormError('Informe a instância Evolution já existente (criada na API).');
+        return;
+      }
       setFormError(null);
       setSaving(true);
       channelsApi()
