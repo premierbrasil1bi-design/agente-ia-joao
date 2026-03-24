@@ -48,7 +48,7 @@ services:
       - "6379:6379"
 
   saas_evolution:
-    image: atendai/evolution-api:latest
+    image: evoapicloud/evolution-api:v2.2.3
     container_name: saas_evolution
     restart: always
     depends_on:
