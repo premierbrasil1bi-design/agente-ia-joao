@@ -66,7 +66,7 @@ services:
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: "postgresql"
       DATABASE_URL: "postgresql://postgres:postgres@saas_postgres:5432/evolution"
-      DATABASE_CONNECTION_URI: "postgresql://postgres:postgres@saas_postgres:5432/evolution"
+      DATABASE_CONNECTION_URI: "postgresql://evolution:postgres@saas_postgres:5432/evolution"
 
       CACHE_REDIS_ENABLED: "true"
       CACHE_REDIS_URI: "redis://saas_redis:6379/1"
