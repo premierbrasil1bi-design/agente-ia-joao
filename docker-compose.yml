@@ -51,6 +51,11 @@ services:
     image: evoapicloud/evolution-api:v2.2.3
     container_name: saas_evolution
     restart: always
+    command: >
+      sh -c "
+      npx prisma db push --accept-data-loss || true;
+      node ./dist/main.js
+      "
     depends_on:
       saas_postgres:
         condition: service_healthy
