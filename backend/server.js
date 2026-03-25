@@ -31,6 +31,7 @@ import agentContextRoutes from './routes/agentContext.routes.js';
 import webhooksRoutes from './routes/webhooks.routes.js';
 import evolutionGatewayRoutes from './routes/evolutionGateway.routes.js';
 import evolutionIngressRoutes from './routes/evolutionIngress.routes.js';
+import wahaWebhookRoutes from './routes/wahaWebhook.routes.js';
 import { getEvolutionApiKey } from './services/evolutionHttp.client.js';
 
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
@@ -198,6 +199,9 @@ apiRouter.use('/context', agentAuth, requireTenant, agentContextRoutes);
 /* ---------- OUTRAS ROTAS DA API ---------- */
 apiRouter.use('/', evolutionWebhookRoutes);
 apiRouter.use('/auth', authRoutes);
+
+/* ---------- WEBHOOKS (WAHA) — rota pública (sem auth) ---------- */
+app.use('/api/channels', wahaWebhookRoutes);
 
 app.use('/api', apiRouter);
 

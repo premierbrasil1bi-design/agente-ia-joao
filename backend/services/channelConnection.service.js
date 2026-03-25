@@ -22,6 +22,7 @@ import {
   canAutoConnect,
   deriveFlowPhase,
 } from '../utils/whatsappChannelFlow.js';
+import * as wahaService from './wahaService.js';
 
 const MAX_WHATSAPP_ARTIFACT_LEN = 150000;
 
@@ -248,11 +249,303 @@ export async function createWhatsAppInstance(channel) {
   };
 }
 
+function isWahaChannel(channel) {
+  return String(channel?.provider || '').toLowerCase() === 'waha';
+}
+
+function mapWahaSessionStatusToConnection(wahaStatus, sessionPayload) {
+  const s = String(wahaStatus || '').toUpperCase();
+  if (s === 'WORKING' && sessionPayload?.me) return CONNECTION.CONNECTED;
+  if (s === 'WORKING') return CONNECTION.CONNECTING;
+  if (s === 'SCAN_QR_CODE' || s === 'STARTING') return CONNECTION.CONNECTING;
+  if (s === 'FAILED') return CONNECTION.ERROR;
+  if (s === 'STOPPED') return CONNECTION.DISCONNECTED;
+  return CONNECTION.CONNECTING;
+}
+
+/**
+ * CONNECT (WAHA): cria/inicia sessão no WAHA — nome = external_id do canal.
+ */
+async function connectWhatsAppChannelWaha(channel) {
+  const tenantId = channel.tenant_id;
+  const ext = channel.external_id != null ? String(channel.external_id).trim() : '';
+  if (!ext) {
+    const err = new Error('Instance not created');
+    err.code = 'INSTANCE_NOT_FOUND';
+    err.userMessage = 'Conclua o provisionamento antes de conectar (WAHA).';
+    throw err;
+  }
+
+  const flow = getWhatsappFlow(channel.config);
+  const phaseBefore = deriveFlowPhase(channel);
+  if (flow.lastConnectAt && !canAutoConnect(flow)) {
+    return {
+      instanceName: ext,
+      createResponse: null,
+      connectResponse: { skippedDueToCooldown: true },
+      channel,
+    };
+  }
+
+  console.log('[WHATSAPP_CONNECT][WAHA] start', { channelId: channel.id, tenantId, phaseBefore, session: ext });
+  const created = await wahaService.createSession(ext);
+  if (!created.ok) {
+    throw new Error(created.error || 'Falha ao criar sessão no WAHA.');
+  }
+
+  // Configura webhook para recebimento + status automático.
+  // Se falhar, não deve derrubar a rota: o endpoint /status segue como fallback.
+  try {
+    const wh = await wahaService.setWebhook(ext);
+    if (!wh.ok) {
+      console.warn('[WAHA] setWebhook falhou:', wh.error || 'unknown');
+    }
+  } catch (e) {
+    console.warn('[WAHA] setWebhook exception:', e?.message || e);
+  }
+
+  const cfg = mergeWhatsappConfig(channel.config, {
+    phase: WHATSAPP_PHASE.AWAITING_CONNECTION,
+    lastConnectAt: new Date().toISOString(),
+  });
+
+  const trConnect = await transitionEvolutionChannelConnection({
+    channelId: channel.id,
+    tenantId,
+    channelRow: channel,
+    nextConnectionStatus: CONNECTION.CONNECTING,
+    evolutionRaw: 'waha_connect',
+    reason: 'user: WAHA createSession/start',
+    source: 'user',
+    patch: {
+      external_id: ext,
+      provider: 'waha',
+      config: cfg,
+    },
+  });
+  let updatedChannel = trConnect.channel ?? channel;
+
+  console.log('[WHATSAPP_CONNECT][WAHA] done', {
+    channelId: channel.id,
+    tenantId,
+    phaseAfter: deriveFlowPhase(updatedChannel),
+    session: ext,
+  });
+
+  return {
+    instanceName: ext,
+    createResponse: created.data,
+    connectResponse: created.data,
+    channel: updatedChannel,
+  };
+}
+
+async function getChannelQrCodeWaha(channel) {
+  const instanceName = getEvolutionInstanceName(channel);
+  if (!instanceName) {
+    const err = new Error('Instance not created');
+    err.code = 'INSTANCE_NOT_FOUND';
+    err.userMessage = 'Conclua o provisionamento antes de obter o QR Code (WAHA).';
+    throw err;
+  }
+  const qr = await wahaService.getQrCode(instanceName);
+  if (!qr.ok) {
+    throw new Error(qr.error || 'WAHA: falha ao obter QR.');
+  }
+  const raw = qr.raw;
+  if (raw && typeof raw === 'object' && typeof raw.data === 'string' && !extractQrPayload(raw)) {
+    return { data: { base64: raw.data }, mimetype: raw.mimetype };
+  }
+  return raw;
+}
+
+async function getChannelStatusWaha(channel) {
+  const instanceName = getEvolutionInstanceName(channel);
+  const tenantId = channel.tenant_id;
+  if (!instanceName) {
+    return {
+      normalizedStatus: 'unknown',
+      publicStatus: 'inactive',
+      state: null,
+      channel,
+    };
+  }
+
+  const st = await wahaService.getSessionStatus(instanceName);
+  if (!st.ok || !st.data) {
+    return {
+      normalizedStatus: 'unknown',
+      publicStatus: 'inactive',
+      state: null,
+      channel,
+      evolutionOffline: true,
+      error: st.error || 'WAHA indisponível',
+    };
+  }
+
+  const wahaStatus = st.data.status;
+  const nextConn = mapWahaSessionStatusToConnection(wahaStatus, st.data);
+  let configUpdate;
+  if (String(wahaStatus || '').toUpperCase() === 'WORKING' && st.data.me) {
+    configUpdate = mergeWhatsappConfig(channel.config, {
+      phase: WHATSAPP_PHASE.CONNECTED,
+      artifact: null,
+      artifactType: null,
+      artifactUpdatedAt: new Date().toISOString(),
+    });
+  }
+
+  const trPoll = await transitionEvolutionChannelConnection({
+    channelId: channel.id,
+    tenantId: channel.tenant_id,
+    channelRow: channel,
+    nextConnectionStatus: nextConn,
+    evolutionRaw: String(wahaStatus),
+    reason: 'poll: WAHA GET /api/sessions/{name}',
+    source: 'poll',
+    trustRemoteState: true,
+    patch: configUpdate !== undefined ? { config: configUpdate } : {},
+  });
+  const updated = trPoll.channel ?? channel;
+  const connected = String(wahaStatus || '').toUpperCase() === 'WORKING' && Boolean(st.data.me);
+  const publicStatus = connected ? 'connected' : nextConn === CONNECTION.CONNECTING ? 'awaiting_connection' : 'inactive';
+
+  const upper = String(wahaStatus || '').toUpperCase();
+  let normalizedStatus = 'unknown';
+  if (connected) normalizedStatus = 'connected';
+  else if (upper === 'FAILED' || nextConn === CONNECTION.ERROR) normalizedStatus = 'error';
+  else if (upper === 'STOPPED') normalizedStatus = 'disconnected';
+  else if (upper === 'SCAN_QR_CODE' || upper === 'STARTING' || nextConn === CONNECTION.CONNECTING) {
+    normalizedStatus = 'connecting';
+  }
+
+  return {
+    normalizedStatus,
+    publicStatus,
+    state: { state: wahaStatus, waha: st.data },
+    channel: updated,
+  };
+}
+
+async function disconnectChannelWaha(channel) {
+  const ext = channel?.external_id != null ? String(channel.external_id).trim() : '';
+  if (!ext) {
+    await transitionEvolutionChannelConnection({
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+      channelRow: channel,
+      nextConnectionStatus: CONNECTION.DISCONNECTED,
+      evolutionRaw: 'waha_disconnected',
+      reason: 'user: disconnect WAHA sem sessão',
+      source: 'user',
+    });
+    return;
+  }
+  await wahaService.logoutSession(ext);
+  await wahaService.deleteSession(ext);
+  await transitionEvolutionChannelConnection({
+    channelId: channel.id,
+    tenantId: channel.tenant_id,
+    channelRow: channel,
+    nextConnectionStatus: CONNECTION.DISCONNECTED,
+    evolutionRaw: 'disconnected',
+    reason: 'user: WAHA logout/delete',
+    source: 'user',
+    patch: {
+      external_id: null,
+      connected_at: null,
+    },
+  });
+}
+
+/** Artefato de conexão (WAHA): espelha fluxo Evolution (QR / conectado). */
+async function getChannelConnectionArtifactWaha(channel) {
+  const instance = getEvolutionInstanceName(channel);
+  const tenantId = channel.tenant_id;
+  if (!instance) {
+    return { status: 'inactive', artifactType: null, artifact: null, rawStatus: null, instance: null };
+  }
+
+  const st = await wahaService.getSessionStatus(instance);
+  if (!st.ok || !st.data) {
+    return {
+      status: 'inactive',
+      artifactType: null,
+      artifact: null,
+      rawStatus: null,
+      instance,
+      evolutionOffline: true,
+    };
+  }
+
+  const wahaStatus = st.data.status;
+  const upper = String(wahaStatus || '').toUpperCase();
+  if (upper === 'WORKING' && st.data.me) {
+    await clearStoredWhatsappArtifact(channel);
+    const cfgOpen = mergeWhatsappConfig(channel.config, {
+      phase: WHATSAPP_PHASE.CONNECTED,
+      artifact: null,
+      artifactType: null,
+      artifactUpdatedAt: new Date().toISOString(),
+    });
+    await transitionEvolutionChannelConnection({
+      channelId: channel.id,
+      tenantId,
+      channelRow: channel,
+      nextConnectionStatus: CONNECTION.CONNECTED,
+      evolutionRaw: String(wahaStatus),
+      reason: 'poll WAHA: WORKING+me',
+      source: 'poll',
+      trustRemoteState: true,
+      patch: { config: cfgOpen },
+    });
+    return {
+      status: 'connected',
+      artifactType: null,
+      artifact: null,
+      rawStatus: wahaStatus,
+      instance,
+    };
+  }
+
+  let qrRaw = null;
+  try {
+    qrRaw = await getChannelQrCodeWaha(channel);
+  } catch (e) {
+    console.warn('[WHATSAPP_ARTIFACT][WAHA] getQRCode falhou', e.message);
+  }
+  const payload = extractQrPayload(qrRaw);
+  if (payload) {
+    const dataUrl = toQrDataUrl(payload);
+    const updated = await persistWhatsappConnectionArtifact(channel, 'qrcode', dataUrl);
+    return {
+      status: 'awaiting_connection',
+      artifactType: 'qrcode',
+      artifact: dataUrl,
+      rawStatus: wahaStatus,
+      instance,
+      channel: updated,
+    };
+  }
+
+  return {
+    status: 'awaiting_connection',
+    artifactType: null,
+    artifact: null,
+    rawStatus: wahaStatus,
+    instance,
+  };
+}
+
 /**
  * POST connect: exige external_id já persistido (instância criada manualmente / fluxo explícito).
  * Não cria instância automaticamente.
  */
 export async function connectWhatsAppChannel(channel) {
+  if (isWahaChannel(channel)) {
+    return connectWhatsAppChannelWaha(channel);
+  }
+
   const tenantId = channel.tenant_id;
   const ext = channel.external_id != null ? String(channel.external_id).trim() : '';
 
@@ -343,6 +636,10 @@ export async function connectWhatsAppChannel(channel) {
  * Obtém QR Code para o canal (instância já provisionada). Sem connect prévio — recovery fica no cliente HTTP.
  */
 export async function getChannelQrCode(channel) {
+  if (isWahaChannel(channel)) {
+    return getChannelQrCodeWaha(channel);
+  }
+
   const instanceName = getEvolutionInstanceName(channel);
   if (!instanceName) {
     const err = new Error('Instance not created');
@@ -372,6 +669,10 @@ export async function getChannelQrCode(channel) {
  * Artefato de conexão atual (QR ou pairing) + status público.
  */
 export async function getChannelConnectionArtifact(channel) {
+  if (isWahaChannel(channel)) {
+    return getChannelConnectionArtifactWaha(channel);
+  }
+
   const instance = getEvolutionInstanceName(channel);
   const tenantId = channel.tenant_id;
   const flow = getWhatsappFlow(channel.config);
@@ -620,6 +921,10 @@ function mapPublicWhatsappStatus(rawState, channel) {
 }
 
 export async function getChannelStatus(channel) {
+  if (isWahaChannel(channel)) {
+    return getChannelStatusWaha(channel);
+  }
+
   const instanceName = getEvolutionInstanceName(channel);
   const tenantId = channel.tenant_id;
 
@@ -760,6 +1065,10 @@ export async function getChannelStatus(channel) {
  * Só chama a Evolution se houver external_id (evita logout no nome padrão sem vínculo real).
  */
 export async function disconnectChannel(channel) {
+  if (isWahaChannel(channel)) {
+    return disconnectChannelWaha(channel);
+  }
+
   const ext = channel?.external_id != null ? String(channel.external_id).trim() : '';
 
   if (!ext) {

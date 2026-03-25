@@ -87,7 +87,7 @@ export async function findEvolutionChannelByExternalId(externalId) {
     `SELECT id, tenant_id, agent_id, name, type, status, is_active, instance, external_id, connection_status,
             provider
      FROM channels
-     WHERE provider = 'evolution' AND external_id = $1
+     WHERE external_id = $1 AND provider IN ('evolution', 'waha')
      LIMIT 2`,
     [ext]
   );
@@ -95,7 +95,7 @@ export async function findEvolutionChannelByExternalId(externalId) {
     let totalDup = rows.length;
     try {
       const { rows: cnt } = await pool.query(
-        `SELECT COUNT(*)::int AS n FROM channels WHERE provider = 'evolution' AND external_id = $1`,
+        `SELECT COUNT(*)::int AS n FROM channels WHERE external_id = $1 AND provider IN ('evolution', 'waha')`,
         [ext]
       );
       totalDup = cnt[0]?.n ?? rows.length;

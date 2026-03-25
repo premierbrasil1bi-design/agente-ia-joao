@@ -11,6 +11,7 @@ import {
   getStatus,
   getConnectionArtifact,
   disconnectChannel,
+  sendChannelMessage,
 } from '../controllers/channelConnection.controller.js';
 
 const router = Router();
@@ -20,5 +21,6 @@ router.get('/:id/qrcode', getQrCode);
 router.get('/:id/connection-artifact', getConnectionArtifact);
 router.get('/:id/status', getStatus);
 router.post('/:id/disconnect', disconnectChannel);
+router.post('/:id/send', sendChannelMessage);
 
 export default router;

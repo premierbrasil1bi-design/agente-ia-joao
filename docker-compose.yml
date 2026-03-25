@@ -34,6 +34,16 @@ services:
     ports:
       - "5432:5432"
 
+  # WAHA — WhatsApp HTTP API (provider=waha no OMNIA). Host 3099 evita conflito com API Node na 3000 (PM2).
+  saas_waha:
+    image: devlikeapro/waha:latest
+    container_name: saas_waha
+    restart: always
+    ports:
+      - "3099:3000"
+    environment:
+      - WAHA_LOG_LEVEL=info
+
   # Evolution API: trocado de evoapicloud/evolution-api:v2.2.3 para atendai/evolution-api:v2.1.1 porque a
   # v2.2.3 falhava na criação de instâncias (erro interno ao ler connectionStatus.state indefinido). A v2.1.1
   # (atendai) mantém integração estável com WHATSAPP-BAILEYS (Baileys) e fluxo de QR/pairing sem impactar Neon/Redis.

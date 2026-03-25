@@ -10,9 +10,12 @@ import { requireActiveTenant } from '../middleware/requireActiveTenant.js';
 import { sendBadRequest, sendNotFound } from '../utils/errorResponses.js';
 import { pool } from '../db/pool.js';
 import * as channelConnectionService from '../services/channelConnection.service.js';
+import * as wahaService from '../services/wahaService.js';
 import * as evolutionService from '../services/evolutionService.js';
 import * as evolutionGateway from '../controllers/evolutionGateway.controller.js';
 import * as evolutionProvision from '../services/evolutionProvision.service.js';
+import * as wahaProvision from '../services/wahaProvision.service.js';
+import { generateEvolutionInstanceName } from '../services/evolutionProvision.service.js';
 import {
   deriveFlowPhase,
   nextActionForChannel,
@@ -28,6 +31,17 @@ import {
 const router = Router();
 
 router.use(agentAuth);
+
+function sanitizeWahaSessionName(raw, tenantId, channelId) {
+  const g = generateEvolutionInstanceName(tenantId, channelId);
+  const s = String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 72);
+  return s || g;
+}
 
 /**
  * GET /api/channels/evolution-instances
@@ -62,14 +76,16 @@ function evolutionUiStatus(ch) {
  */
 function normalizeChannelForApi(ch) {
   if (!ch || typeof ch !== 'object') return ch;
-  const isEvolution = String(ch.provider || '').toLowerCase() === 'evolution';
+  const providerLc = String(ch.provider || '').toLowerCase();
+  const isEvolution = providerLc === 'evolution';
+  const isWaha = providerLc === 'waha';
   const type =
-    isEvolution
+    isEvolution || isWaha
       ? 'whatsapp'
       : (ch.type != null && String(ch.type).trim() !== '')
         ? String(ch.type).trim().toLowerCase()
         : 'api';
-  if (isEvolution) {
+  if (isEvolution || isWaha) {
     return { ...ch, type, status: evolutionUiStatus(ch) };
   }
   return { ...ch, type };
@@ -114,6 +130,23 @@ router.post('/:id/create-instance', requireActiveTenant, async (req, res) => {
     if (!tenantId) {
       return res.status(401).json({ error: 'Tenant não identificado.' });
     }
+    const existing = await channelRepo.findById(req.params.id, tenantId);
+    if (existing && String(existing.provider || '').toLowerCase() === 'waha') {
+      const result = await wahaProvision.provisionWhatsAppInstance(req.params.id, tenantId);
+      if (!result.ok) {
+        return res.status(400).json({ success: false, error: true, message: result.error });
+      }
+      const ch = await channelRepo.findById(req.params.id, tenantId);
+      return res.status(200).json({
+        success: true,
+        channel: enrichChannelForApi(ch),
+        skipped: Boolean(result.skipped),
+        ...(result.reason ? { reason: result.reason } : {}),
+        nextAction: 'connect',
+        legacyAlias: true,
+        provider: 'waha',
+      });
+    }
     const result = await evolutionProvision.provisionWhatsAppInstance(req.params.id, tenantId);
     if (!result.ok) {
       return res.status(400).json({ success: false, error: true, message: result.error });
@@ -142,6 +175,26 @@ router.post('/:id/provision-instance', requireActiveTenant, async (req, res) => 
     const tenantId = req.tenantId || req.user?.tenantId;
     if (!tenantId) {
       return res.status(401).json({ error: 'Tenant não identificado.' });
+    }
+    const existing = await channelRepo.findById(req.params.id, tenantId);
+    if (existing && String(existing.provider || '').toLowerCase() === 'waha') {
+      const result = await wahaProvision.provisionWhatsAppInstance(req.params.id, tenantId);
+      if (!result.ok) {
+        return res.status(400).json({
+          success: false,
+          error: true,
+          message: result.error || 'Não foi possível preparar o canal WAHA.',
+        });
+      }
+      const ch = await channelRepo.findById(req.params.id, tenantId);
+      return res.status(200).json({
+        success: true,
+        channel: enrichChannelForApi(ch),
+        skipped: Boolean(result.skipped),
+        ...(result.reason ? { reason: result.reason } : {}),
+        nextAction: 'connect',
+        provider: 'waha',
+      });
     }
     const result = await evolutionProvision.provisionWhatsAppInstance(req.params.id, tenantId);
     if (!result.ok) {
@@ -202,8 +255,9 @@ router.post('/', requireActiveTenant, async (req, res) => {
       return res.status(401).json({ error: 'Tenant não identificado.' });
     }
 
-    const { name, agentId, agent_id, type, instance, active } = req.body || {};
+    const { name, agentId, agent_id, type, instance, active, provider } = req.body || {};
     const finalAgentId = agent_id || agentId;
+    const providerLc = String(provider || 'evolution').toLowerCase().trim();
 
     if (!finalAgentId) {
       return sendBadRequest(res, 'agent_id (ou agentId) é obrigatório.');
@@ -223,6 +277,10 @@ router.post('/', requireActiveTenant, async (req, res) => {
         ? String(instance).trim().replace(/\s+/g, '-')
         : '';
 
+    if (providerLc === 'waha' && channelType !== 'whatsapp') {
+      return sendBadRequest(res, 'provider "waha" exige type "whatsapp".');
+    }
+
     const displayName =
       name != null && String(name).trim() !== ''
         ? String(name).trim().slice(0, 100)
@@ -234,7 +292,7 @@ router.post('/', requireActiveTenant, async (req, res) => {
       }
     }
 
-    if (channelType === 'whatsapp' && normalizedInstance) {
+    if (channelType === 'whatsapp' && normalizedInstance && providerLc !== 'waha') {
       const exists = await channelConnectionService.evolutionInstanceExists(normalizedInstance);
       if (!exists) {
         return sendBadRequest(
@@ -285,6 +343,26 @@ router.post('/', requireActiveTenant, async (req, res) => {
       invalidateTenantChannels(tenantId);
       const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
       return res.status(200).json({ success: true, channel: full });
+    }
+
+    if (providerLc === 'waha') {
+      const ext = sanitizeWahaSessionName(normalizedInstance, tenantId, channel.id);
+      const cfgDraft = mergeWhatsappConfig({}, { phase: WHATSAPP_PHASE.DRAFT });
+      await channelRepo.updateConnection(channel.id, tenantId, {
+        provider: 'waha',
+        external_id: ext,
+        instance: ext,
+        config: cfgDraft,
+        last_error: null,
+      });
+      invalidateTenantChannels(tenantId);
+      const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
+      return res.status(200).json({
+        success: true,
+        channel: full,
+        nextAction: 'provision_instance',
+        provider: 'waha',
+      });
     }
 
     if (normalizedInstance) {
@@ -383,7 +461,11 @@ router.delete('/:id', requireActiveTenant, async (req, res) => {
     }
 
     const ext = existing.external_id != null ? String(existing.external_id).trim() : '';
-    if (String(existing.provider || '').toLowerCase() === 'evolution' && ext) {
+    const prov = String(existing.provider || '').toLowerCase();
+    if (prov === 'waha' && ext) {
+      await wahaService.logoutSession(ext);
+      await wahaService.deleteSession(ext);
+    } else if (prov === 'evolution' && ext) {
       try {
         await evolutionService.deleteInstance(ext);
         console.log('[channels] DELETE: deleteInstance Evolution OK:', ext);

@@ -59,4 +59,12 @@ export const channelsService = {
       method: 'GET',
     });
   },
+
+  /** Envio manual (teste) — provider evolution ou waha */
+  sendChannelMessage(channelId, payload) {
+    return agentApi.request(`/api/channels/${channelId}/send`, {
+      method: 'POST',
+      body: payload,
+    });
+  },
 };

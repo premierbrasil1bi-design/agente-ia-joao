@@ -9,6 +9,7 @@ import { sendNotFound } from '../utils/errorResponses.js';
 import {
   extractConnectArtifactFromPayload,
 } from '../services/channelConnection.service.js';
+import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service.js';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { deriveFlowPhase } from '../utils/whatsappChannelFlow.js';
 
@@ -29,6 +30,30 @@ async function getChannelFromReq(req, res) {
 function isEvolutionOffline(err) {
   const c = err.code;
   return c === 'ECONNREFUSED' || c === 'ENOTFOUND' || c === 'ETIMEDOUT';
+}
+
+export async function sendChannelMessage(req, res) {
+  try {
+    const channel = await getChannelFromReq(req, res);
+    if (!channel) return;
+
+    const { number, text } = req.body || {};
+    if (number == null || String(number).trim() === '' || text == null || String(text).trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Informe number e text no corpo da requisição.',
+      });
+    }
+
+    await sendWhatsAppTextForChannel(channel, String(number).trim(), String(text));
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error('[channelConnection] sendChannelMessage:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: err.message || 'Erro ao enviar mensagem.',
+    });
+  }
 }
 
 export async function connectChannel(req, res) {

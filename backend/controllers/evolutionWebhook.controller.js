@@ -10,7 +10,7 @@
 
 import { processIncomingMessage } from '../services/messagePipeline.js';
 
-import * as evolutionService from '../services/evolutionService.js';
+import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service.js';
 
 import * as channelsRepo from '../repositories/channelsRepository.js';
 
@@ -230,7 +230,7 @@ export async function handleEvolutionWhatsApp(req, res) {
 
         try {
 
-          await evolutionService.sendText(instance, number, result.replyText);
+          await sendWhatsAppTextForChannel(channel, number, result.replyText);
 
           console.log('[EVOLUTION] webhook: resposta enviada para %s', number);
 

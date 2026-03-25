@@ -2,6 +2,8 @@ import express from 'express';
 import axios from 'axios';
 import { processIncomingMessage } from '../services/messagePipeline.js';
 import * as evolutionService from '../services/evolutionService.js';
+import * as channelsRepo from '../repositories/channelsRepository.js';
+import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service.js';
 import { resolveAgentForChannel } from '../services/agentRouter.js';
 import { enqueueConversationTask } from '../services/conversationQueueService.js';
 import * as evolutionWebhookController from '../controllers/evolutionWebhook.controller.js';
@@ -114,10 +116,15 @@ router.post('/agents/webhook', async (req, res) => {
 
           if (result?.replyText && instanceForSend) {
             try {
-              await evolutionService.sendText(instanceForSend, number, result.replyText);
+              const ch = await channelsRepo.findEvolutionChannelByExternalId(String(instanceForSend).trim());
+              if (ch) {
+                await sendWhatsAppTextForChannel(ch, number, result.replyText);
+              } else {
+                await evolutionService.sendText(instanceForSend, number, result.replyText);
+              }
               console.log('[WEBHOOK] Reply sent to', number);
             } catch (sendErr) {
-              console.error('[WEBHOOK] evolutionService.sendText error:', sendErr.message);
+              console.error('[WEBHOOK] sendText error:', sendErr.message);
             }
           }
         });
