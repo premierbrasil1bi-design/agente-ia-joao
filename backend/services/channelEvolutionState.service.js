@@ -12,7 +12,6 @@
  */
 
 import * as channelRepo from '../repositories/channel.repository.js';
-import { toEvolutionStatusColumn } from '../utils/mapEvolutionStatus.js';
 
 export const CONNECTION = {
   DISCONNECTED: 'disconnected',
@@ -83,14 +82,15 @@ export function canTransitionConnectionStatus(from, to, ctx = {}) {
 }
 
 /**
- * Atualização central: connection_status + status legado + evolution_status (opcional) + patch (config, external_id, …).
+ * Atualização central: connection_status + status legado (active/inactive) + patch (config, external_id, …).
+ * evolutionRaw não persiste coluna no banco; serve a log e allowBootstrapOpen.
  *
  * @param {object} p
  * @param {string} p.channelId
  * @param {string} p.tenantId
  * @param {object} [p.channelRow] — se omitido, carrega do banco
  * @param {string} p.nextConnectionStatus
- * @param {unknown} [p.evolutionRaw] — se definido, grava evolution_status derivado
+ * @param {unknown} [p.evolutionRaw] — estado bruto Evolution (telemetria / bootstrap webhook)
  * @param {string} p.reason — obrigatório para auditoria em log
  * @param {string} [p.source] — webhook | sync | poll | user | provision
  * @param {object} [p.patch] — campos extras para updateConnection (last_error, config, external_id, connected_at, …)
@@ -150,10 +150,6 @@ export async function transitionEvolutionChannelConnection(p) {
   const legacy = legacyStatusFromConnection(next);
   /** @type {Record<string, unknown>} */
   const data = { ...patch, status: legacy, connection_status: next };
-
-  if (evolutionRaw !== undefined) {
-    data.evolution_status = toEvolutionStatusColumn(evolutionRaw);
-  }
 
   if (legacy === 'active' && next === CONNECTION.CONNECTED) {
     if (data.connected_at === undefined) data.connected_at = new Date();

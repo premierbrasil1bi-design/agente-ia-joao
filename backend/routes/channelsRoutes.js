@@ -13,7 +13,6 @@ import * as channelConnectionService from '../services/channelConnection.service
 import * as evolutionService from '../services/evolutionService.js';
 import * as evolutionGateway from '../controllers/evolutionGateway.controller.js';
 import * as evolutionProvision from '../services/evolutionProvision.service.js';
-import { normalizeEvolutionState } from '../utils/evolutionState.js';
 import {
   deriveFlowPhase,
   nextActionForChannel,
@@ -39,7 +38,7 @@ router.get('/evolution-instances', requireActiveTenant, evolutionGateway.listIns
 
 /**
  * Campo `status` no JSON do Client App (UX). A verdade no banco é `connection_status`;
- * `evolution_status` e `status` (active/inactive) só entram como fallback se `connection_status` vazio.
+ * `status` (active/inactive) só entra como fallback legado se `connection_status` vazio ou não mapeado.
  */
 function evolutionUiStatus(ch) {
   const cs = String(ch.connection_status || '').toLowerCase();
@@ -50,10 +49,6 @@ function evolutionUiStatus(ch) {
     const ext = ch.external_id != null ? String(ch.external_id).trim() : '';
     if (!ext) return 'disconnected';
     return 'created';
-  }
-  const ev = ch.evolution_status;
-  if (ev != null && String(ev).trim() !== '') {
-    return normalizeEvolutionState(ev);
   }
   const internal = String(ch.status || '').toLowerCase();
   if (internal === 'active') return 'connected';

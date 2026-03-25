@@ -164,13 +164,53 @@ function StatusBadge({ channel }) {
   return <span style={style}>{active ? 'Active' : 'Inactive'}</span>;
 }
 
-function ConnectionBadge({ evolutionStatus }) {
-  if (evolutionStatus === undefined || evolutionStatus === null) return null;
-  const map = { open: 'Connected', close: 'Disconnected', connecting: 'Connecting...', connected: 'Connected', disconnected: 'Disconnected' };
-  const label = map[evolutionStatus] || String(evolutionStatus);
-  const isConnected = evolutionStatus === 'open' || evolutionStatus === 'connected';
-  const isConnecting = evolutionStatus === 'connecting';
-  const style = isConnected ? { ...styles.badge, ...styles.badgeAtivo } : isConnecting ? { ...styles.badge, ...styles.badgeConnecting } : { ...styles.badge, ...styles.badgeDisconnected };
+/** Prioriza connection_status da API; status legado e estado Evolution como fallback. */
+function resolveConnectionUiStateFromChannel(ch) {
+  const raw = ch?.connection_status ?? ch?.status ?? null;
+  return raw != null && String(raw).trim() !== '' ? String(raw).toLowerCase() : null;
+}
+
+/** Resposta de GET /api/channels/:id/status */
+function resolveConnectionUiStateFromStatusPayload(data) {
+  const cs = data?.connection_status ?? data?.channel?.connection_status;
+  if (cs != null && String(cs).trim() !== '') return String(cs).toLowerCase();
+  const st = data?.status ?? data?.channel?.status;
+  if (st != null && String(st).trim() !== '') return String(st).toLowerCase();
+  const raw =
+    data?.evolutionState ??
+    data?.instance?.state ??
+    data?.state?.state ??
+    data?.channel?.instance?.state ??
+    null;
+  return raw != null && String(raw).trim() !== '' ? String(raw).toLowerCase() : null;
+}
+
+function ConnectionBadge({ connectionState }) {
+  if (connectionState === undefined || connectionState === null || connectionState === '') return null;
+  const s = String(connectionState).toLowerCase();
+  const map = {
+    open: 'Connected',
+    connected: 'Connected',
+    close: 'Disconnected',
+    disconnected: 'Disconnected',
+    connecting: 'Connecting...',
+    qr: 'Connecting...',
+    error: 'Erro',
+    created: 'Aguardando conexão',
+    inactive: 'Inativo',
+    offline: 'Offline',
+  };
+  const label = map[s] || String(connectionState);
+  const isConnected = s === 'open' || s === 'connected';
+  const isConnecting = s === 'connecting' || s === 'qr';
+  const isError = s === 'error';
+  const style = isError
+    ? { ...styles.badge, ...styles.badgeDisconnected }
+    : isConnected
+      ? { ...styles.badge, ...styles.badgeAtivo }
+      : isConnecting
+        ? { ...styles.badge, ...styles.badgeConnecting }
+        : { ...styles.badge, ...styles.badgeDisconnected };
   return <span style={style}>{label}</span>;
 }
 
@@ -225,7 +265,16 @@ export function Channels() {
       .getChannels()
       .then((data) => {
         const items = Array.isArray(data) ? data : [];
-        setList(items.map((ch) => ({ ...ch, type: ch.type ?? 'api' })));
+        const rows = items.map((ch) => ({ ...ch, type: ch.type ?? 'api' }));
+        setList(rows);
+        setConnectionStatusMap((prev) => {
+          const next = { ...prev };
+          for (const ch of rows) {
+            const ui = resolveConnectionUiStateFromChannel(ch);
+            if (ui) next[ch.id] = ui;
+          }
+          return next;
+        });
       })
       .catch((err) => {
         setList([]);
@@ -260,10 +309,11 @@ export function Channels() {
       try {
         const statusRes = await agentApi.request(`/api/channels/${qrChannelId}/status`, { method: 'GET' });
         const state =
+          resolveConnectionUiStateFromStatusPayload(statusRes) ??
+          statusRes?.channel?.instance?.state ??
           statusRes?.instance?.state ??
           statusRes?.status ??
-          statusRes?.channel?.status ??
-          statusRes?.channel?.instance?.state;
+          statusRes?.channel?.status;
 
         setConnectionStatusMap((prev) => ({ ...prev, [qrChannelId]: state ?? prev[qrChannelId] }));
 
@@ -551,7 +601,7 @@ export function Channels() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <StatusBadge channel={ch} />
                       {isWhatsAppChannel(ch) && (
-                        <ConnectionBadge evolutionStatus={connectionStatusMap[ch.id]} />
+                        <ConnectionBadge connectionState={connectionStatusMap[ch.id]} />
                       )}
                     </div>
                   </td>
@@ -708,7 +758,9 @@ export function Channels() {
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0 0 0.5rem' }}>
               O QR Code é atualizado a cada 5 segundos. Escaneie com o WhatsApp.
             </p>
-            {qrChannelId && connectionStatusMap[qrChannelId] === 'connecting' && (
+            {qrChannelId &&
+              (connectionStatusMap[qrChannelId] === 'connecting' ||
+                connectionStatusMap[qrChannelId] === 'qr') && (
               <p style={{ fontSize: '0.9rem', color: 'var(--text)', margin: '0 0 0.75rem', fontWeight: 500 }}>
                 Esperando conexão do WhatsApp...
               </p>

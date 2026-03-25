@@ -38,6 +38,7 @@ import { startChannelMonitor } from './services/channelMonitor.service.js';
 import { agentAuth } from './middleware/agentAuth.js';
 import { initEvolutionQueueInfra } from './queues/evolution.queue.js';
 import { startEvolutionWorker } from './workers/evolution.worker.js';
+import { runChannelsSchemaGuard } from './services/channelsSchemaGuard.service.js';
 import * as evolutionService from './services/evolutionService.js';
 
 console.log("DB CONNECTED:", process.env.DATABASE_URL?.includes("neon"));
@@ -235,7 +236,7 @@ io.on('connection', (socket) => {
 });
 
 initEvolutionQueueInfra()
-  .then(() => {
+  .then(async () => {
     if (process.env.EVOLUTION_WORKER_IN_PROCESS !== 'false') {
       startEvolutionWorker();
     } else {
@@ -243,6 +244,7 @@ initEvolutionQueueInfra()
         '[server] EVOLUTION_WORKER_IN_PROCESS=false — worker BullMQ deve estar no PM2 (worker-evolution).'
       );
     }
+    await runChannelsSchemaGuard();
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`Servidor rodando na porta ${PORT}`);
       startChannelMonitor();

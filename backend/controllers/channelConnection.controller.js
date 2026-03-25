@@ -155,9 +155,16 @@ export async function getStatus(req, res) {
       userMessage = 'A conexão do WhatsApp ainda está aguardando QR ou código.';
     }
 
+    const ch = result.channel;
+    const connectionStatus =
+      ch && typeof ch === 'object' && ch.connection_status != null
+        ? String(ch.connection_status)
+        : null;
+
     res.status(200).json({
       success: true,
       status: result.normalizedStatus,
+      connection_status: connectionStatus,
       normalizedStatus: result.normalizedStatus,
       publicStatus,
       userMessage,
