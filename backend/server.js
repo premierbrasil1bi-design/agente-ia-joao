@@ -60,8 +60,7 @@ const app = express();
 const PORT = config.port || 3000;
 
 const allowedOrigins = [
-  'https://app.omnia1biai.com.br',
-  'https://admin.omnia1biai.com.br'
+  'https://app.omnia1biai.com.br'
 ];
 
 const corsOptions = {
@@ -240,8 +239,7 @@ const server = createServer(app);
 const io = new SocketIOServer(server, {
   cors: {
     origin: [
-      'https://app.omnia1biai.com.br',
-      'https://admin.omnia1biai.com.br'
+      'https://app.omnia1biai.com.br'
     ],
     methods: ['GET', 'POST'],
     credentials: true

@@ -67,6 +67,7 @@ services:
       AUTHENTICATION_API_KEY: "EVOLUTION_2026_JOAO_998877"
 
       LOG_LEVEL: "INFO"
+      CONFIG_SESSION_PHONE_VERSION: "2.3000.1025062854"
     ports:
       - "8080:8080"
     volumes:
