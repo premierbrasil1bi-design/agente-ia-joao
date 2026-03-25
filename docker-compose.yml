@@ -34,19 +34,6 @@ services:
     ports:
       - "5432:5432"
 
-  saas_redis:
-    image: redis:7
-    container_name: saas_redis
-    restart: always
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-    ports:
-      - "6379:6379"
-
   # Evolution API: trocado de evoapicloud/evolution-api:v2.2.3 para atendai/evolution-api:v2.1.1 porque a
   # v2.2.3 falhava na criação de instâncias (erro interno ao ler connectionStatus.state indefinido). A v2.1.1
   # (atendai) mantém integração estável com WHATSAPP-BAILEYS (Baileys) e fluxo de QR/pairing sem impactar Neon/Redis.
@@ -54,9 +41,9 @@ services:
     image: atendai/evolution-api:v2.1.1
     container_name: saas_evolution
     restart: always
-    depends_on:
-      saas_redis:
-        condition: service_healthy
+    extra_hosts:
+      # Mantém os envs (CACHE_REDIS_URI=redis://saas_redis:6379/1) apontando para o Redis externo no host.
+      - "saas_redis:host-gateway"
     entrypoint: ["/bin/sh", "/evolution-entrypoint.sh"]
     environment:
       SERVER_TYPE: "http"
@@ -95,8 +82,9 @@ services:
     depends_on:
       saas_postgres:
         condition: service_healthy
-      saas_redis:
-        condition: service_healthy
+    extra_hosts:
+      # Mantém REDIS_URL=redis://saas_redis:6379 apontando para o Redis externo no host.
+      - "saas_redis:host-gateway"
     environment:
       NODE_ENV: production
       DB_BOOTSTRAP_MODE: safe
