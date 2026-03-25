@@ -24,15 +24,18 @@ let queueEvents = null;
 export function getRedisUrl() {
   const raw = process.env.REDIS_URL;
   if (raw != null && String(raw).trim() !== '') {
-    return String(raw).trim();
+    return String(raw).trim().replace('saas_redis', '127.0.0.1');
   }
-  return 'redis://saas_redis:6379';
+  return 'redis://127.0.0.1:6379';
 }
 
 export function getRedisConnection() {
   if (!redis) {
     redis = new IORedis(getRedisUrl(), {
       maxRetriesPerRequest: null,
+    });
+    redis.on('error', (err) => {
+      console.error('Redis error:', err?.message || err);
     });
   }
   return redis;
@@ -66,7 +69,11 @@ export async function initEvolutionQueueInfra() {
   getRedisConnection();
   getEvolutionQueue();
   const ev = getEvolutionQueueEvents();
-  await ev.waitUntilReady();
+  try {
+    await ev.waitUntilReady();
+  } catch (err) {
+    console.error('[redis] Falha ao inicializar BullMQ/QueueEvents (continuando sem derrubar):', err?.message || err);
+  }
 }
 
 export async function closeEvolutionQueueInfra() {
