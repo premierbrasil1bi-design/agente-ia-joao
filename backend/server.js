@@ -61,31 +61,54 @@ const PORT = config.port || 3000;
 
 const allowedOrigins = [
   'https://app.omnia1biai.com.br',
-  'https://admin.omnia1biai.com.br',
-  'http://localhost:5173'
+  'https://admin.omnia1biai.com.br'
 ];
 
 const corsOptions = {
-  origin: [
-    'https://app.omnia1biai.com.br',
-    'https://admin.omnia1biai.com.br',
-    'http://localhost:3000'
-  ],
-  allowedHeaders: ['Content-Type', 'Authorization', 'apikey'],
-  credentials: true
+  origin: (origin, callback) => {
+    // Permite requests sem Origin (ex.: health checks, curl, server-to-server)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error(`CORS bloqueado para a origem: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Origin',
+    'X-Requested-With',
+    'Content-Type',
+    'Accept',
+    'Authorization',
+    'apikey'
+  ]
 };
 
 // 1) CORS (antes de body parser e rotas)
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// 2) Debug temporário — remover após validar em produção
+// 2) Log de requisições (antes das rotas)
 app.use((req, res, next) => {
-  console.log('[CORS debug] Origin:', req.headers.origin ?? '(none)');
+  console.log(`[REQ] ${req.method} ${req.url}`);
   next();
 });
 
+// 3) Body parser (antes das rotas)
 app.use(express.json());
+
+// 4) Fallback de headers CORS (apenas se algo acima não aplicar)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const allowOrigin = allowedOrigins.includes(origin) ? origin : 'https://app.omnia1biai.com.br';
+  res.header('Access-Control-Allow-Origin', allowOrigin);
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header(
+    'Access-Control-Allow-Headers',
+    'Origin, X-Requested-With, Content-Type, Accept, Authorization, apikey'
+  );
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  next();
+});
 
 /* =========================================================
    GLOBAL MIDDLEWARES
@@ -103,11 +126,7 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-    service: 'backend',
-    timestamp: new Date().toISOString()
-  });
+  res.json({ status: 'ok' });
 });
 
 app.get('/api/health/db', async (req, res) => {
@@ -223,7 +242,12 @@ const server = createServer(app);
 
 const io = new SocketIOServer(server, {
   cors: {
-    origin: '*',
+    origin: [
+      'https://app.omnia1biai.com.br',
+      'https://admin.omnia1biai.com.br'
+    ],
+    methods: ['GET', 'POST'],
+    credentials: true
   },
 });
 
