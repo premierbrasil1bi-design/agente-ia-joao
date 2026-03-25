@@ -228,10 +228,7 @@ app.use((err, req, res, next) => {
     return next(err);
   }
 
-  res.status(200).json({
-    error: true,
-    message: err.message || 'Erro interno'
-  });
+  res.status(500).json({ error: 'Erro interno' });
 });
 
 /* =========================================================
@@ -259,8 +256,15 @@ io.on('connection', (socket) => {
   console.log('[socket.io] Cliente conectado', socket.id);
 });
 
-initEvolutionQueueInfra()
-  .then(async () => {
+// O HTTP deve subir e responder mesmo se infra assíncrona (Redis/BullMQ) estiver indisponível.
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server rodando na porta ${PORT}`);
+  startChannelMonitor();
+});
+
+(async () => {
+  try {
+    await initEvolutionQueueInfra();
     if (process.env.EVOLUTION_WORKER_IN_PROCESS !== 'false') {
       startEvolutionWorker();
     } else {
@@ -269,12 +273,7 @@ initEvolutionQueueInfra()
       );
     }
     await runChannelsSchemaGuard();
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`Servidor rodando na porta ${PORT}`);
-      startChannelMonitor();
-    });
-  })
-  .catch((err) => {
-    console.error('[server] Falha ao iniciar fila Redis/Evolution:', err?.message || err);
-    process.exit(1);
-  });
+  } catch (err) {
+    console.error('[server] Falha ao inicializar infra Redis/BullMQ (servidor HTTP segue ativo):', err?.message || err);
+  }
+})();
