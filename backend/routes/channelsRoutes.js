@@ -11,6 +11,7 @@ import { sendBadRequest, sendNotFound } from '../utils/errorResponses.js';
 import { pool } from '../db/pool.js';
 import * as channelConnectionService from '../services/channelConnection.service.js';
 import * as evolutionService from '../services/evolutionService.js';
+import * as evolutionGateway from '../controllers/evolutionGateway.controller.js';
 import * as evolutionProvision from '../services/evolutionProvision.service.js';
 import { normalizeEvolutionState } from '../utils/evolutionState.js';
 import {
@@ -20,7 +21,10 @@ import {
   mergeWhatsappConfig,
 } from '../utils/whatsappChannelFlow.js';
 import { invalidateTenantChannels } from '../utils/channelCache.js';
-import { mapEvolutionStatus, toEvolutionStatusColumn } from '../utils/mapEvolutionStatus.js';
+import {
+  CONNECTION,
+  transitionEvolutionChannelConnection,
+} from '../services/channelEvolutionState.service.js';
 
 const router = Router();
 
@@ -31,23 +35,22 @@ router.use(agentAuth);
  * Proxy de GET /instance/fetchInstances — lista instâncias já criadas na Evolution (seleção no Client App).
  * Deve ficar antes de GET /:id para não capturar "evolution-instances" como id.
  */
-router.get('/evolution-instances', requireActiveTenant, async (req, res) => {
-  try {
-    const data = await evolutionService.fetchEvolutionInstances();
-    const instanceNames = [...channelConnectionService.collectInstanceNamesFromFetch(data)].sort();
-    res.status(200).json({ evolution: data, instanceNames });
-  } catch (err) {
-    console.error('[channels] GET /evolution-instances:', err.message);
-    const status = err.response?.status || 502;
-    res.status(status).json({
-      error: err.message || 'Erro ao listar instâncias na Evolution.',
-      details: err.response?.data ?? null,
-    });
-  }
-});
+router.get('/evolution-instances', requireActiveTenant, evolutionGateway.listInstances);
 
-/** Status de UI para WhatsApp (Evolution): alinha evolution_status + status interno active/inactive. */
+/**
+ * Campo `status` no JSON do Client App (UX). A verdade no banco é `connection_status`;
+ * `evolution_status` e `status` (active/inactive) só entram como fallback se `connection_status` vazio.
+ */
 function evolutionUiStatus(ch) {
+  const cs = String(ch.connection_status || '').toLowerCase();
+  if (cs === 'connecting') return 'connecting';
+  if (cs === 'connected') return 'connected';
+  if (cs === 'error') return 'error';
+  if (cs === 'disconnected') {
+    const ext = ch.external_id != null ? String(ch.external_id).trim() : '';
+    if (!ext) return 'disconnected';
+    return 'created';
+  }
   const ev = ch.evolution_status;
   if (ev != null && String(ev).trim() !== '') {
     return normalizeEvolutionState(ev);
@@ -293,14 +296,21 @@ router.post('/', requireActiveTenant, async (req, res) => {
       const cfgLegacy = mergeWhatsappConfig({}, {
         phase: WHATSAPP_PHASE.AWAITING_CONNECTION,
       });
-      await channelRepo.updateConnection(channel.id, tenantId, {
-        provider: 'evolution',
-        external_id: normalizedInstance,
-        instance: normalizedInstance,
-        status: mapEvolutionStatus('disconnected'),
-        evolution_status: toEvolutionStatusColumn('close'),
-        config: cfgLegacy,
-        last_error: null,
+      await transitionEvolutionChannelConnection({
+        channelId: channel.id,
+        tenantId,
+        channelRow: channel,
+        nextConnectionStatus: CONNECTION.DISCONNECTED,
+        evolutionRaw: 'close',
+        reason: 'user: canal WhatsApp criado com instância Evolution já existente (fluxo legado)',
+        source: 'user',
+        patch: {
+          provider: 'evolution',
+          external_id: normalizedInstance,
+          instance: normalizedInstance,
+          config: cfgLegacy,
+          last_error: null,
+        },
       });
       invalidateTenantChannels(tenantId);
       const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));

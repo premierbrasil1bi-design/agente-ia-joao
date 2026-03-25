@@ -48,6 +48,7 @@ export function mergeWhatsappConfig(config, patch) {
 
 /**
  * Fase pública para API/UI.
+ * Prioriza `channel.connection_status` (fonte de verdade); `status`/`evolution_status` são fallback legado.
  * @param {object} channel — row do repositório
  */
 export function deriveFlowPhase(channel) {
@@ -61,6 +62,11 @@ export function deriveFlowPhase(channel) {
 
   const ext = channel.external_id != null ? String(channel.external_id).trim() : '';
   if (!ext) return WHATSAPP_PHASE.DRAFT;
+
+  const cs = String(channel.connection_status || '').toLowerCase();
+  if (cs === 'connected') return WHATSAPP_PHASE.CONNECTED;
+  if (cs === 'error') return WHATSAPP_PHASE.ERROR;
+  if (cs === 'connecting') return WHATSAPP_PHASE.AWAITING_CONNECTION;
 
   const ev = String(channel.evolution_status || '').toLowerCase();
   const st = String(channel.status || '').toLowerCase();

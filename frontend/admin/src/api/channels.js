@@ -16,7 +16,7 @@ export function createChannelsApi(getToken, onUnauthorized = null) {
 
   return {
     getChannels: () => request('/api/agent/channels'),
-    getEvolutionInstances: () => request('/api/agent/channels/evolution-instances'),
+    getEvolutionInstances: () => request('/api/evolution/instances'),
     getChannel: (id) => request(`/api/agent/channels/${id}`),
     createChannel: (data) =>
       request('/api/agent/channels', { method: 'POST', body: JSON.stringify(data) }),

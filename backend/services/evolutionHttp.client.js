@@ -17,13 +17,26 @@ const getBaseUrl = () => {
   return url.replace(/\/$/, '');
 };
 
-const getApiKey = () => {
-  const key = process.env.AUTHENTICATION_API_KEY;
+/**
+ * Header apikey para Evolution. Com EVOLUTION_API_URL definida, exige EVOLUTION_API_KEY (SaaS).
+ * Sem URL, aceita AUTHENTICATION_API_KEY para scripts/webhooks legados.
+ */
+export const getEvolutionApiKey = () => {
+  const url = (process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL || '').trim();
+  const key =
+    url !== ''
+      ? process.env.EVOLUTION_API_KEY
+      : process.env.EVOLUTION_API_KEY || process.env.AUTHENTICATION_API_KEY;
   if (!key || String(key).trim() === '') {
-    throw new Error('AUTHENTICATION_API_KEY deve estar definida.');
+    if (url !== '') {
+      throw new Error('EVOLUTION_API_KEY é obrigatória quando EVOLUTION_API_URL está definida.');
+    }
+    throw new Error('Defina EVOLUTION_API_KEY ou AUTHENTICATION_API_KEY para chamadas à Evolution API.');
   }
   return String(key).trim();
 };
+
+const getApiKey = () => getEvolutionApiKey();
 
 const getHeaders = () => ({
   apikey: getApiKey(),
@@ -337,8 +350,8 @@ export async function fetchInstances() {
 export async function sendText(instance, number, text) {
   const EVOLUTION_URL = process.env.EVOLUTION_URL || process.env.EVOLUTION_API_URL;
 
-  if (!EVOLUTION_URL || !process.env.AUTHENTICATION_API_KEY) {
-    throw new Error('EVOLUTION_URL and AUTHENTICATION_API_KEY must be set');
+  if (!EVOLUTION_URL || !(process.env.EVOLUTION_API_KEY || process.env.AUTHENTICATION_API_KEY)) {
+    throw new Error('EVOLUTION_URL and EVOLUTION_API_KEY (ou AUTHENTICATION_API_KEY) must be set');
   }
 
   let instanceEncoded = instance;

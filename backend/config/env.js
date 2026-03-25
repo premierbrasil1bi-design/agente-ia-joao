@@ -35,6 +35,19 @@ if (isProd) {
   if (!raw.JWT_SECRET) warn('JWT_SECRET', 'não definida – usando fallback interno (apenas desenvolvimento)');
 }
 
+const evoUrl = (process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL || '').trim();
+const evoKeyStrict = (process.env.EVOLUTION_API_KEY || '').trim();
+const evoKeyLegacy = (process.env.AUTHENTICATION_API_KEY || '').trim();
+if (evoUrl && !evoKeyStrict) {
+  warn(
+    'EVOLUTION_API_KEY',
+    'EVOLUTION_API_URL definida — defina EVOLUTION_API_KEY (obrigatório; o backend encerra o startup se ausente).'
+  );
+}
+if (!evoUrl && (evoKeyStrict || evoKeyLegacy)) {
+  warn('EVOLUTION_API_URL', 'Chave Evolution definida mas URL ausente.');
+}
+
 export const config = {
   env: raw.NODE_ENV,
   isProduction: isProd,

@@ -7,7 +7,11 @@
 import * as evolutionService from './evolutionService.js';
 import * as channelRepo from '../repositories/channel.repository.js';
 import { normalizeEvolutionState } from '../utils/evolutionState.js';
-import { mapEvolutionStatus, toEvolutionStatusColumn } from '../utils/mapEvolutionStatus.js';
+import { dualStatusFromEvolutionRaw } from '../utils/mapConnectionLifecycle.js';
+import {
+  CONNECTION,
+  transitionEvolutionChannelConnection,
+} from './channelEvolutionState.service.js';
 import { logger } from '../utils/logger.js';
 import { DEFAULT_EVOLUTION_INSTANCE_NAME } from '../config/evolutionInstance.js';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
@@ -140,6 +144,51 @@ export function collectInstanceNamesFromFetch(data) {
   return names;
 }
 
+/**
+ * Extrai mapa instanceName → estado bruto (quando presente em fetchInstances).
+ */
+export function extractInstanceStatesFromFetch(data) {
+  /** @type {Map<string, string>} */
+  const map = new Map();
+  const seen = new WeakSet();
+
+  function visit(obj, depth) {
+    if (depth > 12 || obj == null) return;
+    if (typeof obj !== 'object') return;
+    if (seen.has(obj)) return;
+    seen.add(obj);
+
+    if (Array.isArray(obj)) {
+      obj.forEach((item) => visit(item, depth + 1));
+      return;
+    }
+
+    const name =
+      (typeof obj.instanceName === 'string' && obj.instanceName.trim()) ||
+      (typeof obj.name === 'string' && obj.name.trim()) ||
+      (obj.instance && typeof obj.instance.instanceName === 'string' && obj.instance.instanceName.trim()) ||
+      (obj.instance && typeof obj.instance.name === 'string' && obj.instance.name.trim()) ||
+      null;
+
+    const state =
+      obj.state ??
+      obj.connectionStatus?.state ??
+      obj.instance?.state ??
+      (obj.instance && typeof obj.instance === 'object' ? obj.instance.connectionStatus?.state : null);
+
+    if (name && state != null && String(state).trim() !== '') {
+      map.set(String(name).trim(), String(state).trim());
+    }
+
+    for (const v of Object.values(obj)) {
+      if (v && typeof v === 'object') visit(v, depth + 1);
+    }
+  }
+
+  visit(data, 0);
+  return map;
+}
+
 async function evolutionAlreadyHasInstance(instanceName) {
   try {
     // checkEvolutionHealth usa cache Redis + singleflight (evolutionInstancesCache)
@@ -176,12 +225,20 @@ export async function createWhatsAppInstance(channel) {
     );
   }
 
-  const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
-    external_id: instanceName,
-    provider: 'evolution',
-    status: mapEvolutionStatus('disconnected'),
-    evolution_status: 'disconnected',
+  const tr = await transitionEvolutionChannelConnection({
+    channelId: channel.id,
+    tenantId: channel.tenant_id,
+    channelRow: channel,
+    nextConnectionStatus: CONNECTION.DISCONNECTED,
+    evolutionRaw: 'disconnected',
+    reason: 'user: associar canal a instância Evolution existente',
+    source: 'user',
+    patch: {
+      external_id: instanceName,
+      provider: 'evolution',
+    },
   });
+  const updatedChannel = tr.channel ?? channel;
 
   logger.instanceCreated(instanceName, channel.id);
   return {
@@ -236,20 +293,26 @@ export async function connectWhatsAppChannel(channel) {
   });
   const connectResponse = await evolutionService.connectInstance(instanceName, { reset: false });
 
-  const connectingDbStatus = mapEvolutionStatus('connecting');
   const cfg = mergeWhatsappConfig(channel.config, {
     phase: WHATSAPP_PHASE.AWAITING_CONNECTION,
     lastConnectAt: new Date().toISOString(),
   });
 
-  let updatedChannel = await channelRepo.updateConnection(channel.id, tenantId, {
-    external_id: instanceName,
-    provider: 'evolution',
-    status: connectingDbStatus,
-    evolution_status: 'connecting',
-    config: cfg,
+  const trConnect = await transitionEvolutionChannelConnection({
+    channelId: channel.id,
+    tenantId,
+    channelRow: channel,
+    nextConnectionStatus: CONNECTION.CONNECTING,
+    evolutionRaw: 'connecting',
+    reason: 'user: POST connect (instance/connect)',
+    source: 'user',
+    patch: {
+      external_id: instanceName,
+      provider: 'evolution',
+      config: cfg,
+    },
   });
-  updatedChannel = updatedChannel ?? channel;
+  let updatedChannel = trConnect.channel ?? channel;
 
   const extracted = extractConnectArtifactFromPayload(connectResponse);
   if (extracted.artifactType && extracted.artifact) {
@@ -287,8 +350,22 @@ export async function getChannelQrCode(channel) {
     err.userMessage = 'Conclua o provisionamento da instância antes de obter o QR Code.';
     throw err;
   }
-  console.log('[WHATSAPP_ARTIFACT] getQRCode', { channelId: channel.id, instance: instanceName });
-  return await evolutionService.getQRCode(instanceName);
+  console.log('[EVOLUTION] getQRCode channelId=%s instance=%s', channel.id, instanceName);
+  const qr = await evolutionService.getQRCode(instanceName);
+  try {
+    await transitionEvolutionChannelConnection({
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+      channelRow: channel,
+      nextConnectionStatus: CONNECTION.CONNECTING,
+      evolutionRaw: 'connecting',
+      reason: 'user: obter QR Code',
+      source: 'user',
+    });
+  } catch (e) {
+    console.warn('[EVOLUTION] getQRCode persist connecting failed:', e.message);
+  }
+  return qr;
 }
 
 /**
@@ -324,6 +401,23 @@ export async function getChannelConnectionArtifact(channel) {
 
     if (rawLower === 'open') {
       await clearStoredWhatsappArtifact(channel);
+      const cfgOpen = mergeWhatsappConfig(channel.config, {
+        phase: WHATSAPP_PHASE.CONNECTED,
+        artifact: null,
+        artifactType: null,
+        artifactUpdatedAt: new Date().toISOString(),
+      });
+      await transitionEvolutionChannelConnection({
+        channelId: channel.id,
+        tenantId,
+        channelRow: channel,
+        nextConnectionStatus: CONNECTION.CONNECTED,
+        evolutionRaw: rawState,
+        reason: 'poll: artefato de conexão — estado open',
+        source: 'poll',
+        trustRemoteState: true,
+        patch: { config: cfgOpen },
+      });
       console.log('[WHATSAPP_ARTIFACT] connected — cache limpo', {
         channelId: channel.id,
         tenantId,
@@ -415,6 +509,7 @@ export async function getChannelConnectionArtifact(channel) {
       };
     }
 
+    const publicSt = mapPublicWhatsappStatus(rawState, channel);
     return {
       status: publicSt === 'inactive' ? 'inactive' : 'awaiting_connection',
       artifactType: null,
@@ -478,6 +573,17 @@ export async function getChannelConnectionArtifact(channel) {
     const definitiveClientError =
       typeof ax === 'number' && [400, 401, 403, 422].includes(ax);
     if (definitiveClientError) {
+      await transitionEvolutionChannelConnection({
+        channelId: channel.id,
+        tenantId,
+        channelRow: channel,
+        nextConnectionStatus: CONNECTION.ERROR,
+        evolutionRaw: `http_${ax}`,
+        reason: `poll: artefato Evolution HTTP ${ax} (erro cliente confirmado)`,
+        source: 'poll',
+        trustRemoteState: true,
+        patch: { last_error: `Evolution retornou HTTP ${ax} ao obter artefato.` },
+      });
       return {
         status: 'error',
         artifactType: null,
@@ -538,19 +644,11 @@ export async function getChannelStatus(channel) {
     const rawLower = rawState != null ? String(rawState).trim().toLowerCase() : '';
 
     const normalizedStatus = normalizeEvolutionState(rawState);
-    const dbStatus = mapEvolutionStatus(rawState);
-    console.log('[WHATSAPP_STATUS]', {
-      channelId: channel.id,
-      tenantId,
-      phaseBefore,
-      instance: instanceName,
-      endpoint: 'GET /instance/connectionState',
-      raw: rawState,
-      dbStatus,
-    });
+    const { connection_status, status: legacyPreview } = dualStatusFromEvolutionRaw(rawState);
+    console.log('[EVOLUTION] channel status poll channelId=%s instance=%s raw=%s connection_status=%s', channel.id, instanceName, rawState, connection_status);
 
     const previousStatus = channel.status ?? null;
-    if (dbStatus !== previousStatus) {
+    if (legacyPreview !== previousStatus) {
       logger.statusChange(instanceName, channel.id, previousStatus, normalizedStatus);
     }
 
@@ -564,12 +662,18 @@ export async function getChannelStatus(channel) {
       });
     }
 
-    const updatedChannel = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
-      status: dbStatus,
-      evolution_status: toEvolutionStatusColumn(rawState),
-      ...(dbStatus === 'active' ? { connected_at: new Date(), last_error: null } : {}),
-      ...(configUpdate !== undefined ? { config: configUpdate } : {}),
+    const trPoll = await transitionEvolutionChannelConnection({
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+      channelRow: channel,
+      nextConnectionStatus: connection_status,
+      evolutionRaw: rawState,
+      reason: 'poll: GET connectionState (status do canal)',
+      source: 'poll',
+      trustRemoteState: true,
+      patch: configUpdate !== undefined ? { config: configUpdate } : {},
     });
+    const updatedChannel = trPoll.channel ?? channel;
 
     const rowForPublic = updatedChannel ?? channel;
     const publicStatus = mapPublicWhatsappStatus(rawState, rowForPublic);
@@ -616,11 +720,23 @@ export async function getChannelStatus(channel) {
 
     if (axStatus === 404) {
       console.warn('[WHATSAPP_STATUS] instance 404', { channelId: channel.id, tenantId, phaseBefore });
+      await transitionEvolutionChannelConnection({
+        channelId: channel.id,
+        tenantId,
+        channelRow: channel,
+        nextConnectionStatus: CONNECTION.ERROR,
+        evolutionRaw: 'http_404',
+        reason: 'poll: connectionState HTTP 404 (instância inexistente)',
+        source: 'poll',
+        trustRemoteState: true,
+        patch: { last_error: 'Evolution retornou 404 para connectionState desta instância.' },
+      });
+      const refreshed = await channelRepo.findById(channel.id, tenantId);
       return {
         normalizedStatus: 'unknown',
         publicStatus: 'inactive',
         state: null,
-        channel,
+        channel: refreshed ?? channel,
         instanceNotFound: true,
         code: 'INSTANCE_NOT_FOUND',
         message: 'Instance not created',
@@ -647,9 +763,14 @@ export async function disconnectChannel(channel) {
   const ext = channel?.external_id != null ? String(channel.external_id).trim() : '';
 
   if (!ext) {
-    await channelRepo.updateConnection(channel.id, channel.tenant_id, {
-      status: mapEvolutionStatus('disconnected'),
-      evolution_status: 'disconnected',
+    await transitionEvolutionChannelConnection({
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+      channelRow: channel,
+      nextConnectionStatus: CONNECTION.DISCONNECTED,
+      evolutionRaw: 'disconnected',
+      reason: 'user: disconnect sem external_id (só persistência local)',
+      source: 'user',
     });
     return;
   }
@@ -657,14 +778,21 @@ export async function disconnectChannel(channel) {
   try {
     await evolutionService.disconnectInstance(ext);
   } catch (err) {
-    console.error('[channelConnection] disconnectInstance error:', err.message);
+    console.error('[EVOLUTION] disconnectInstance error:', err.message);
   }
 
-  await channelRepo.updateConnection(channel.id, channel.tenant_id, {
-    status: mapEvolutionStatus('disconnected'),
-    evolution_status: 'disconnected',
-    external_id: null,
-    connected_at: null,
+  await transitionEvolutionChannelConnection({
+    channelId: channel.id,
+    tenantId: channel.tenant_id,
+    channelRow: channel,
+    nextConnectionStatus: CONNECTION.DISCONNECTED,
+    evolutionRaw: 'disconnected',
+    reason: 'user: disconnect + limpar vínculo Evolution',
+    source: 'user',
+    patch: {
+      external_id: null,
+      connected_at: null,
+    },
   });
   logger.statusChange(ext, channel.id, channel.status, 'disconnected');
 }

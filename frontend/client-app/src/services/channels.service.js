@@ -5,9 +5,9 @@ export const channelsService = {
     return agentApi.request('/api/agent/channels');
   },
 
-  /** Instâncias já existentes na Evolution (proxy fetchInstances). */
+  /** Instâncias Evolution via backend (nunca chamar domínio Evolution direto no browser). */
   listEvolutionInstances() {
-    return agentApi.request('/api/channels/evolution-instances');
+    return agentApi.request('/api/evolution/instances');
   },
 
   createChannel(payload) {

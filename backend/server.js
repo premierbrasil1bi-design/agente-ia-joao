@@ -29,6 +29,9 @@ import tenantUsersRoutes from './routes/tenantUsers.routes.js';
 import platformTenantsRoutes from './routes/platformTenants.routes.js';
 import agentContextRoutes from './routes/agentContext.routes.js';
 import webhooksRoutes from './routes/webhooks.routes.js';
+import evolutionGatewayRoutes from './routes/evolutionGateway.routes.js';
+import evolutionIngressRoutes from './routes/evolutionIngress.routes.js';
+import { getEvolutionApiKey } from './services/evolutionHttp.client.js';
 
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { startChannelMonitor } from './services/channelMonitor.service.js';
@@ -38,6 +41,16 @@ import { startEvolutionWorker } from './workers/evolution.worker.js';
 import * as evolutionService from './services/evolutionService.js';
 
 console.log("DB CONNECTED:", process.env.DATABASE_URL?.includes("neon"));
+
+if ((process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL || '').trim()) {
+  try {
+    getEvolutionApiKey();
+  } catch (e) {
+    console.error('[EVOLUTION] startup: EVOLUTION_API_URL definida mas EVOLUTION_API_KEY ausente ou inválida.');
+    console.error('[EVOLUTION]', e.message);
+    process.exit(1);
+  }
+}
 
 process.on('unhandledRejection', console.error);
 process.on('uncaughtException', console.error);
@@ -159,6 +172,8 @@ apiRouter.use('/agents', agentAuth, requireTenant, agentsRoutes);
 /* Conexão WhatsApp (Evolution): /channels/:id/connect, qrcode, status, disconnect – antes das rotas CRUD */
 apiRouter.use('/channels', agentAuth, requireTenant, channelConnectionRoutes);
 apiRouter.use('/channels', agentAuth, requireTenant, channelsRoutes);
+apiRouter.use('/evolution', evolutionIngressRoutes);
+apiRouter.use('/evolution', evolutionGatewayRoutes);
 apiRouter.use('/context', agentAuth, requireTenant, agentContextRoutes);
 
 /* ---------- OUTRAS ROTAS DA API ---------- */

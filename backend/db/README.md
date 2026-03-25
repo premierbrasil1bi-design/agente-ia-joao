@@ -43,3 +43,33 @@ Se preferir rodar o SQL manualmente no painel Neon:
 4. Por fim, rode o seed no terminal: `node scripts/seed-dashboard.js`.
 
 Se `DATABASE_URL` não estiver definida, o backend continua funcionando e o painel usa dados simulados.
+
+## Migrations em `db/migrations/`
+
+Aplicar no Neon (SQL Editor ou cliente `psql`) **na ordem numérica** após o schema base, conforme a evolução do projeto.
+
+### Canais Evolution e `external_id`
+
+- **`external_id`** no canal com `provider = 'evolution'` é o **nome da instância na Evolution API** (o mesmo valor enviado em webhooks como `instance` / `instanceName`).
+- A partir da migration **`011_unique_evolution_external_id.sql`**, existe **no máximo um** canal por `external_id` entre todos os tenants (unicidade **global** na tabela `channels`, só para `provider = 'evolution'` e `external_id IS NOT NULL`).
+- Isto alinha webhooks e sync: uma instância Evolution mapeia a um único canal OMNIA.
+
+**Antes de aplicar 011**, verificar duplicados:
+
+```sql
+SELECT external_id, COUNT(*) AS n
+FROM channels
+WHERE provider = 'evolution'
+  AND external_id IS NOT NULL
+GROUP BY external_id
+HAVING COUNT(*) > 1;
+```
+
+Se houver resultados, corrigir dados à mão; a migration aborta com mensagem explícita e **não** cria o índice até ficar consistente.
+
+### Alertas críticos (`012_system_errors.sql`)
+
+- Tabela **`system_errors`**: persiste eventos como **`EVOLUTION_INVARIANT_BROKEN`** (duplicidade `external_id` / Evolution), além dos logs.
+- Webhook opcional: variável **`EVOLUTION_INVARIANT_WEBHOOK_URL`** — recebe POST JSON com `type`, `external_id`, `duplicate_row_count`, `channels` (fire-and-forget).
+- Rate limit em Redis: chave `evolution:invariant_alert:<external_id>` com **`EVOLUTION_INVARIANT_ALERT_TTL_SEC`** (padrão 60). Se a chave já existir, não grava de novo nem chama webhook — log **`[EVOLUTION][ALERT_SKIPPED_RATE_LIMIT]`**.
+- Após persistir + webhook (quando não rate-limited), o backend emite **`[EVOLUTION][ALERT_SENT]`** (útil no PM2).

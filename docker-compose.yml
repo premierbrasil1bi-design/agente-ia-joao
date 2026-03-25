@@ -77,12 +77,14 @@ services:
       CACHE_REDIS_URI: "redis://saas_redis:6379/1"
 
       AUTHENTICATION_TYPE: "apikey"
-      AUTHENTICATION_API_KEY: "default_key"
+      AUTHENTICATION_API_KEY: "EVOLUTION_2026_JOAO_998877"
 
       LOG_LEVEL: "INFO"
     ports:
       - "8080:8080"
     volumes:
+      # Sessões/auth stores da Evolution (atendai v2.x usa em geral /evolution/store — manter após restart).
+      # Se a imagem documentar outro path (ex.: instances), adicione volume adicional alinhado à doc da tag usada.
       - evolution_store:/evolution/store
       - ./docker/evolution/entrypoint.sh:/evolution-entrypoint.sh:ro
 
@@ -100,9 +102,10 @@ services:
       DB_BOOTSTRAP_MODE: safe
       REDIS_URL: redis://saas_redis:6379
       DATABASE_URL: "postgresql://neondb_owner:npg_JC9VIyrMFo1U@ep-wandering-paper-ahogquzh.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
-      AUTHENTICATION_API_KEY: default_key
+      # Alinhar com AUTHENTICATION_API_KEY do saas_evolution (fallback se EVOLUTION_API_KEY não existir no .env).
+      AUTHENTICATION_API_KEY: EVOLUTION_2026_JOAO_998877
       EVOLUTION_API_URL: http://saas_evolution:8080
-      EVOLUTION_API_KEY: default_key
+      EVOLUTION_API_KEY: EVOLUTION_2026_JOAO_998877
     ports:
       - "3000:3000"
     env_file:

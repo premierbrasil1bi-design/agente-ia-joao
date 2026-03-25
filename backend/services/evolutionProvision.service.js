@@ -14,7 +14,10 @@ import {
   getWhatsappFlow,
   deriveFlowPhase,
 } from '../utils/whatsappChannelFlow.js';
-import { mapEvolutionStatus, toEvolutionStatusColumn } from '../utils/mapEvolutionStatus.js';
+import {
+  CONNECTION,
+  transitionEvolutionChannelConnection,
+} from './channelEvolutionState.service.js';
 
 const USER_ERR_PROVISION = 'Não foi possível provisionar a instância do WhatsApp.';
 const ERR_INSTANCE_NOT_LISTED =
@@ -195,10 +198,15 @@ async function runProvisionOnce(channelId, tenantId) {
           userMessage: USER_ERR_PROVISION,
           provisioningStartedAt: null,
         });
-        await channelRepo.updateConnection(channelId, tenantId, {
-          config: cfgErr,
-          last_error: USER_ERR_PROVISION,
-          status: mapEvolutionStatus('disconnected'),
+        await transitionEvolutionChannelConnection({
+          channelId,
+          tenantId,
+          channelRow: channel,
+          nextConnectionStatus: CONNECTION.ERROR,
+          evolutionRaw: 'provision_failed',
+          reason: 'provision: 409/conflito mas instância não listável na Evolution',
+          source: 'provision',
+          patch: { config: cfgErr, last_error: USER_ERR_PROVISION },
         });
         console.error('[WHATSAPP_PROVISION] fail 409 not listable', {
           channelId,
@@ -215,10 +223,15 @@ async function runProvisionOnce(channelId, tenantId) {
         userMessage: USER_ERR_PROVISION,
         provisioningStartedAt: null,
       });
-      await channelRepo.updateConnection(channelId, tenantId, {
-        config: cfgErr,
-        last_error: USER_ERR_PROVISION,
-        status: mapEvolutionStatus('disconnected'),
+      await transitionEvolutionChannelConnection({
+        channelId,
+        tenantId,
+        channelRow: channel,
+        nextConnectionStatus: CONNECTION.ERROR,
+        evolutionRaw: 'provision_failed',
+        reason: 'provision: falha ao criar instância na Evolution',
+        source: 'provision',
+        patch: { config: cfgErr, last_error: USER_ERR_PROVISION },
       });
       console.error('[WHATSAPP_PROVISION] fail', {
         channelId,
@@ -240,15 +253,23 @@ async function runProvisionOnce(channelId, tenantId) {
     provisioningStartedAt: null,
   });
 
-  const updated = await channelRepo.updateConnection(channelId, tenantId, {
-    config: cfgOk,
-    provider: 'evolution',
-    external_id: externalId,
-    instance: externalId,
-    status: mapEvolutionStatus('disconnected'),
-    evolution_status: toEvolutionStatusColumn('close'),
-    last_error: null,
+  const trOk = await transitionEvolutionChannelConnection({
+    channelId,
+    tenantId,
+    channelRow: channel,
+    nextConnectionStatus: CONNECTION.CONNECTING,
+    evolutionRaw: 'close',
+    reason: 'provision: instância criada — aguardando conexão (QR/pairing)',
+    source: 'provision',
+    patch: {
+      config: cfgOk,
+      provider: 'evolution',
+      external_id: externalId,
+      instance: externalId,
+      last_error: null,
+    },
   });
+  const updated = trOk.channel ?? (await channelRepo.findById(channelId, tenantId));
 
   try {
     await evolutionService.invalidateEvolutionInstancesCache();

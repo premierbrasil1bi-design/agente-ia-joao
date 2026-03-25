@@ -5,6 +5,7 @@
 
 
 import { pool } from '../db/pool.js';
+import { fireEvolutionInvariantBrokenAlert } from '../services/evolutionInvariantAlert.service.js';
 
 
 export async function findByAgentId(agentId) {
@@ -68,11 +69,69 @@ export async function findById(id) {
 export async function findByExternalId(externalId) {
   if (!externalId || String(externalId).trim() === '') return null;
   const { rows } = await pool.query(
-    `SELECT id, tenant_id, agent_id, name, type, status, is_active, instance, external_id
+    `SELECT id, tenant_id, agent_id, name, type, status, is_active, instance, external_id, connection_status
      FROM channels WHERE external_id = $1 LIMIT 1`,
     [String(externalId).trim()]
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Canal Evolution para o external_id (instance name na API). Pós-migration 011, no máximo uma linha.
+ * Query defensiva LIMIT 2: se ainda houver mais de um (índice ausente ou dados legados), loga e retorna null.
+ */
+export async function findEvolutionChannelByExternalId(externalId) {
+  if (!externalId || String(externalId).trim() === '') return null;
+  const ext = String(externalId).trim();
+  const { rows } = await pool.query(
+    `SELECT id, tenant_id, agent_id, name, type, status, is_active, instance, external_id, connection_status,
+            provider
+     FROM channels
+     WHERE provider = 'evolution' AND external_id = $1
+     LIMIT 2`,
+    [ext]
+  );
+  if (rows.length > 1) {
+    let totalDup = rows.length;
+    try {
+      const { rows: cnt } = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM channels WHERE provider = 'evolution' AND external_id = $1`,
+        [ext]
+      );
+      totalDup = cnt[0]?.n ?? rows.length;
+    } catch {
+      /* ignora — log principal já cobre */
+    }
+    const channels = rows.map((r) => ({
+      id: r.id,
+      tenant_id: r.tenant_id,
+      provider: r.provider != null ? String(r.provider) : 'evolution',
+    }));
+    // PM2: mesmo prefixo em todas as linhas para filtro `pm2 logs | grep INVARIANT_BROKEN`
+    console.error('[EVOLUTION][INVARIANT_BROKEN]');
+    console.error(
+      `[EVOLUTION][INVARIANT_BROKEN] external_id=${JSON.stringify(ext)} duplicate_row_count=${totalDup}`
+    );
+    console.error(`[EVOLUTION][INVARIANT_BROKEN] channels=${JSON.stringify(channels)}`);
+    console.error(
+      '[EVOLUTION][INVARIANT_BROKEN] hint=migration_011_idx_unique_evolution_external_id docs=backend/db/README.md'
+    );
+    fireEvolutionInvariantBrokenAlert({
+      external_id: ext,
+      duplicate_row_count: totalDup,
+      channels,
+    });
+    return null;
+  }
+  return rows[0] ?? null;
+}
+
+/**
+ * @deprecated Preferir findEvolutionChannelByExternalId (retorno único). Mantido para compatibilidade.
+ */
+export async function findEvolutionChannelsByExternalId(externalId) {
+  const row = await findEvolutionChannelByExternalId(externalId);
+  return row ? [row] : [];
 }
 
 
