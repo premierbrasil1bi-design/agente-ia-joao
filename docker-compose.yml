@@ -43,6 +43,7 @@ services:
       - "3099:3000"
     environment:
       - WAHA_LOG_LEVEL=info
+      - WAHA_API_KEY=OMNIA_SECURE_9X7A_2026_JOAO
 
   # Evolution API: trocado de evoapicloud/evolution-api:v2.2.3 para atendai/evolution-api:v2.1.1 porque a
   # v2.2.3 falhava na criação de instâncias (erro interno ao ler connectionStatus.state indefinido). A v2.1.1
