@@ -42,7 +42,8 @@ import { startEvolutionWorker } from './workers/evolution.worker.js';
 import { runChannelsSchemaGuard } from './services/channelsSchemaGuard.service.js';
 import * as evolutionService from './services/evolutionService.js';
 
-console.log("DB CONNECTED:", process.env.DATABASE_URL?.includes("neon"));
+console.log('[ENV] REDIS:', process.env.REDIS_HOST || 'MISSING');
+console.log('[ENV] DATABASE:', process.env.DATABASE_URL ? 'OK' : 'MISSING');
 
 if ((process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL || '').trim()) {
   try {

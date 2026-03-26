@@ -94,13 +94,11 @@ services:
     depends_on:
       saas_postgres:
         condition: service_healthy
-    extra_hosts:
-      # Mantém REDIS_URL=redis://saas_redis:6379 apontando para o Redis externo no host.
-      - "saas_redis:host-gateway"
     environment:
       NODE_ENV: production
       DB_BOOTSTRAP_MODE: safe
-      REDIS_URL: redis://saas_redis:6379
+      REDIS_HOST: saas_redis
+      REDIS_PORT: 6379
       DATABASE_URL: "postgresql://neondb_owner:npg_JC9VIyrMFo1U@ep-wandering-paper-ahogquzh.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
       # Alinhar com AUTHENTICATION_API_KEY do saas_evolution (fallback se EVOLUTION_API_KEY não existir no .env).
       AUTHENTICATION_API_KEY: EVOLUTION_2026_JOAO_998877

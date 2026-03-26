@@ -21,17 +21,29 @@ let evolutionQueue = null;
 /** @type {QueueEvents | null} */
 let queueEvents = null;
 
-export function getRedisUrl() {
-  const raw = process.env.REDIS_URL;
-  if (raw != null && String(raw).trim() !== '') {
-    return String(raw).trim().replace('saas_redis', '127.0.0.1');
+export function getRedisConfig() {
+  const host = String(process.env.REDIS_HOST || '').trim();
+  const port = parseInt(process.env.REDIS_PORT || '6379', 10);
+  if (!host) {
+    throw new Error('REDIS_HOST não definido.');
   }
-  return 'redis://127.0.0.1:6379';
+  return {
+    host,
+    port: Number.isNaN(port) ? 6379 : port,
+  };
+}
+
+export function getRedisUrl() {
+  const cfg = getRedisConfig();
+  return `redis://${cfg.host}:${cfg.port}`;
 }
 
 export function getRedisConnection() {
   if (!redis) {
-    redis = new IORedis(getRedisUrl(), {
+    const cfg = getRedisConfig();
+    redis = new IORedis({
+      host: cfg.host,
+      port: cfg.port,
       maxRetriesPerRequest: null,
     });
     redis.on('error', (err) => {
