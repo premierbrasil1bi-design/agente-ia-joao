@@ -105,10 +105,10 @@ export async function createSession(name) {
  */
 export async function getQrCode(name) {
   const sessionName = WAHA_SINGLE_SESSION;
-  console.log('[WAHA] Fetching QR', sessionName);
+  console.log('[WAHA] Fetching QR Code via /api/default/auth/qr');
   try {
-    const { data } = await api.post(`/api/${encodeURIComponent(sessionName)}/auth/qr`, {});
-    return { ok: true, data, raw: data };
+    const { data } = await api.get('/api/default/auth/qr');
+    return { ok: true, data: data?.qr || data?.base64 || data, raw: data };
   } catch (err) {
     return { ...wahaErr(err), raw: null };
   }
