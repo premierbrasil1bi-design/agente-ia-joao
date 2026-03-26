@@ -83,6 +83,18 @@ export async function findByExternalId(externalId) {
 export async function findEvolutionChannelByExternalId(externalId) {
   if (!externalId || String(externalId).trim() === '') return null;
   const ext = String(externalId).trim();
+  // WAHA Core (free): sessão única fixa "default". Para webhook WAHA, buscamos apenas provider='waha'
+  // para evitar colisão com Evolution (que pode ter nomes arbitrários).
+  if (ext === 'default') {
+    const { rows } = await pool.query(
+      `SELECT id, tenant_id, agent_id, name, type, status, is_active, instance, external_id, connection_status,
+              provider
+       FROM channels
+       WHERE external_id = 'default' AND provider = 'waha'
+       LIMIT 1`
+    );
+    return rows[0] ?? null;
+  }
   const { rows } = await pool.query(
     `SELECT id, tenant_id, agent_id, name, type, status, is_active, instance, external_id, connection_status,
             provider

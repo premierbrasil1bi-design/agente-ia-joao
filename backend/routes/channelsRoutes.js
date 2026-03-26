@@ -462,9 +462,13 @@ router.delete('/:id', requireActiveTenant, async (req, res) => {
 
     const ext = existing.external_id != null ? String(existing.external_id).trim() : '';
     const prov = String(existing.provider || '').toLowerCase();
-    if (prov === 'waha' && ext) {
-      await wahaService.logoutSession(ext);
-      await wahaService.deleteSession(ext);
+    if (prov === 'waha') {
+      // WAHA Core (free): single-session "default" pode ser compartilhada.
+      // Ao remover um canal local, não encerrar/deletar a sessão remota (evita derrubar outros canais/agentes).
+      console.log('[channels] DELETE: WAHA channel removido (não encerra sessão remota)', {
+        channelId: existing.id,
+        external_id: ext || null,
+      });
     } else if (prov === 'evolution' && ext) {
       try {
         await evolutionService.deleteInstance(ext);

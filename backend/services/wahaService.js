@@ -5,6 +5,9 @@
 
 import axios from 'axios';
 
+// WAHA Core (free) permite apenas uma sessão fixa.
+const WAHA_SINGLE_SESSION = 'default';
+
 function getBaseURL() {
   const raw = process.env.WAHA_URL || 'http://127.0.0.1:3099';
   return String(raw).replace(/\/$/, '');
@@ -75,20 +78,19 @@ export async function testWahaConnection() {
  * @param {string} name - nome da sessão WAHA (id estável por canal)
  */
 export async function createSession(name) {
-  const safe = String(name || '').trim();
-  if (!safe) {
-    return { ok: false, error: 'Nome da sessão WAHA é obrigatório.' };
-  }
-  console.log('[WAHA] Creating session', safe);
+  // Ignora qualquer nome dinâmico: sessão única "default"
+  const sessionName = WAHA_SINGLE_SESSION;
+  console.log('[WAHA] Creating session', sessionName);
   try {
-    const { data } = await api.post('/api/sessions', { name: safe, start: true });
+    const { data } = await api.post('/api/sessions', { name: sessionName, start: true });
     return { ok: true, data };
   } catch (err) {
     const st = err.response?.status;
+    // Se já existir, não deve tentar recriar (idempotente).
     if (st === 409 || st === 400) {
       try {
-        await api.post(`/api/sessions/${encodeURIComponent(safe)}/start`, {});
-        return { ok: true, data: { name: safe, reused: true } };
+        await api.post(`/api/sessions/${encodeURIComponent(sessionName)}/start`, {});
+        return { ok: true, data: { name: sessionName, reused: true } };
       } catch (e2) {
         console.error('[WAHA] createSession retry start:', e2.message);
         return wahaErr(e2);
@@ -102,13 +104,10 @@ export async function createSession(name) {
  * QR em base64 — POST /api/{session}/auth/qr
  */
 export async function getQrCode(name) {
-  const safe = String(name || '').trim();
-  if (!safe) {
-    return { ok: false, error: 'Nome da sessão WAHA é obrigatório.', raw: null };
-  }
-  console.log('[WAHA] Fetching QR', safe);
+  const sessionName = WAHA_SINGLE_SESSION;
+  console.log('[WAHA] Fetching QR', sessionName);
   try {
-    const { data } = await api.post(`/api/${encodeURIComponent(safe)}/auth/qr`, {});
+    const { data } = await api.post(`/api/${encodeURIComponent(sessionName)}/auth/qr`, {});
     return { ok: true, data, raw: data };
   } catch (err) {
     return { ...wahaErr(err), raw: null };
@@ -119,12 +118,9 @@ export async function getQrCode(name) {
  * GET /api/sessions/{name}
  */
 export async function getSessionStatus(name) {
-  const safe = String(name || '').trim();
-  if (!safe) {
-    return { ok: false, error: 'Nome da sessão WAHA é obrigatório.', data: null };
-  }
+  const sessionName = WAHA_SINGLE_SESSION;
   try {
-    const { data } = await api.get(`/api/sessions/${encodeURIComponent(safe)}`, { timeout: 30000 });
+    const { data } = await api.get(`/api/sessions/${encodeURIComponent(sessionName)}`, { timeout: 30000 });
     return { ok: true, data };
   } catch (err) {
     return { ...wahaErr(err), data: null };
@@ -135,14 +131,14 @@ export async function getSessionStatus(name) {
  * chatId = número apenas dígitos + @c.us
  */
 export async function sendMessage(name, number, text) {
-  const safe = String(name || '').trim();
+  const sessionName = WAHA_SINGLE_SESSION;
   const digits = String(number || '').replace(/\D/g, '');
   const body = {
-    session: safe,
+    session: sessionName,
     chatId: `${digits}@c.us`,
     text: String(text ?? ''),
   };
-  console.log('[WAHA] Sending message', { session: safe, chatId: body.chatId });
+  console.log('[WAHA] Sending message', { session: sessionName, chatId: body.chatId });
   try {
     const { data } = await api.post('/api/sendText', body, { timeout: 20000 });
     return { ok: true, data };
@@ -152,10 +148,9 @@ export async function sendMessage(name, number, text) {
 }
 
 export async function logoutSession(name) {
-  const safe = String(name || '').trim();
-  if (!safe) return { ok: true, skipped: true };
+  const sessionName = WAHA_SINGLE_SESSION;
   try {
-    await api.post(`/api/sessions/${encodeURIComponent(safe)}/logout`, {});
+    await api.post(`/api/sessions/${encodeURIComponent(sessionName)}/logout`, {});
     return { ok: true };
   } catch (err) {
     console.warn('[WAHA] logoutSession:', err.message);
@@ -164,10 +159,9 @@ export async function logoutSession(name) {
 }
 
 export async function deleteSession(name) {
-  const safe = String(name || '').trim();
-  if (!safe) return { ok: true, skipped: true };
+  const sessionName = WAHA_SINGLE_SESSION;
   try {
-    await api.delete(`/api/sessions/${encodeURIComponent(safe)}`);
+    await api.delete(`/api/sessions/${encodeURIComponent(sessionName)}`);
     return { ok: true };
   } catch (err) {
     if (err.response?.status === 404) return { ok: true, missing: true };
@@ -180,17 +174,14 @@ export async function deleteSession(name) {
  * Configura webhooks na sessão (message + session.status).
  */
 export async function setWebhook(name) {
-  const safe = String(name || '').trim();
-  if (!safe) {
-    return { ok: false, error: 'Nome da sessão WAHA é obrigatório.' };
-  }
+  const sessionName = WAHA_SINGLE_SESSION;
 
   const apiUrl = (process.env.API_URL || '').trim() || 'https://api.omnia1biai.com.br';
   const webhookUrl = `${apiUrl.replace(/\/$/, '')}/api/channels/webhook/waha`;
-  console.log('[WAHA] Configuring webhook', { session: safe, webhookUrl });
+  console.log('[WAHA] Configuring webhook', { session: sessionName, webhookUrl });
 
   const body = {
-    name: safe,
+    name: sessionName,
     config: {
       webhooks: [
         {
@@ -202,11 +193,11 @@ export async function setWebhook(name) {
   };
 
   try {
-    const { data } = await api.put(`/api/sessions/${encodeURIComponent(safe)}`, body);
+    const { data } = await api.put(`/api/sessions/${encodeURIComponent(sessionName)}`, body);
     return { ok: true, data };
   } catch (err) {
     try {
-      const { data } = await api.put(`/api/sessions/${encodeURIComponent(safe)}/`, body);
+      const { data } = await api.put(`/api/sessions/${encodeURIComponent(sessionName)}/`, body);
       return { ok: true, data };
     } catch (err2) {
       return wahaErr(err2);

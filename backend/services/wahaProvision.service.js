@@ -62,10 +62,8 @@ async function runOnce(channelId, tenantId) {
     return { ok: true, channel, skipped: true, reason: 'already_connected' };
   }
 
-  const ext =
-    channel.external_id != null && String(channel.external_id).trim() !== ''
-      ? String(channel.external_id).trim()
-      : generateEvolutionInstanceName(tenantId, channelId);
+  // WAHA Core (free): apenas uma sessão fixa ("default").
+  const ext = 'default';
 
   const cfg = mergeWhatsappConfig(channel.config, {
     phase: WHATSAPP_PHASE.AWAITING_CONNECTION,

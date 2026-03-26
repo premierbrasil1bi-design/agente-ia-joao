@@ -268,13 +268,8 @@ function mapWahaSessionStatusToConnection(wahaStatus, sessionPayload) {
  */
 async function connectWhatsAppChannelWaha(channel) {
   const tenantId = channel.tenant_id;
-  const ext = channel.external_id != null ? String(channel.external_id).trim() : '';
-  if (!ext) {
-    const err = new Error('Instance not created');
-    err.code = 'INSTANCE_NOT_FOUND';
-    err.userMessage = 'Conclua o provisionamento antes de conectar (WAHA).';
-    throw err;
-  }
+  // WAHA Core (free): apenas uma sessão fixa ("default") para todo o sistema.
+  const ext = 'default';
 
   const flow = getWhatsappFlow(channel.config);
   const phaseBefore = deriveFlowPhase(channel);
@@ -341,13 +336,7 @@ async function connectWhatsAppChannelWaha(channel) {
 }
 
 async function getChannelQrCodeWaha(channel) {
-  const instanceName = getEvolutionInstanceName(channel);
-  if (!instanceName) {
-    const err = new Error('Instance not created');
-    err.code = 'INSTANCE_NOT_FOUND';
-    err.userMessage = 'Conclua o provisionamento antes de obter o QR Code (WAHA).';
-    throw err;
-  }
+  const instanceName = 'default';
   const qr = await wahaService.getQrCode(instanceName);
   if (!qr.ok) {
     throw new Error(qr.error || 'WAHA: falha ao obter QR.');
@@ -360,17 +349,8 @@ async function getChannelQrCodeWaha(channel) {
 }
 
 async function getChannelStatusWaha(channel) {
-  const instanceName = getEvolutionInstanceName(channel);
+  const instanceName = 'default';
   const tenantId = channel.tenant_id;
-  if (!instanceName) {
-    return {
-      normalizedStatus: 'unknown',
-      publicStatus: 'inactive',
-      state: null,
-      channel,
-    };
-  }
-
   const st = await wahaService.getSessionStatus(instanceName);
   if (!st.ok || !st.data) {
     return {
@@ -428,31 +408,17 @@ async function getChannelStatusWaha(channel) {
 }
 
 async function disconnectChannelWaha(channel) {
-  const ext = channel?.external_id != null ? String(channel.external_id).trim() : '';
-  if (!ext) {
-    await transitionEvolutionChannelConnection({
-      channelId: channel.id,
-      tenantId: channel.tenant_id,
-      channelRow: channel,
-      nextConnectionStatus: CONNECTION.DISCONNECTED,
-      evolutionRaw: 'waha_disconnected',
-      reason: 'user: disconnect WAHA sem sessão',
-      source: 'user',
-    });
-    return;
-  }
-  await wahaService.logoutSession(ext);
-  await wahaService.deleteSession(ext);
+  // WAHA Core: sessão única "default" pode ser compartilhada.
+  // Não derrubar a sessão remota ao desconectar um canal local.
   await transitionEvolutionChannelConnection({
     channelId: channel.id,
     tenantId: channel.tenant_id,
     channelRow: channel,
     nextConnectionStatus: CONNECTION.DISCONNECTED,
-    evolutionRaw: 'disconnected',
-    reason: 'user: WAHA logout/delete',
+    evolutionRaw: 'waha_disconnected',
+    reason: 'user: disconnect WAHA (single-session: não encerra sessão remota)',
     source: 'user',
     patch: {
-      external_id: null,
       connected_at: null,
     },
   });
