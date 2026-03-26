@@ -15,7 +15,6 @@ import * as evolutionService from '../services/evolutionService.js';
 import * as evolutionGateway from '../controllers/evolutionGateway.controller.js';
 import * as evolutionProvision from '../services/evolutionProvision.service.js';
 import * as wahaProvision from '../services/wahaProvision.service.js';
-import { generateEvolutionInstanceName } from '../services/evolutionProvision.service.js';
 import {
   deriveFlowPhase,
   nextActionForChannel,
@@ -31,17 +30,6 @@ import {
 const router = Router();
 
 router.use(agentAuth);
-
-function sanitizeWahaSessionName(raw, tenantId, channelId) {
-  const g = generateEvolutionInstanceName(tenantId, channelId);
-  const s = String(raw || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, '_')
-    .replace(/_+/g, '_')
-    .slice(0, 72);
-  return s || g;
-}
 
 /**
  * GET /api/channels/evolution-instances
@@ -79,13 +67,14 @@ function normalizeChannelForApi(ch) {
   const providerLc = String(ch.provider || '').toLowerCase();
   const isEvolution = providerLc === 'evolution';
   const isWaha = providerLc === 'waha';
+  const isZapi = providerLc === 'zapi';
   const type =
-    isEvolution || isWaha
+    isEvolution || isWaha || isZapi
       ? 'whatsapp'
       : (ch.type != null && String(ch.type).trim() !== '')
         ? String(ch.type).trim().toLowerCase()
         : 'api';
-  if (isEvolution || isWaha) {
+  if (isEvolution || isWaha || isZapi) {
     return { ...ch, type, status: evolutionUiStatus(ch) };
   }
   return { ...ch, type };
@@ -256,8 +245,13 @@ router.post('/', requireActiveTenant, async (req, res) => {
     }
 
     const { name, agentId, agent_id, type, instance, active, provider } = req.body || {};
+    const fallbackProvidersRaw = req.body?.fallback_providers;
+    const configInput = req.body?.config && typeof req.body.config === 'object' ? req.body.config : {};
     const finalAgentId = agent_id || agentId;
     const providerLc = String(provider || 'evolution').toLowerCase().trim();
+    const fallbackProviders = Array.isArray(fallbackProvidersRaw)
+      ? [...new Set(fallbackProvidersRaw.map((p) => String(p || '').toLowerCase().trim()).filter(Boolean))]
+      : [];
 
     if (!finalAgentId) {
       return sendBadRequest(res, 'agent_id (ou agentId) é obrigatório.');
@@ -276,6 +270,10 @@ router.post('/', requireActiveTenant, async (req, res) => {
       instance != null && String(instance).trim() !== ''
         ? String(instance).trim().replace(/\s+/g, '-')
         : '';
+
+    if (!['waha', 'evolution', 'zapi'].includes(providerLc) && channelType === 'whatsapp') {
+      return sendBadRequest(res, 'provider inválido para WhatsApp. Use: waha, evolution ou zapi.');
+    }
 
     if (providerLc === 'waha' && channelType !== 'whatsapp') {
       return sendBadRequest(res, 'provider "waha" exige type "whatsapp".');
@@ -346,10 +344,11 @@ router.post('/', requireActiveTenant, async (req, res) => {
     }
 
     if (providerLc === 'waha') {
-      const ext = sanitizeWahaSessionName(normalizedInstance, tenantId, channel.id);
-      const cfgDraft = mergeWhatsappConfig({}, { phase: WHATSAPP_PHASE.DRAFT });
+      const ext = 'default';
+      const cfgDraft = mergeWhatsappConfig(configInput, { phase: WHATSAPP_PHASE.DRAFT });
       await channelRepo.updateConnection(channel.id, tenantId, {
         provider: 'waha',
+        fallback_providers: fallbackProviders,
         external_id: ext,
         instance: ext,
         config: cfgDraft,
@@ -366,7 +365,7 @@ router.post('/', requireActiveTenant, async (req, res) => {
     }
 
     if (normalizedInstance) {
-      const cfgLegacy = mergeWhatsappConfig({}, {
+      const cfgLegacy = mergeWhatsappConfig(configInput, {
         phase: WHATSAPP_PHASE.AWAITING_CONNECTION,
       });
       await transitionEvolutionChannelConnection({
@@ -379,6 +378,7 @@ router.post('/', requireActiveTenant, async (req, res) => {
         source: 'user',
         patch: {
           provider: 'evolution',
+          fallback_providers: fallbackProviders,
           external_id: normalizedInstance,
           instance: normalizedInstance,
           config: cfgLegacy,
@@ -395,8 +395,32 @@ router.post('/', requireActiveTenant, async (req, res) => {
       });
     }
 
-    const cfgDraft = mergeWhatsappConfig({}, { phase: WHATSAPP_PHASE.DRAFT });
+    if (providerLc === 'zapi') {
+      const cfgZapi = mergeWhatsappConfig(configInput, { phase: WHATSAPP_PHASE.DRAFT });
+      const zapiExternalId =
+        String(cfgZapi?.zapi?.instanceId || normalizedInstance || '').trim() || null;
+      await channelRepo.updateConnection(channel.id, tenantId, {
+        provider: 'zapi',
+        fallback_providers: fallbackProviders,
+        external_id: zapiExternalId,
+        instance: zapiExternalId || channel.instance,
+        config: cfgZapi,
+        last_error: null,
+      });
+      invalidateTenantChannels(tenantId);
+      const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
+      return res.status(200).json({
+        success: true,
+        channel: full,
+        nextAction: 'connect',
+        provider: 'zapi',
+      });
+    }
+
+    const cfgDraft = mergeWhatsappConfig(configInput, { phase: WHATSAPP_PHASE.DRAFT });
     await channelRepo.updateConnection(channel.id, tenantId, {
+      provider: providerLc,
+      fallback_providers: fallbackProviders,
       config: cfgDraft,
       last_error: null,
     });
@@ -430,14 +454,24 @@ router.put('/:id', requireActiveTenant, async (req, res) => {
       return sendNotFound(res, 'Canal não encontrado.');
     }
 
-    const { type, instance, agent_id, active } = req.body || {};
+    const { type, instance, agent_id, active, provider, fallback_providers, config } = req.body || {};
     const updated = await channelRepo.update(req.params.id, tenantId, {
       type,
       instance,
       agent_id,
       active,
     });
-    res.status(200).json(updated);
+    const hasConnPatch =
+      provider !== undefined || fallback_providers !== undefined || config !== undefined;
+    if (!hasConnPatch) {
+      return res.status(200).json(updated);
+    }
+    const updatedConn = await channelRepo.updateConnection(req.params.id, tenantId, {
+      ...(provider !== undefined ? { provider: String(provider || '').toLowerCase().trim() || null } : {}),
+      ...(fallback_providers !== undefined ? { fallback_providers } : {}),
+      ...(config !== undefined ? { config: config && typeof config === 'object' ? config : {} } : {}),
+    });
+    res.status(200).json(updatedConn);
   } catch (err) {
     console.error('[channels] PUT /:id:', err.message);
     res.status(500).json({ error: 'Erro ao atualizar canal.' });

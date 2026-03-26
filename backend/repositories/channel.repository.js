@@ -6,7 +6,7 @@
 import { pool } from '../db/pool.js';
 
 const CHANNEL_SELECT = `id, tenant_id, agent_id, name, type, instance, is_active AS active,
-  provider, config, external_id, connected_at, last_error, status, connection_status,
+  provider, fallback_providers, config, external_id, connected_at, last_error, status, connection_status,
   created_at, updated_at`;
 
 export async function findAllByTenant(tenantId) {
@@ -115,6 +115,11 @@ export async function updateConnection(id, tenantId, data) {
   if (data.provider !== undefined) {
     updates.push(`provider = $${pos}`);
     values.push(data.provider != null ? String(data.provider) : null);
+    pos += 1;
+  }
+  if (data.fallback_providers !== undefined) {
+    updates.push(`fallback_providers = $${pos}::jsonb`);
+    values.push(JSON.stringify(Array.isArray(data.fallback_providers) ? data.fallback_providers : []));
     pos += 1;
   }
   if (data.external_id !== undefined) {

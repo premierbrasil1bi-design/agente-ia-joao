@@ -12,6 +12,7 @@ import {
 import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service.js';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { deriveFlowPhase } from '../utils/whatsappChannelFlow.js';
+import * as whatsappEngine from '../services/whatsappEngine.js';
 
 async function getChannelFromReq(req, res) {
   const tenantId = req.tenantId || req.user?.tenantId;
@@ -62,6 +63,23 @@ export async function connectChannel(req, res) {
     if (!channel) return;
 
     console.log('[CONNECT_CHANNEL] channelId:', channel.id, 'tenantId:', channel.tenant_id);
+    const providerLc = String(channel.provider || '').toLowerCase();
+    const isWhatsapp = String(channel.type || '').toLowerCase() === 'whatsapp';
+    const shouldUseEngine = isWhatsapp && ['waha', 'evolution', 'zapi'].includes(providerLc);
+    if (shouldUseEngine) {
+      const out = await whatsappEngine.connectChannel(channel);
+      const refreshed = await channelRepo.findById(channel.id, channel.tenant_id);
+      return res.status(200).json({
+        success: true,
+        channelId: channel.id,
+        provider: out.provider,
+        qr: out.qr || null,
+        qrcode: out.qr || null,
+        channel: refreshed || channel,
+        status: out.connected ? 'connected' : 'connecting',
+      });
+    }
+
     const result = await channelConnectionService.connectWhatsAppChannel(channel);
 
     const { artifactType, artifact } = extractConnectArtifactFromPayload(result.connectResponse);
