@@ -15,6 +15,8 @@ import BillingPage from "./pages/BillingPage";
 import LogsPage from "./pages/LogsPage";
 import AdminsPage from "./pages/AdminsPage";
 import SettingsPage from "./pages/SettingsPage";
+import SocketMetricsPage from "./pages/SocketMetricsPage";
+import IncidentTimelinePage from "./pages/IncidentTimelinePage";
 
 export default function App() {
   return (
@@ -33,6 +35,8 @@ export default function App() {
             <Route path="/usage" element={<UsagePage />} />
             <Route path="/billing" element={<BillingPage />} />
             <Route path="/logs" element={<LogsPage />} />
+            <Route path="/socket-metrics" element={<SocketMetricsPage />} />
+            <Route path="/incident-timeline" element={<IncidentTimelinePage />} />
             <Route path="/admins" element={<AdminsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>

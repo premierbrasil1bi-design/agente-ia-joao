@@ -5,7 +5,7 @@ import { Dashboard } from './pages/Dashboard';
 import { ContextoAgente } from './pages/ContextoAgente';
 import { Prompts } from './pages/Prompts';
 import { Agents } from './pages/Agents';
-import { Channels } from './pages/Channels';
+import { Channels } from './pages/Channels.new';
 import { Login } from './pages/Login';
 import { useAgentAuth } from './context/AgentAuthContext';
 

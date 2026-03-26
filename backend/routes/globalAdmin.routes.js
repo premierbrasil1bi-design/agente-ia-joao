@@ -26,6 +26,208 @@ function getJwtSecret() {
   return secret;
 }
 
+function parseRange(rangeRaw) {
+  const val = String(rangeRaw || '24h').toLowerCase().trim();
+  if (val === '1h') return { label: '1h', ms: 60 * 60 * 1000, minutes: 60 };
+  if (val === '7d') return { label: '7d', ms: 7 * 24 * 60 * 60 * 1000, minutes: 7 * 24 * 60 };
+  return { label: '24h', ms: 24 * 60 * 60 * 1000, minutes: 24 * 60 };
+}
+
+function collectDatesForRange(rangeCfg) {
+  const now = Date.now();
+  const start = now - rangeCfg.ms;
+  const dates = new Set();
+  for (let t = start; t <= now; t += 24 * 60 * 60 * 1000) {
+    dates.add(new Date(t).toISOString().slice(0, 10));
+  }
+  dates.add(new Date(now).toISOString().slice(0, 10));
+  return dates;
+}
+
+function toNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function aggregateMetrics(hashObj, dates, filters = {}) {
+  const out = {
+    total: 0,
+    byTenant: {},
+    byProvider: {},
+  };
+  const tenantFilter = filters.tenantId ? String(filters.tenantId) : null;
+  const providerFilter = filters.provider ? String(filters.provider).toLowerCase().trim() : null;
+  for (const [field, rawValue] of Object.entries(hashObj || {})) {
+    const value = toNumber(rawValue);
+    if (!value) continue;
+
+    // Campos padrão:
+    // total:YYYY-MM-DD
+    // tenant:<tenantId>:YYYY-MM-DD
+    // provider:<provider>:YYYY-MM-DD
+    const parts = field.split(':');
+    if (parts.length < 2) continue;
+    const kind = parts[0];
+    const date = parts[parts.length - 1];
+    if (!dates.has(date)) continue;
+
+    if (kind === 'total') {
+      // total só entra quando não há filtro (senão inflaria números sem recorte).
+      if (!tenantFilter && !providerFilter) out.total += value;
+      continue;
+    }
+    if (kind === 'tenant' && parts.length >= 3) {
+      const tenantId = parts.slice(1, -1).join(':');
+      if (tenantFilter && tenantFilter !== tenantId) continue;
+      out.byTenant[tenantId] = (out.byTenant[tenantId] || 0) + value;
+      out.total += value;
+      continue;
+    }
+    if (kind === 'provider' && parts.length >= 3) {
+      const provider = parts.slice(1, -1).join(':').toLowerCase();
+      if (providerFilter && providerFilter !== provider) continue;
+      out.byProvider[provider] = (out.byProvider[provider] || 0) + value;
+      // Não soma em total aqui para evitar dupla contagem com byTenant.
+    }
+  }
+  return out;
+}
+
+function severityFromRate(errorRatePercent) {
+  if (errorRatePercent > 5) return 'critical';
+  if (errorRatePercent >= 2) return 'warning';
+  return null;
+}
+
+function messageFromSeverity(type, errorRatePercent, provider) {
+  const scope = provider ? ` provider ${String(provider).toUpperCase()}` : ' sistema';
+  if (type === 'critical') return `Taxa de erro crítica (${errorRatePercent.toFixed(2)}%) no${scope}.`;
+  if (type === 'warning') return `Taxa de erro em atenção (${errorRatePercent.toFixed(2)}%) no${scope}.`;
+  return 'Sistema normalizado';
+}
+
+function buildScopeKey({ tenantId, provider }) {
+  return `tenant:${tenantId || 'all'}:provider:${provider || 'all'}`;
+}
+
+async function saveAlert(redis, alert) {
+  if (!redis || !alert) return;
+  await redis.hset('socket:alerts:store', alert.id, JSON.stringify(alert));
+  await redis.lpush('socket:alerts:index', alert.id);
+  await redis.ltrim('socket:alerts:index', 0, 299);
+  await redis.expire('socket:alerts:index', 60 * 60 * 24 * 30);
+  await redis.expire('socket:alerts:store', 60 * 60 * 24 * 30);
+}
+
+async function readAlertById(redis, id) {
+  if (!redis || !id) return null;
+  const raw = await redis.hget('socket:alerts:store', id);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveActiveAlert(redis, scopeKey) {
+  const activeId = await redis.hget('socket:alerts:active', scopeKey);
+  if (!activeId) return null;
+  const existing = await readAlertById(redis, activeId);
+  if (!existing || existing.status === 'resolved') {
+    await redis.hdel('socket:alerts:active', scopeKey);
+    return null;
+  }
+  existing.status = 'resolved';
+  existing.resolvedAt = new Date().toISOString();
+  await saveAlert(redis, existing);
+  await redis.hdel('socket:alerts:active', scopeKey);
+  return existing;
+}
+
+async function upsertAlertByRate(redis, { errorRatePercent, tenantId, provider }) {
+  const scopeKey = buildScopeKey({ tenantId, provider });
+  const severity = severityFromRate(errorRatePercent);
+  const activeId = await redis.hget('socket:alerts:active', scopeKey);
+  const active = activeId ? await readAlertById(redis, activeId) : null;
+  const now = new Date().toISOString();
+
+  // Recuperação automática quando volta ao normal (<2%).
+  if (!severity) {
+    const resolved = await resolveActiveAlert(redis, scopeKey);
+    if (!resolved) return { active: null, created: null, recovered: null };
+    const recovery = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'info',
+      message: 'Sistema normalizado',
+      provider: provider || undefined,
+      tenantId: tenantId || undefined,
+      timestamp: now,
+      status: 'resolved',
+      resolvedAt: now,
+      scopeKey,
+    };
+    await saveAlert(redis, recovery);
+    return { active: null, created: null, recovered: recovery };
+  }
+
+  // Se já existe alerta ativo no mesmo nível, não duplica.
+  if (active && active.status === 'active' && active.type === severity) {
+    return { active, created: null, recovered: null };
+  }
+
+  // Resolve alerta anterior (se existir) antes de abrir novo incidente.
+  if (active && active.status === 'active') {
+    await resolveActiveAlert(redis, scopeKey);
+  }
+
+  const created = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: severity,
+    message: messageFromSeverity(severity, errorRatePercent, provider),
+    provider: provider || undefined,
+    tenantId: tenantId || undefined,
+    timestamp: now,
+    status: 'active',
+    resolvedAt: null,
+    scopeKey,
+  };
+  await saveAlert(redis, created);
+  await redis.hset('socket:alerts:active', scopeKey, created.id);
+  await redis.expire('socket:alerts:active', 60 * 60 * 24 * 30);
+  return { active: created, created, recovered: null };
+}
+
+async function readRecentAlerts(redis, filters = {}) {
+  if (!redis) return [];
+  try {
+    const ids = await redis.lrange('socket:alerts:index', 0, 49);
+    const tenantFilter = filters.tenantId ? String(filters.tenantId) : null;
+    const providerFilter = filters.provider ? String(filters.provider).toLowerCase().trim() : null;
+    const out = [];
+    for (const id of ids) {
+      const alert = await readAlertById(redis, id);
+      if (!alert) continue;
+      if (tenantFilter && String(alert.tenantId || '') !== tenantFilter) continue;
+      if (providerFilter && String(alert.provider || '').toLowerCase() !== providerFilter) continue;
+      out.push(alert);
+      if (out.length >= 30) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function dispatchExternalAlert(alert) {
+  // Estrutura pronta para futuro envio externo (email/webhook/incident manager).
+  if (!alert) return;
+  const webhook = (process.env.ALERT_WEBHOOK_URL || '').trim();
+  console.warn('[ALERT][CHANNEL_METRICS]', alert);
+  if (!webhook) return;
+  // Placeholder sem side-effects externos no momento.
+}
+
 /**
  * POST /api/global-admin/login
  * Body: { email, password }
@@ -140,6 +342,114 @@ router.get('/stats', globalAdminAuth, async (req, res) => {
   } catch (err) {
     console.error('[global-admin] stats:', err.message);
     res.status(200).json({ totalTenants: 0, totalAgents: 0, usageGlobal: 0, billingTotal: 0 });
+  }
+});
+
+/**
+ * GET /api/global-admin/socket-metrics
+ * Query:
+ *  - tenantId (opcional)
+ *  - provider (opcional)
+ *  - range: 1h | 24h | 7d
+ */
+router.get('/socket-metrics', globalAdminAuth, async (req, res) => {
+  try {
+    const redis = globalThis.redisMain || null;
+    if (!redis) {
+      return res.status(503).json({ error: 'Redis indisponível para métricas de socket.' });
+    }
+
+    const tenantId = req.query?.tenantId ? String(req.query.tenantId).trim() : null;
+    const provider = req.query?.provider ? String(req.query.provider).toLowerCase().trim() : null;
+    const rangeCfg = parseRange(req.query?.range);
+    const dates = collectDatesForRange(rangeCfg);
+
+    const [eventsRaw, errorsRaw] = await Promise.all([
+      redis.hgetall('socket:metrics:events'),
+      redis.hgetall('socket:metrics:errors'),
+    ]);
+
+    const events = aggregateMetrics(eventsRaw, dates, { tenantId, provider });
+    const errors = aggregateMetrics(errorsRaw, dates, { tenantId, provider });
+
+    // Se total ficou 0 por ausência de campos tenant/provider, usa fallback com total:<date>.
+    if (events.total === 0 && !tenantId && !provider) {
+      for (const d of dates) {
+        events.total += toNumber(eventsRaw?.[`total:${d}`]);
+      }
+    }
+    if (errors.total === 0 && !tenantId && !provider) {
+      for (const d of dates) {
+        errors.total += toNumber(errorsRaw?.[`total:${d}`]);
+      }
+    }
+
+    const totalEvents = events.total;
+    const totalErrors = errors.total;
+    const errorRate = totalEvents > 0 ? (totalErrors / totalEvents) * 100 : 0;
+    const eventsPerMinute = totalEvents / rangeCfg.minutes;
+    const lifecycleChanges = [];
+    const globalLifecycle = await upsertAlertByRate(redis, {
+      errorRatePercent: errorRate,
+      tenantId,
+      provider: provider || null,
+    });
+    if (globalLifecycle.created) lifecycleChanges.push(globalLifecycle.created);
+    if (globalLifecycle.recovered) lifecycleChanges.push(globalLifecycle.recovered);
+
+    // Alertas individuais por provider (quando não filtrado por provider).
+    if (!provider) {
+      const providerSet = new Set([
+        ...Object.keys(events.byProvider || {}),
+        ...Object.keys(errors.byProvider || {}),
+      ]);
+      for (const p of providerSet) {
+        const ev = toNumber(events.byProvider?.[p]);
+        const er = toNumber(errors.byProvider?.[p]);
+        const rate = ev > 0 ? (er / ev) * 100 : 0;
+        const life = await upsertAlertByRate(redis, {
+          errorRatePercent: rate,
+          tenantId,
+          provider: p,
+        });
+        if (life.created) lifecycleChanges.push(life.created);
+        if (life.recovered) lifecycleChanges.push(life.recovered);
+      }
+    }
+
+    for (const changed of lifecycleChanges) {
+      await dispatchExternalAlert(changed);
+    }
+    const recentAlerts = await readRecentAlerts(redis, { tenantId, provider });
+    const activeAlerts = recentAlerts.filter((a) => a.status === 'active');
+
+    return res.status(200).json({
+      range: rangeCfg.label,
+      filters: {
+        tenantId,
+        provider,
+      },
+      totals: {
+        events: totalEvents,
+        errors: totalErrors,
+        errorRatePercent: Number(errorRate.toFixed(2)),
+        eventsPerMinuteAvg: Number(eventsPerMinute.toFixed(4)),
+      },
+      breakdown: {
+        tenants: events.byTenant,
+        providers: events.byProvider,
+        errorsByTenant: errors.byTenant,
+        errorsByProvider: errors.byProvider,
+      },
+      alerts: {
+        active: activeAlerts,
+        recent: recentAlerts,
+      },
+      computedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[global-admin] socket-metrics:', err.message);
+    return res.status(500).json({ error: 'Erro ao obter métricas de socket.' });
   }
 });
 

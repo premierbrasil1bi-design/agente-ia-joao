@@ -4,6 +4,7 @@
  */
 
 import { pool } from '../db/pool.js';
+import { emitChannelUpdated } from '../utils/channelRealtime.js';
 
 const CHANNEL_SELECT = `id, tenant_id, agent_id, name, type, instance, is_active AS active,
   provider, fallback_providers, config, provider_config, external_id, connected_at, last_error, status, connection_status,
@@ -165,7 +166,9 @@ export async function updateConnection(id, tenantId, data) {
      RETURNING ${CHANNEL_SELECT}`,
     values
   );
-  return rows[0] ?? null;
+  const updated = rows[0] ?? null;
+  if (updated) emitChannelUpdated(updated, { source: 'repository.updateConnection' });
+  return updated;
 }
 
 export async function deleteById(id, tenantId) {

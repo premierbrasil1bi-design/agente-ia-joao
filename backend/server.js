@@ -6,6 +6,9 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
+import jwt from 'jsonwebtoken';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { createClient } from 'redis';
 
 import { config } from './config/env.js';
 import { isDbConnected } from './db/connection.js';
@@ -37,7 +40,7 @@ import { getEvolutionApiKey } from './services/evolutionHttp.client.js';
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { startChannelMonitor } from './services/channelMonitor.service.js';
 import { agentAuth } from './middleware/agentAuth.js';
-import { initEvolutionQueueInfra } from './queues/evolution.queue.js';
+import { getRedisConnection, getRedisUrl, initEvolutionQueueInfra } from './queues/evolution.queue.js';
 import { startEvolutionWorker } from './workers/evolution.worker.js';
 import { runChannelsSchemaGuard } from './services/channelsSchemaGuard.service.js';
 import * as evolutionService from './services/evolutionService.js';
@@ -253,7 +256,10 @@ const server = createServer(app);
 const io = new SocketIOServer(server, {
   cors: {
     origin: [
-      'https://app.omnia1biai.com.br'
+      'https://app.omnia1biai.com.br',
+      'https://admin.omnia1biai.com.br',
+      'http://localhost:5173',
+      'http://localhost:3000',
     ],
     methods: ['GET', 'POST'],
     credentials: true
@@ -264,8 +270,78 @@ const io = new SocketIOServer(server, {
 // (ex.: logger.statusChange, monitor de canais, etc.).
 globalThis.io = io;
 
+const SOCKET_TENANT_ROOM_PREFIX = 'tenant:';
+const tenantRoom = (tenantId) => `${SOCKET_TENANT_ROOM_PREFIX}${tenantId}`;
+const SUBSCRIBE_RATE_LIMIT_PER_MIN = 20;
+
+function parseSocketToken(socket) {
+  const authToken = socket.handshake?.auth?.token;
+  if (authToken && String(authToken).trim()) return String(authToken).trim();
+  const header = socket.handshake?.headers?.authorization;
+  if (!header) return '';
+  if (header.startsWith('Bearer ')) return header.slice(7).trim();
+  return String(header).trim();
+}
+
+function extractTenantIdFromDecoded(decoded) {
+  return decoded?.tenantId ?? decoded?.tenant_id ?? null;
+}
+
+async function canSubscribeSocket(socket) {
+  const redis = globalThis.redisMain || null;
+  if (!redis) return true;
+  const tenantId = String(socket.data?.tenantId || '').trim();
+  const socketId = String(socket.id || '').trim();
+  if (!tenantId || !socketId) return false;
+  const key = `socket:subscribe:rl:${tenantId}:${socketId}`;
+  try {
+    const count = await redis.incr(key);
+    if (count === 1) await redis.expire(key, 60);
+    return count <= SUBSCRIBE_RATE_LIMIT_PER_MIN;
+  } catch {
+    return true;
+  }
+}
+
+io.use((socket, next) => {
+  try {
+    const token = parseSocketToken(socket);
+    if (!token) return next(new Error('SOCKET_UNAUTHORIZED'));
+    const secret = config.agentJwt?.secret;
+    if (!secret) return next(new Error('SOCKET_SERVER_MISCONFIG'));
+    const decoded = jwt.verify(token, secret);
+    const tenantId = extractTenantIdFromDecoded(decoded);
+    if (!tenantId || String(tenantId).trim() === '') return next(new Error('SOCKET_TENANT_MISSING'));
+    socket.data.user = decoded;
+    socket.data.tenantId = String(tenantId).trim();
+    return next();
+  } catch {
+    return next(new Error('SOCKET_UNAUTHORIZED'));
+  }
+});
+
 io.on('connection', (socket) => {
   console.log('[socket.io] Cliente conectado', socket.id);
+  const tenantId = socket.data?.tenantId ? String(socket.data.tenantId) : '';
+  if (tenantId) {
+    socket.join(tenantRoom(tenantId));
+    socket.emit('channels:subscribed', { tenantId });
+  }
+
+  socket.on('channels:subscribe', async (payload = {}, ack) => {
+    const incoming = String(payload?.tenantId || '').trim();
+    const authenticated = String(socket.data?.tenantId || '').trim();
+    if (!incoming || !authenticated || incoming !== authenticated) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'TENANT_FORBIDDEN' });
+      return;
+    }
+    if (!(await canSubscribeSocket(socket))) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'RATE_LIMITED' });
+      return;
+    }
+    socket.join(tenantRoom(authenticated));
+    if (typeof ack === 'function') ack({ ok: true, tenantId: authenticated });
+  });
 });
 
 // O HTTP deve subir e responder mesmo se infra assíncrona (Redis/BullMQ) estiver indisponível.
@@ -276,6 +352,19 @@ server.listen(PORT, '0.0.0.0', () => {
 
 (async () => {
   try {
+    globalThis.redisMain = getRedisConnection();
+    const redisUrl = getRedisUrl();
+    try {
+      const pubClient = createClient({ url: redisUrl });
+      const subClient = pubClient.duplicate();
+      await pubClient.connect();
+      await subClient.connect();
+      io.adapter(createAdapter(pubClient, subClient));
+      console.log('[socket.io] Redis adapter ativo');
+    } catch (e) {
+      console.warn('[socket.io] Redis adapter indisponível, seguindo em modo single-instance:', e?.message || e);
+    }
+
     await initEvolutionQueueInfra();
     if (process.env.EVOLUTION_WORKER_IN_PROCESS !== 'false') {
       startEvolutionWorker();

@@ -22,12 +22,13 @@ export const logger = {
     console.error(`${ts()} ${PREFIX} api_error operation=${operation} instance=${instanceName ?? '—'} message=${message}`);
   },
 
-  statusChange(instanceName, channelId, fromStatus, toStatus) {
+  statusChange(instanceName, channelId, fromStatus, toStatus, tenantId = null) {
     console.log(`${ts()} ${PREFIX} status_change instance=${instanceName} channelId=${channelId ?? '—'} ${fromStatus ?? '—'} -> ${toStatus}`);
     try {
-      if (globalThis.io && typeof globalThis.io.emit === 'function' && channelId) {
-        globalThis.io.emit('channel_status_update', {
+      if (globalThis.io && tenantId && channelId) {
+        globalThis.io.to(`tenant:${String(tenantId)}`).emit('channel_status_update', {
           channelId,
+          tenantId: String(tenantId),
           status: toStatus,
         });
       }

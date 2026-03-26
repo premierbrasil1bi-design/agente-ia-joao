@@ -14,6 +14,7 @@ import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { deriveFlowPhase } from '../utils/whatsappChannelFlow.js';
 import * as whatsappEngine from '../services/whatsappEngine.js';
 import { getProvider } from '../providers/provider.factory.js';
+import { deriveHealth, emitChannelError, emitChannelUpdated } from '../utils/channelRealtime.js';
 
 async function getChannelFromReq(req, res) {
   const tenantId = req.tenantId || req.user?.tenantId;
@@ -59,9 +60,12 @@ export async function sendChannelMessage(req, res) {
 }
 
 export async function connectChannel(req, res) {
+  const startedAt = Date.now();
+  let channelRef = null;
   try {
     const channel = await getChannelFromReq(req, res);
     if (!channel) return;
+    channelRef = channel;
 
     console.log('[CONNECT_CHANNEL] channelId:', channel.id, 'tenantId:', channel.tenant_id);
     const providerLc = String(channel.provider || 'waha').toLowerCase();
@@ -77,10 +81,16 @@ export async function connectChannel(req, res) {
       await providerInstance.connect();
       const qr = await providerInstance.getQRCode();
       console.log('[QR RECEIVED]', !!qr);
-      await channelRepo.updateConnection(channel.id, channel.tenant_id, {
+      const updated = await channelRepo.updateConnection(channel.id, channel.tenant_id, {
         provider: providerLc,
         connection_status: qr ? 'connecting' : 'connected',
         last_error: null,
+      });
+      const latencyMs = Date.now() - startedAt;
+      emitChannelUpdated(updated || channel, {
+        source: 'connect.provider_factory',
+        latencyMs,
+        health: deriveHealth(updated?.connection_status || (qr ? 'connecting' : 'connected'), latencyMs, false),
       });
       const refreshed = await channelRepo.findById(channel.id, channel.tenant_id);
       return res.status(200).json({
@@ -91,6 +101,8 @@ export async function connectChannel(req, res) {
         qrcode: qr || null,
         channel: refreshed || channel,
         status: qr ? 'connecting' : 'connected',
+        latencyMs,
+        health: deriveHealth(qr ? 'connecting' : 'connected', latencyMs, false),
       });
     }
 
@@ -99,6 +111,7 @@ export async function connectChannel(req, res) {
     if (shouldUseEngine) {
       const out = await whatsappEngine.connectChannel(channel);
       const refreshed = await channelRepo.findById(channel.id, channel.tenant_id);
+      const latencyMs = Date.now() - startedAt;
       return res.status(200).json({
         success: true,
         channelId: channel.id,
@@ -107,6 +120,8 @@ export async function connectChannel(req, res) {
         qrcode: out.qr || null,
         channel: refreshed || channel,
         status: out.connected ? 'connected' : 'connecting',
+        latencyMs,
+        health: deriveHealth(out.connected ? 'connected' : 'connecting', latencyMs, false),
       });
     }
 
@@ -115,6 +130,7 @@ export async function connectChannel(req, res) {
     const { artifactType, artifact } = extractConnectArtifactFromPayload(result.connectResponse);
     const flowPhase = deriveFlowPhase(result.channel);
 
+    const latencyMs = Date.now() - startedAt;
     res.status(200).json({
       success: true,
       channelId: result.channel.id,
@@ -124,6 +140,8 @@ export async function connectChannel(req, res) {
       artifact,
       channel: result.channel,
       skippedDueToCooldown: Boolean(result.connectResponse?.skippedDueToCooldown),
+      latencyMs,
+      health: deriveHealth(result.channel?.connection_status || flowPhase, latencyMs, false),
       ...(result.connectResponse?.skippedDueToCooldown
         ? {
             message:
@@ -133,6 +151,7 @@ export async function connectChannel(req, res) {
     });
   } catch (err) {
     console.error('[channelConnection] connectChannel:', err.message, err.response?.status || err.code || '');
+    emitChannelError(channelRef, err, { operation: 'connectChannel' });
     if (err.code === 'INSTANCE_NOT_FOUND') {
       return res.status(200).json({
         success: false,
@@ -150,6 +169,11 @@ export async function connectChannel(req, res) {
     res.status(500).json({
       success: false,
       error: err.message || 'Erro ao conectar canal.',
+      context: {
+        code: err.code || err.response?.status || null,
+        timeout: Boolean(err.code === 'ETIMEDOUT' || err.code === 'ECONNABORTED'),
+        auth: err.response?.status === 401 || err.response?.status === 403,
+      },
     });
   }
 }
@@ -210,9 +234,12 @@ export async function getQrCode(req, res) {
 }
 
 export async function getStatus(req, res) {
+  const startedAt = Date.now();
+  let channelRef = null;
   try {
     const channel = await getChannelFromReq(req, res);
     if (!channel) return;
+    channelRef = channel;
 
     console.log('[WHATSAPP_STATUS] check', { channelId: channel.id, tenantId: channel.tenant_id });
     const result = await channelConnectionService.getChannelStatus(channel);
@@ -252,6 +279,14 @@ export async function getStatus(req, res) {
         ? String(ch.connection_status)
         : null;
 
+    const latencyMs = Date.now() - startedAt;
+    const derived = deriveHealth(result.channel?.connection_status || result.normalizedStatus, latencyMs, false);
+    emitChannelUpdated(result.channel || channel, {
+      source: 'status.poll',
+      latencyMs,
+      health: derived,
+    });
+
     res.status(200).json({
       success: true,
       status: result.normalizedStatus,
@@ -262,15 +297,19 @@ export async function getStatus(req, res) {
       evolutionState: rawState,
       channel: result.channel,
       recreated: Boolean(result.recreated),
+      latencyMs,
+      health: derived,
     });
   } catch (err) {
     console.error('[channelConnection] getStatus:', err.message, err.response?.status || err.code || '');
+    emitChannelError(channelRef, err, { operation: 'getStatus' });
     return res.status(200).json({
       success: true,
       status: 'disconnected',
       normalizedStatus: 'offline',
       evolutionOffline: true,
-      message: 'Serviço temporariamente indisponível'
+      message: 'Serviço temporariamente indisponível',
+      health: 'offline',
     });
   }
 }

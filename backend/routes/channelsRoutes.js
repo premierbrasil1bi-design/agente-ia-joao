@@ -467,6 +467,8 @@ router.put('/:id', requireActiveTenant, async (req, res) => {
     }
 
     const { type, instance, agent_id, active, provider, fallback_providers, config, provider_config } = req.body || {};
+    const previousProvider = String(existing.provider || '').toLowerCase().trim();
+    const nextProvider = provider !== undefined ? String(provider || '').toLowerCase().trim() : previousProvider;
     const updated = await channelRepo.update(req.params.id, tenantId, {
       type,
       instance,
@@ -478,6 +480,15 @@ router.put('/:id', requireActiveTenant, async (req, res) => {
     if (!hasConnPatch) {
       return res.status(200).json(updated);
     }
+    if (provider !== undefined && nextProvider && previousProvider && nextProvider !== previousProvider) {
+      try {
+        // Produção: desconecta provider anterior antes da troca para evitar estado zumbi.
+        await channelConnectionService.disconnectChannel(existing);
+      } catch (e) {
+        console.warn('[channels] PUT provider-switch: disconnect anterior falhou (seguindo com reset):', e.message);
+      }
+    }
+
     const updatedConn = await channelRepo.updateConnection(req.params.id, tenantId, {
       ...(provider !== undefined ? { provider: String(provider || '').toLowerCase().trim() || null } : {}),
       ...(fallback_providers !== undefined ? { fallback_providers } : {}),
@@ -485,6 +496,7 @@ router.put('/:id', requireActiveTenant, async (req, res) => {
       ...(provider_config !== undefined
         ? { provider_config: provider_config && typeof provider_config === 'object' ? provider_config : {} }
         : {}),
+      ...(provider !== undefined ? { connection_status: 'disconnected', connected_at: null, last_error: null } : {}),
     });
     res.status(200).json(updatedConn);
   } catch (err) {

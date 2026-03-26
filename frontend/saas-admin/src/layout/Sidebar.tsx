@@ -11,6 +11,8 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/usage", label: "Uso", icon: "▤" },
   { to: "/billing", label: "Billing", icon: "◎" },
   { to: "/logs", label: "Logs", icon: "≡" },
+  { to: "/socket-metrics", label: "Socket Metrics", icon: "📈" },
+  { to: "/incident-timeline", label: "Incident Timeline", icon: "🚨" },
   { to: "/admins", label: "Admins", icon: "👤" },
   { to: "/settings", label: "Configurações", icon: "⚙" },
 ];

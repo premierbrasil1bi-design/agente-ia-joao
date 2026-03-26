@@ -120,6 +120,50 @@ export interface TenantBilling {
   active: boolean;
 }
 
+export type SocketMetricsRange = "1h" | "24h" | "7d";
+
+export interface SocketMetricsResponse {
+  range: SocketMetricsRange;
+  filters: {
+    tenantId: string | null;
+    provider: string | null;
+  };
+  totals: {
+    events: number;
+    errors: number;
+    errorRatePercent: number;
+    eventsPerMinuteAvg: number;
+  };
+  breakdown: {
+    tenants: Record<string, number>;
+    providers: Record<string, number>;
+    errorsByTenant: Record<string, number>;
+    errorsByProvider: Record<string, number>;
+  };
+  alerts: {
+    active: Array<{
+      type: "critical" | "warning" | "info";
+      message: string;
+      provider?: string;
+      tenantId?: string;
+      timestamp: string;
+      status: "active" | "resolved";
+      resolvedAt?: string | null;
+    }>;
+    recent: Array<{
+      id?: string;
+      type: "critical" | "warning" | "info";
+      message: string;
+      provider?: string;
+      tenantId?: string;
+      timestamp: string;
+      status: "active" | "resolved";
+      resolvedAt?: string | null;
+    }>;
+  };
+  computedAt: string;
+}
+
 /* Mocks for when API is not available */
 const MOCK_TENANTS: Tenant[] = [
   {
@@ -251,5 +295,18 @@ export const adminApi = {
 
   getTenantBilling(tenantId: string): Promise<TenantBilling> {
     return request<TenantBilling>(`/api/global-admin/tenants/${tenantId}/billing`);
+  },
+
+  getSocketMetrics(params?: {
+    range?: SocketMetricsRange;
+    tenantId?: string;
+    provider?: string;
+  }): Promise<SocketMetricsResponse> {
+    const q = new URLSearchParams();
+    if (params?.range) q.set("range", params.range);
+    if (params?.tenantId) q.set("tenantId", params.tenantId);
+    if (params?.provider) q.set("provider", params.provider);
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return request<SocketMetricsResponse>(`/api/global-admin/socket-metrics${suffix}`);
   },
 };

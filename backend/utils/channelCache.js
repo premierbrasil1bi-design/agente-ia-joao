@@ -5,7 +5,7 @@
 export function invalidateTenantChannels(tenantId) {
   if (!tenantId || !globalThis.io) return;
   try {
-    globalThis.io.emit('channels:invalidate', { tenantId: String(tenantId) });
+    globalThis.io.to(`tenant:${String(tenantId)}`).emit('channels:invalidate', { tenantId: String(tenantId) });
   } catch {
     /* ignore */
   }

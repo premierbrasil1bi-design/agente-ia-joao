@@ -14,18 +14,20 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "bullmq": "^5.34.10",
-    "ioredis": "^5.4.2",
+    "@socket.io/redis-adapter": "^8.3.0",
     "axios": "^1.13.5",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
+    "bullmq": "^5.34.10",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.1",
+    "ioredis": "^5.4.2",
     "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2",
     "openai": "^4.104.0",
     "pg": "^8.11.3",
+    "redis": "^5.11.0",
     "socket.io": "^4.8.1"
   }
 }
