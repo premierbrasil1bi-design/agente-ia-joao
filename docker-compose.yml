@@ -34,6 +34,13 @@ services:
     ports:
       - "5432:5432"
 
+  saas_redis:
+    image: redis:7
+    container_name: saas_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
   # WAHA — WhatsApp HTTP API (provider=waha no OMNIA). Host 3099 evita conflito com API Node na 3000 (PM2).
   saas_waha:
     image: devlikeapro/waha:latest
@@ -52,9 +59,6 @@ services:
     image: atendai/evolution-api:v2.1.1
     container_name: saas_evolution
     restart: always
-    extra_hosts:
-      # Mantém os envs (CACHE_REDIS_URI=redis://saas_redis:6379/1) apontando para o Redis externo no host.
-      - "saas_redis:host-gateway"
     entrypoint: ["/bin/sh", "/evolution-entrypoint.sh"]
     environment:
       SERVER_TYPE: "http"
@@ -94,6 +98,8 @@ services:
     depends_on:
       saas_postgres:
         condition: service_healthy
+      saas_redis:
+        condition: service_started
     environment:
       NODE_ENV: production
       DB_BOOTSTRAP_MODE: safe

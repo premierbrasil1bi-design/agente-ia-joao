@@ -44,6 +44,10 @@ import * as evolutionService from './services/evolutionService.js';
 
 console.log('[ENV] REDIS:', process.env.REDIS_HOST || 'MISSING');
 console.log('[ENV] DATABASE:', process.env.DATABASE_URL ? 'OK' : 'MISSING');
+console.log('[REDIS CONFIG]', {
+  host: process.env.REDIS_HOST,
+  port: process.env.REDIS_PORT,
+});
 
 if ((process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL || '').trim()) {
   try {
