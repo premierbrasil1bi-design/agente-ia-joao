@@ -66,15 +66,20 @@ const app = express();
 const PORT = config.port || 3000;
 
 const allowedOrigins = [
-  'https://app.omnia1biai.com.br'
+  'https://admin.omnia1biai.com.br',
+  'https://app.omnia1biai.com.br',
+  'http://localhost:5173',
+  'http://localhost:3000',
 ];
 
 const corsOptions = {
   origin: (origin, callback) => {
+    console.log('[CORS] Origin:', origin);
     // Permite requests sem Origin (ex.: health checks, curl, server-to-server)
     if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error(`CORS bloqueado para a origem: ${origin}`));
+    console.error('CORS bloqueado:', origin);
+    return callback(new Error('CORS bloqueado'), false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
