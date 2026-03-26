@@ -3,54 +3,28 @@
  * Se agent_token não existir → redirect /login. Caso contrário carrega summary.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useChannel } from '../context/ChannelContext';
 import { agentApi } from '../services/agentApi';
+import AlertBanner from '../components/AlertBanner';
+import AlertList from '../components/AlertList';
+import styles from './Dashboard.module.css';
 
-const styles = {
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: '1rem',
-    marginBottom: '1.5rem',
-  },
-  card: {
-    background: 'var(--surface)',
-    border: '1px solid var(--border)',
-    borderRadius: 8,
-    padding: '1rem',
-  },
-  cardDestaque: {
-    background: 'var(--surface)',
-    border: '2px solid var(--accent)',
-    borderRadius: 8,
-    padding: '1rem',
-    gridColumn: '1 / -1',
-  },
-  label: {
-    fontSize: '0.8rem',
-    color: 'var(--text-muted)',
-    marginBottom: 4,
-  },
-  value: {
-    fontSize: '1.25rem',
-    fontWeight: 600,
-  },
-  alertas: {
-    marginBottom: 4,
-    padding: '0.75rem 1rem',
-    borderRadius: 6,
-    fontSize: '0.9rem',
-    border: '1px solid',
-  },
-};
+function normalizeAlert(item) {
+  return {
+    type: (item?.type || item?.tipo || 'info').toLowerCase(),
+    message: item?.message || item?.texto || 'Alerta operacional',
+    timestamp: item?.timestamp || item?.createdAt || new Date().toISOString(),
+  };
+}
 
 export function Dashboard() {
   const { channel } = useChannel();
   const navigate = useNavigate();
   const [summary, setSummary] = useState(null);
   const [error, setError] = useState(null);
+  const [metricAlerts, setMetricAlerts] = useState([]);
 
   useEffect(() => {
     if (!agentApi.getToken()) {
@@ -73,20 +47,38 @@ export function Dashboard() {
     return () => { cancelled = true; };
   }, [navigate]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadMetricsAlerts = async () => {
+      try {
+        const data = await agentApi.request('/api/global-admin/socket-metrics?range=1h');
+        if (cancelled) return;
+        const alerts = Array.isArray(data?.alerts) ? data.alerts.map(normalizeAlert) : [];
+        setMetricAlerts(alerts.slice(0, 5));
+      } catch {
+        if (!cancelled) setMetricAlerts([]);
+      }
+    };
+    loadMetricsAlerts();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   if (!agentApi.getToken()) {
     return null;
   }
 
   if (error) {
     return (
-      <div style={{ color: 'var(--danger)', padding: '1rem' }}>
+      <div className={styles.danger}>
         Erro ao carregar: {error}
       </div>
     );
   }
 
   if (!summary) {
-    return <p style={{ color: 'var(--text-muted)' }}>Carregando...</p>;
+    return <p className={styles.muted}>Carregando...</p>;
   }
 
   const canalAtivo = (summary.canalAtivo || channel || 'web').toUpperCase();
@@ -94,56 +86,55 @@ export function Dashboard() {
   const mensagensRecebidas = summary.mensagensRecebidas ?? 0;
   const tokensEstimados = summary.tokensEstimados ?? summary.tokens ?? 0;
   const custoEstimado = summary.totalGastoMes ?? summary.custoEstimado ?? 0;
+  const mergedAlerts = useMemo(() => {
+    const summaryAlerts = Array.isArray(summary.alertas) ? summary.alertas.map(normalizeAlert) : [];
+    return [...metricAlerts, ...summaryAlerts].slice(0, 6);
+  }, [metricAlerts, summary.alertas]);
 
   return (
-    <>
-      <div style={styles.grid}>
-        <div style={styles.cardDestaque}>
-          <div style={styles.label}>Canal ativo</div>
-          <div style={{ ...styles.value, fontSize: '1.5rem', color: 'var(--accent)' }}>{canalAtivo}</div>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 4, marginBottom: 0 }}>
+    <div className={styles.page}>
+      <header className={styles.header}>
+        <h1>Dashboard</h1>
+        <p>Visao geral de canais, uso e alertas operacionais.</p>
+      </header>
+
+      <div className={styles.grid}>
+        <div className={`${styles.card} ${styles.accent}`}>
+          <div className={styles.kpiLabel}>Canal ativo</div>
+          <div className={styles.kpiValue}>{canalAtivo}</div>
+          <p className={styles.muted}>
             Todas as requisições usam este canal (query e header x-channel).
           </p>
         </div>
 
-        <div style={styles.card}>
-          <div style={styles.label}>Mensagens enviadas</div>
-          <div style={styles.value}>{String(mensagensEnviadas)}</div>
+        <div className={styles.card}>
+          <div className={styles.kpiLabel}>Mensagens enviadas</div>
+          <div className={styles.kpiValue}>{String(mensagensEnviadas)}</div>
         </div>
-        <div style={styles.card}>
-          <div style={styles.label}>Mensagens recebidas</div>
-          <div style={styles.value}>{String(mensagensRecebidas)}</div>
+        <div className={styles.card}>
+          <div className={styles.kpiLabel}>Mensagens recebidas</div>
+          <div className={styles.kpiValue}>{String(mensagensRecebidas)}</div>
         </div>
-        <div style={styles.card}>
-          <div style={styles.label}>Tokens estimados</div>
-          <div style={styles.value}>{String(tokensEstimados)}</div>
+        <div className={styles.card}>
+          <div className={styles.kpiLabel}>Tokens estimados</div>
+          <div className={styles.kpiValue}>{String(tokensEstimados)}</div>
         </div>
-        <div style={styles.card}>
-          <div style={styles.label}>Custo estimado (mês)</div>
-          <div style={styles.value}>R$ {Number(custoEstimado).toFixed(2)}</div>
+        <div className={styles.card}>
+          <div className={styles.kpiLabel}>Custo estimado (mes)</div>
+          <div className={styles.kpiValue}>R$ {Number(custoEstimado).toFixed(2)}</div>
         </div>
-        <div style={styles.card}>
-          <div style={styles.label}>Status do agente</div>
-          <div style={styles.value}>{summary.agentStatus ?? '—'}</div>
+        <div className={styles.card}>
+          <div className={styles.kpiLabel}>Status do agente</div>
+          <div className={styles.kpiValue}>{summary.agentStatus ?? '-'}</div>
         </div>
       </div>
 
-      {summary.alertas?.length > 0 && (
-        <div style={{ marginBottom: '1rem' }}>
-          {summary.alertas.map((a, i) => (
-            <div
-              key={i}
-              style={{
-                ...styles.alertas,
-                background: a.tipo === 'warning' ? 'rgba(210,153,34,0.15)' : 'rgba(88,166,255,0.1)',
-                borderColor: a.tipo === 'warning' ? 'var(--warning)' : 'var(--accent)',
-              }}
-            >
-              {a.texto}
-            </div>
-          ))}
-        </div>
-      )}
-    </>
+      {mergedAlerts.length > 0 && <AlertBanner alert={mergedAlerts[0]} />}
+
+      <section className={styles.card}>
+        <h2 className={styles.sectionTitle}>Alertas recentes</h2>
+        <AlertList alerts={mergedAlerts} />
+      </section>
+    </div>
   );
 }
