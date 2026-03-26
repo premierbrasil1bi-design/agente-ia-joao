@@ -13,6 +13,7 @@ import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { deriveFlowPhase } from '../utils/whatsappChannelFlow.js';
 import * as whatsappEngine from '../services/whatsappEngine.js';
+import { getProvider } from '../providers/provider.factory.js';
 
 async function getChannelFromReq(req, res) {
   const tenantId = req.tenantId || req.user?.tenantId;
@@ -63,9 +64,38 @@ export async function connectChannel(req, res) {
     if (!channel) return;
 
     console.log('[CONNECT_CHANNEL] channelId:', channel.id, 'tenantId:', channel.tenant_id);
-    const providerLc = String(channel.provider || '').toLowerCase();
+    const providerLc = String(channel.provider || 'waha').toLowerCase();
     const isWhatsapp = String(channel.type || '').toLowerCase() === 'whatsapp';
-    const shouldUseEngine = isWhatsapp && ['waha', 'evolution', 'zapi'].includes(providerLc);
+    const providerCfg =
+      channel?.provider_config && typeof channel.provider_config === 'object'
+        ? channel.provider_config
+        : {};
+    if (isWhatsapp) {
+      console.log('[PROVIDER]', providerLc);
+      console.log('[CONNECT]');
+      const providerInstance = getProvider(providerLc, providerCfg);
+      await providerInstance.connect();
+      const qr = await providerInstance.getQRCode();
+      console.log('[QR RECEIVED]', !!qr);
+      await channelRepo.updateConnection(channel.id, channel.tenant_id, {
+        provider: providerLc,
+        connection_status: qr ? 'connecting' : 'connected',
+        last_error: null,
+      });
+      const refreshed = await channelRepo.findById(channel.id, channel.tenant_id);
+      return res.status(200).json({
+        success: true,
+        channelId: channel.id,
+        provider: providerLc,
+        qr: qr || null,
+        qrcode: qr || null,
+        channel: refreshed || channel,
+        status: qr ? 'connecting' : 'connected',
+      });
+    }
+
+    // Fallback legado para canais não-WhatsApp ou fluxos antigos.
+    const shouldUseEngine = ['waha', 'evolution', 'zapi'].includes(providerLc);
     if (shouldUseEngine) {
       const out = await whatsappEngine.connectChannel(channel);
       const refreshed = await channelRepo.findById(channel.id, channel.tenant_id);
@@ -128,6 +158,24 @@ export async function getQrCode(req, res) {
   try {
     const channel = await getChannelFromReq(req, res);
     if (!channel) return;
+
+    const isWhatsapp = String(channel.type || '').toLowerCase() === 'whatsapp';
+    const providerLc = String(channel.provider || 'waha').toLowerCase();
+    if (isWhatsapp && ['waha', 'evolution', 'zapi', 'official', 'whatsapp_oficial'].includes(providerLc)) {
+      const providerCfg =
+        channel?.provider_config && typeof channel.provider_config === 'object'
+          ? channel.provider_config
+          : {};
+      const provider = getProvider(providerLc, providerCfg);
+      const qr = await provider.getQRCode();
+      console.log('[PROVIDER]', providerLc);
+      console.log('[QR RECEIVED]', !!qr);
+      return res.status(200).json({
+        success: true,
+        qr,
+        qrcode: qr,
+      });
+    }
 
     console.log('[GET_QRCODE] channelId:', channel.id);
     const qr = await channelConnectionService.getChannelQrCode(channel);

@@ -17,6 +17,13 @@ const CHANNEL_TYPES = [
   { value: 'api', label: 'API' },
 ];
 
+const WHATSAPP_PROVIDERS = [
+  { value: 'waha', label: 'WAHA' },
+  { value: 'evolution', label: 'Evolution' },
+  { value: 'zapi', label: 'Z-API' },
+  { value: 'official', label: 'WhatsApp Oficial' },
+];
+
 const styles = {
   header: {
     display: 'flex',
@@ -216,7 +223,9 @@ function ConnectionBadge({ connectionState }) {
 
 const emptyForm = () => ({
   type: 'whatsapp',
+  provider: 'waha',
   instance: '',
+  provider_config_text: '{}',
   agent_id: '',
   active: true,
 });
@@ -369,7 +378,9 @@ export function Channels() {
       mode: 'edit',
       id: channel.id,
       type: (channel.type || 'whatsapp').toLowerCase(),
+      provider: (channel.provider || 'waha').toLowerCase(),
       instance: channel.instance ?? channel.name ?? '',
+      provider_config_text: JSON.stringify(channel.provider_config || {}, null, 2),
       agent_id: channel.agent_id ?? '',
       active: channel.active !== undefined ? channel.active : (channel.is_active !== false),
     });
@@ -380,12 +391,22 @@ export function Channels() {
     setFormError(null);
   }, []);
 
-  const buildPayload = useCallback((m) => ({
-    type: (m.type || 'whatsapp').toLowerCase(),
-    instance: (m.instance || '').trim() || undefined,
-    agent_id: (m.agent_id || '').trim() || undefined,
-    active: Boolean(m.active),
-  }), []);
+  const buildPayload = useCallback((m) => {
+    let providerConfig = {};
+    try {
+      providerConfig = JSON.parse(m.provider_config_text || '{}');
+    } catch {
+      providerConfig = {};
+    }
+    return {
+      type: (m.type || 'whatsapp').toLowerCase(),
+      provider: (m.provider || 'waha').toLowerCase(),
+      provider_config: providerConfig,
+      instance: (m.instance || '').trim() || undefined,
+      agent_id: (m.agent_id || '').trim() || undefined,
+      active: Boolean(m.active),
+    };
+  }, []);
 
   const handleCreate = useCallback(
     (e) => {
@@ -397,8 +418,18 @@ export function Channels() {
         return;
       }
       const t = (modal.type || 'whatsapp').toLowerCase();
-      if (t === 'whatsapp' && !(modal.instance || '').trim()) {
+      if (t === 'whatsapp' && !(modal.provider || '').trim()) {
+        setFormError('Selecione um provider de WhatsApp.');
+        return;
+      }
+      if (t === 'whatsapp' && modal.provider === 'evolution' && !(modal.instance || '').trim()) {
         setFormError('Informe a instância Evolution já existente (criada na API).');
+        return;
+      }
+      try {
+        JSON.parse(modal.provider_config_text || '{}');
+      } catch {
+        setFormError('provider_config deve ser um JSON válido.');
         return;
       }
       setFormError(null);
@@ -423,6 +454,12 @@ export function Channels() {
       const agent_id = (modal.agent_id || '').trim();
       if (!agent_id) {
         setFormError('Selecione um agente.');
+        return;
+      }
+      try {
+        JSON.parse(modal.provider_config_text || '{}');
+      } catch {
+        setFormError('provider_config deve ser um JSON válido.');
         return;
       }
       setFormError(null);
@@ -689,6 +726,35 @@ export function Channels() {
                   placeholder="e.g. default or instance name"
                 />
               </div>
+              {(modal.type || '').toLowerCase() === 'whatsapp' && (
+                <>
+                  <div style={styles.field}>
+                    <label style={styles.label} htmlFor="channel-provider">Provider</label>
+                    <select
+                      id="channel-provider"
+                      style={styles.select}
+                      value={modal.provider || 'waha'}
+                      onChange={(e) => setModal((m) => ({ ...m, provider: e.target.value }))}
+                    >
+                      {WHATSAPP_PROVIDERS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={styles.field}>
+                    <label style={styles.label} htmlFor="channel-provider-config">Provider Config (JSON)</label>
+                    <textarea
+                      id="channel-provider-config"
+                      style={{ ...styles.input, minHeight: 100, fontFamily: 'monospace' }}
+                      value={modal.provider_config_text || '{}'}
+                      onChange={(e) => setModal((m) => ({ ...m, provider_config_text: e.target.value }))}
+                      placeholder='{"session":"default"}'
+                    />
+                  </div>
+                </>
+              )}
               <div style={styles.field}>
                 <label style={styles.label} htmlFor="channel-agent">Agent</label>
                 <select

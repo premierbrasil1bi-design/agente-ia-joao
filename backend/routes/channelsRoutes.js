@@ -247,8 +247,12 @@ router.post('/', requireActiveTenant, async (req, res) => {
     const { name, agentId, agent_id, type, instance, active, provider } = req.body || {};
     const fallbackProvidersRaw = req.body?.fallback_providers;
     const configInput = req.body?.config && typeof req.body.config === 'object' ? req.body.config : {};
+    const providerConfigInput =
+      req.body?.provider_config && typeof req.body.provider_config === 'object'
+        ? req.body.provider_config
+        : {};
     const finalAgentId = agent_id || agentId;
-    const providerLc = String(provider || 'evolution').toLowerCase().trim();
+    const providerLc = String(provider || '').toLowerCase().trim();
     const fallbackProviders = Array.isArray(fallbackProvidersRaw)
       ? [...new Set(fallbackProvidersRaw.map((p) => String(p || '').toLowerCase().trim()).filter(Boolean))]
       : [];
@@ -271,8 +275,12 @@ router.post('/', requireActiveTenant, async (req, res) => {
         ? String(instance).trim().replace(/\s+/g, '-')
         : '';
 
-    if (!['waha', 'evolution', 'zapi'].includes(providerLc) && channelType === 'whatsapp') {
-      return sendBadRequest(res, 'provider inválido para WhatsApp. Use: waha, evolution ou zapi.');
+    if (channelType === 'whatsapp' && !providerLc) {
+      return sendBadRequest(res, 'provider é obrigatório para canais WhatsApp.');
+    }
+
+    if (!['waha', 'evolution', 'zapi', 'official', 'whatsapp_oficial'].includes(providerLc) && channelType === 'whatsapp') {
+      return sendBadRequest(res, 'provider inválido para WhatsApp. Use: waha, evolution, zapi ou official.');
     }
 
     if (providerLc === 'waha' && channelType !== 'whatsapp') {
@@ -352,6 +360,7 @@ router.post('/', requireActiveTenant, async (req, res) => {
         external_id: ext,
         instance: ext,
         config: cfgDraft,
+        provider_config: { session: 'default', ...providerConfigInput },
         last_error: null,
       });
       invalidateTenantChannels(tenantId);
@@ -382,6 +391,7 @@ router.post('/', requireActiveTenant, async (req, res) => {
           external_id: normalizedInstance,
           instance: normalizedInstance,
           config: cfgLegacy,
+          provider_config: { instance: normalizedInstance, ...providerConfigInput },
           last_error: null,
         },
       });
@@ -395,16 +405,17 @@ router.post('/', requireActiveTenant, async (req, res) => {
       });
     }
 
-    if (providerLc === 'zapi') {
+    if (providerLc === 'zapi' || providerLc === 'official' || providerLc === 'whatsapp_oficial') {
       const cfgZapi = mergeWhatsappConfig(configInput, { phase: WHATSAPP_PHASE.DRAFT });
       const zapiExternalId =
-        String(cfgZapi?.zapi?.instanceId || normalizedInstance || '').trim() || null;
+        String(providerConfigInput?.instanceId || cfgZapi?.zapi?.instanceId || normalizedInstance || '').trim() || null;
       await channelRepo.updateConnection(channel.id, tenantId, {
-        provider: 'zapi',
+        provider: providerLc === 'zapi' ? 'zapi' : 'official',
         fallback_providers: fallbackProviders,
         external_id: zapiExternalId,
         instance: zapiExternalId || channel.instance,
         config: cfgZapi,
+        provider_config: providerConfigInput,
         last_error: null,
       });
       invalidateTenantChannels(tenantId);
@@ -413,15 +424,16 @@ router.post('/', requireActiveTenant, async (req, res) => {
         success: true,
         channel: full,
         nextAction: 'connect',
-        provider: 'zapi',
+        provider: providerLc === 'zapi' ? 'zapi' : 'official',
       });
     }
 
     const cfgDraft = mergeWhatsappConfig(configInput, { phase: WHATSAPP_PHASE.DRAFT });
     await channelRepo.updateConnection(channel.id, tenantId, {
-      provider: providerLc,
+      provider: providerLc || 'waha',
       fallback_providers: fallbackProviders,
       config: cfgDraft,
+      provider_config: providerConfigInput,
       last_error: null,
     });
 
@@ -454,7 +466,7 @@ router.put('/:id', requireActiveTenant, async (req, res) => {
       return sendNotFound(res, 'Canal não encontrado.');
     }
 
-    const { type, instance, agent_id, active, provider, fallback_providers, config } = req.body || {};
+    const { type, instance, agent_id, active, provider, fallback_providers, config, provider_config } = req.body || {};
     const updated = await channelRepo.update(req.params.id, tenantId, {
       type,
       instance,
@@ -462,7 +474,7 @@ router.put('/:id', requireActiveTenant, async (req, res) => {
       active,
     });
     const hasConnPatch =
-      provider !== undefined || fallback_providers !== undefined || config !== undefined;
+      provider !== undefined || fallback_providers !== undefined || config !== undefined || provider_config !== undefined;
     if (!hasConnPatch) {
       return res.status(200).json(updated);
     }
@@ -470,6 +482,9 @@ router.put('/:id', requireActiveTenant, async (req, res) => {
       ...(provider !== undefined ? { provider: String(provider || '').toLowerCase().trim() || null } : {}),
       ...(fallback_providers !== undefined ? { fallback_providers } : {}),
       ...(config !== undefined ? { config: config && typeof config === 'object' ? config : {} } : {}),
+      ...(provider_config !== undefined
+        ? { provider_config: provider_config && typeof provider_config === 'object' ? provider_config : {} }
+        : {}),
     });
     res.status(200).json(updatedConn);
   } catch (err) {

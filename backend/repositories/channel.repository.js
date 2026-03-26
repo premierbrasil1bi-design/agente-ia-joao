@@ -6,7 +6,7 @@
 import { pool } from '../db/pool.js';
 
 const CHANNEL_SELECT = `id, tenant_id, agent_id, name, type, instance, is_active AS active,
-  provider, fallback_providers, config, external_id, connected_at, last_error, status, connection_status,
+  provider, fallback_providers, config, provider_config, external_id, connected_at, last_error, status, connection_status,
   created_at, updated_at`;
 
 export async function findAllByTenant(tenantId) {
@@ -106,7 +106,7 @@ export async function update(id, tenantId, data) {
 
 /**
  * Atualiza apenas campos de conexão (Evolution etc.).
- * @param {Object} data - { provider?, external_id?, status?, connection_status?, connected_at?, last_error?, config? }
+ * @param {Object} data - { provider?, external_id?, status?, connection_status?, connected_at?, last_error?, config?, provider_config? }
  */
 export async function updateConnection(id, tenantId, data) {
   const updates = [];
@@ -150,6 +150,11 @@ export async function updateConnection(id, tenantId, data) {
   if (data.config !== undefined) {
     updates.push(`config = $${pos}::jsonb`);
     values.push(JSON.stringify(data.config || {}));
+    pos += 1;
+  }
+  if (data.provider_config !== undefined) {
+    updates.push(`provider_config = $${pos}::jsonb`);
+    values.push(JSON.stringify(data.provider_config || {}));
     pos += 1;
   }
   if (updates.length === 0) return findById(id, tenantId);
