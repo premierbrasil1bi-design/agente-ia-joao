@@ -24,6 +24,8 @@ import {
 } from '../utils/whatsappChannelFlow.js';
 import * as wahaService from './wahaService.js';
 
+const { resolveWahaSessionName } = wahaService;
+
 const MAX_WHATSAPP_ARTIFACT_LEN = 150000;
 
 function pickPairingCodeFromPayload(raw) {
@@ -250,7 +252,9 @@ export async function createWhatsAppInstance(channel) {
 }
 
 function isWahaChannel(channel) {
-  return String(channel?.provider || '').toLowerCase() === 'waha';
+  if (String(channel?.provider || '').toLowerCase() === 'waha') return true;
+  const t = channel?.provider_config?.type;
+  return t != null && String(t).trim().toLowerCase() === 'waha';
 }
 
 function mapWahaSessionStatusToConnection(wahaStatus, sessionPayload) {
@@ -268,8 +272,7 @@ function mapWahaSessionStatusToConnection(wahaStatus, sessionPayload) {
  */
 async function connectWhatsAppChannelWaha(channel) {
   const tenantId = channel.tenant_id;
-  // WAHA Core (free): apenas uma sessão fixa ("default") para todo o sistema.
-  const ext = 'default';
+  const ext = resolveWahaSessionName(channel);
 
   const flow = getWhatsappFlow(channel.config);
   const phaseBefore = deriveFlowPhase(channel);
@@ -336,7 +339,7 @@ async function connectWhatsAppChannelWaha(channel) {
 }
 
 async function getChannelQrCodeWaha(channel) {
-  const instanceName = 'default';
+  const instanceName = resolveWahaSessionName(channel);
   const qr = await wahaService.getQrCode(instanceName);
   if (!qr.ok) {
     throw new Error(qr.error || 'WAHA: falha ao obter QR.');
@@ -349,7 +352,7 @@ async function getChannelQrCodeWaha(channel) {
 }
 
 async function getChannelStatusWaha(channel) {
-  const instanceName = 'default';
+  const instanceName = resolveWahaSessionName(channel);
   const tenantId = channel.tenant_id;
   const st = await wahaService.getSessionStatus(instanceName);
   if (!st.ok || !st.data) {
@@ -426,11 +429,8 @@ async function disconnectChannelWaha(channel) {
 
 /** Artefato de conexão (WAHA): espelha fluxo Evolution (QR / conectado). */
 async function getChannelConnectionArtifactWaha(channel) {
-  const instance = getEvolutionInstanceName(channel);
+  const instance = resolveWahaSessionName(channel);
   const tenantId = channel.tenant_id;
-  if (!instance) {
-    return { status: 'inactive', artifactType: null, artifact: null, rawStatus: null, instance: null };
-  }
 
   const st = await wahaService.getSessionStatus(instance);
   if (!st.ok || !st.data) {

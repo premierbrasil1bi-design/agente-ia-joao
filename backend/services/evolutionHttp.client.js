@@ -163,7 +163,7 @@ export async function createInstance(instanceName) {
   const raw = {
     instanceName: safeName,
     integration: 'WHATSAPP-BAILEYS',
-    qrcode: false,
+    qrcode: true,
     ...getDefaultBaileysSettings(),
     ...(webhookUrl
       ? {
@@ -187,8 +187,11 @@ export async function createInstance(instanceName) {
     console.log('[WHATSAPP_PROVISION] create response ok', { instanceName: safeName, status: r.status });
     return r.data;
   } catch (err) {
+    console.error('ERRO EVOLUTION:', err.response?.data || err.message);
     logEvolutionHttpError('POST /instance/create falhou', err);
-    throw err;
+    const wrapped = new Error('Falha ao criar instância WhatsApp');
+    wrapped.cause = err;
+    throw wrapped;
   }
 }
 

@@ -19,10 +19,10 @@ function validateChannel(value) {
 function getInitialChannel() {
   if (typeof window === 'undefined') return DEFAULT_CHANNEL;
   try {
+    const saved = localStorage.getItem(STORAGE_KEY);
     const url = new URL(window.location.href);
     const fromUrl = url.searchParams.get('channel');
-    const saved = localStorage.getItem(STORAGE_KEY);
-    const raw = fromUrl || saved || DEFAULT_CHANNEL;
+    const raw = saved || fromUrl || DEFAULT_CHANNEL;
     return validateChannel(raw);
   } catch {
     return DEFAULT_CHANNEL;

@@ -29,12 +29,16 @@ function normalizeChannelHeader(value) {
   return VALID_CHANNELS.includes(v) ? v : 'web';
 }
 
-/** Canal sempre válido para o header x-channel (nunca null/undefined). */
+/** Canal sempre válido: prioridade localStorage, depois ?channel= na URL. */
 function getActiveChannelForHeader() {
   if (typeof window === 'undefined') return 'web';
   try {
-    const raw = localStorage.getItem(CHANNEL_STORAGE_KEY);
-    return normalizeChannelHeader(raw);
+    const saved = localStorage.getItem(CHANNEL_STORAGE_KEY);
+    if (saved != null && String(saved).trim() !== '') {
+      return normalizeChannelHeader(saved);
+    }
+    const fromUrl = new URLSearchParams(window.location.search).get('channel');
+    return normalizeChannelHeader(fromUrl);
   } catch {
     return 'web';
   }

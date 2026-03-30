@@ -54,20 +54,12 @@ export async function handleWahaWebhook(req, res) {
 
     console.log('[WAHA WEBHOOK] recebido', { event: data.event, session: data.session });
 
-    // WAHA Core (free): apenas uma sessão fixa.
-    const session = 'default';
+    const session = String(data.session || 'default').trim() || 'default';
     const event = String(data.event || '').trim();
 
     // Segurança básica: validar session/event
     if (!event) {
       console.warn('[WAHA WEBHOOK] event ausente', { event });
-      return res.sendStatus(200);
-    }
-
-    // Se o WAHA enviar session diferente, ignorar (evita poluição de logs/estado).
-    const incomingSession = String(data.session || '').trim();
-    if (incomingSession && incomingSession !== 'default') {
-      console.warn('[WAHA WEBHOOK] session inesperada (WAHA Core single-session)', { incomingSession });
       return res.sendStatus(200);
     }
 

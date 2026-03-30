@@ -5,6 +5,7 @@ import { agentApi } from '../services/agentApi.js';
 import { channelsService } from '../services/channels.service.js';
 import StatusBadge from '../components/StatusBadge.jsx';
 import useAutoReconnect from '../hooks/useAutoReconnect.js';
+import { useChannel } from '../context/ChannelContext.jsx';
 
 const styles = {
   page: {
@@ -270,6 +271,8 @@ const styles = {
 };
 
 export function Channels() {
+  const { setChannel: setActiveUiChannel } = useChannel();
+
   const [channels, setChannels] = useState([]);
   const [agents, setAgents] = useState([]);
   const [showModal, setShowModal] = useState(false);
@@ -627,6 +630,15 @@ export function Channels() {
   }, []);
 
   useAutoReconnect(channels, startPolling);
+
+  useEffect(() => {
+    try {
+      const v = (localStorage.getItem('channel') || 'web').toLowerCase();
+      if (v === 'web') setActiveUiChannel('whatsapp');
+    } catch {
+      /* ignore */
+    }
+  }, [setActiveUiChannel]);
 
   useEffect(() => {
     loadChannels();

@@ -14,6 +14,7 @@ import {
   CONNECTION,
   transitionEvolutionChannelConnection,
 } from './channelEvolutionState.service.js';
+import * as wahaService from './wahaService.js';
 
 /** @type {Map<string, Promise<object>>} */
 const locks = new Map();
@@ -53,7 +54,9 @@ async function runOnce(channelId, tenantId) {
     return { ok: false, error: 'Provisionamento só se aplica a canais WhatsApp.', technical: 'NOT_WHATSAPP' };
   }
 
-  if (String(channel.provider || '').toLowerCase() !== 'waha') {
+  const prov = String(channel.provider || '').toLowerCase();
+  const typeFromCfg = String(channel.provider_config?.type || '').toLowerCase();
+  if (prov !== 'waha' && typeFromCfg !== 'waha') {
     return { ok: false, error: 'Canal não é WAHA.', technical: 'NOT_WAHA' };
   }
 
@@ -62,8 +65,7 @@ async function runOnce(channelId, tenantId) {
     return { ok: true, channel, skipped: true, reason: 'already_connected' };
   }
 
-  // WAHA Core (free): apenas uma sessão fixa ("default").
-  const ext = 'default';
+  const ext = wahaService.resolveWahaSessionName(channel);
 
   const cfg = mergeWhatsappConfig(channel.config, {
     phase: WHATSAPP_PHASE.AWAITING_CONNECTION,

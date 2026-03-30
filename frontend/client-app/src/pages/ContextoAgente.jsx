@@ -1,5 +1,5 @@
 /**
- * Página "Contexto do Agente" – exibe dados de GET /api/context e header x-channel-active.
+ * Página "Contexto do Agente" – exibe dados de GET /api/agent/context e header x-channel-active.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -88,7 +88,7 @@ export function ContextoAgente() {
   return (
     <>
       <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-        Dados retornados por <code>GET /api/context</code> (canal vem do middleware). Funciona com dados simulados se Neon não estiver conectado.
+        Dados retornados por <code>GET /api/agent/context</code> (canal vem do middleware). Funciona com dados simulados se Neon não estiver conectado.
       </p>
 
       <div style={styles.card}>

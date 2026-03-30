@@ -31,11 +31,26 @@ function isTokenExpired(token) {
  * @param {() => string | null} [getToken] - token JWT do admin (para rotas protegidas)
  * @param {() => void} [onUnauthorized] - chamado quando a API retorna 401 (redirecionar para /login)
  */
+const VALID_CH = ['web', 'api', 'whatsapp', 'instagram'];
+
 export function createApiClient(getChannel, getToken = null, onUnauthorized = null) {
-  const channel = () => (typeof getChannel === 'function' ? getChannel() : getChannel) || 'web';
+  const channel = () => {
+    try {
+      if (typeof window !== 'undefined') {
+        const saved = localStorage.getItem('channel');
+        const v = (saved || '').trim().toLowerCase();
+        if (VALID_CH.includes(v)) return v;
+      }
+    } catch {
+      /* ignore */
+    }
+    const fromParent = typeof getChannel === 'function' ? getChannel() : getChannel;
+    return fromParent || 'web';
+  };
   const token = () => (typeof getToken === 'function' ? getToken() : getToken) || null;
 
-  const isProtectedPath = (path) => /^\/api\/(dashboard|agents)/.test(path);
+  const isProtectedPath = (path) =>
+    /^\/api\/(agent|agents|channels)\//.test(path);
 
   function ensureAuth(path) {
     const t = token();
@@ -101,24 +116,24 @@ export function createApiClient(getChannel, getToken = null, onUnauthorized = nu
   return {
     getContext: (clientId, agentId) =>
       requestWithHeaders(
-        `/api/context?client_id=${clientId || ''}&agent_id=${agentId || ''}`
+        `/api/agent/context?client_id=${clientId || ''}&agent_id=${agentId || ''}`
       ).then(({ data, headers }) => ({ ...data, _headerXChannelActive: headers['x-channel-active'] })),
-    getSummary: () => request('/api/dashboard/summary'),
+    getSummary: () => request('/api/agent/dashboard/summary'),
     getAgents: (clientId) =>
-      request(`/api/dashboard/agents${clientId ? `?client_id=${clientId}` : ''}`),
+      request(`/api/agent/dashboard/agents${clientId ? `?client_id=${clientId}` : ''}`),
     getChannels: (agentId) =>
-      request(`/api/dashboard/channels${agentId ? `?agent_id=${agentId}` : ''}`),
+      request(`/api/agent/dashboard/channels${agentId ? `?agent_id=${agentId}` : ''}`),
     getCosts: (params) => {
       const q = new URLSearchParams(params).toString();
-      return request(`/api/dashboard/costs${q ? `?${q}` : ''}`);
+      return request(`/api/agent/dashboard/costs${q ? `?${q}` : ''}`);
     },
     getMessages: (agentId, channelId, limit = 100, offset = 0) => {
       const q = new URLSearchParams({ agent_id: agentId, limit, offset });
       if (channelId) q.set('channel_id', channelId);
-      return request(`/api/dashboard/messages?${q}`);
+      return request(`/api/agent/dashboard/messages?${q}`);
     },
-    getPrompts: () => request(`/api/dashboard/prompts?agent_id=${AGENT_ID}`),
-    getClients: () => request(`/api/dashboard/clients?agent_id=${AGENT_ID}`),
+    getPrompts: () => request(`/api/agent/dashboard/prompts?agent_id=${AGENT_ID}`),
+    getClients: () => request(`/api/agent/dashboard/clients?agent_id=${AGENT_ID}`),
     listAgents: (clientId) =>
       request(`/api/agents${clientId ? `?client_id=${clientId}` : ''}`),
     createAgent: (body) =>

@@ -12,6 +12,14 @@ import * as wahaService from './wahaService.js';
  */
 export async function sendWhatsAppTextForChannel(channel, number, text) {
   const provider = String(channel?.provider || '').toLowerCase();
+
+  if (provider === 'waha') {
+    const sessionName = wahaService.resolveWahaSessionName(channel);
+    const out = await wahaService.sendMessage(sessionName, number, text);
+    if (!out.ok) throw new Error(out.error || 'Falha no envio WAHA');
+    return out.data;
+  }
+
   const instance =
     channel?.external_id != null && String(channel.external_id).trim() !== ''
       ? String(channel.external_id).trim()
@@ -21,12 +29,6 @@ export async function sendWhatsAppTextForChannel(channel, number, text) {
 
   if (!instance) {
     throw new Error('Canal sem sessão/instância (external_id) para envio.');
-  }
-
-  if (provider === 'waha') {
-    const out = await wahaService.sendMessage(instance, number, text);
-    if (!out.ok) throw new Error(out.error || 'Falha no envio WAHA');
-    return out.data;
   }
 
   return evolutionService.sendText(instance, number, text);
