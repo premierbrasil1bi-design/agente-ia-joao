@@ -10,6 +10,8 @@ const BASE = getApiBaseUrl;
 
 const AGENT_TOKEN = 'agent_token';
 const AGENT_USER = 'agent_user';
+const CHANNEL_STORAGE_KEY = 'channel';
+const VALID_CHANNELS = ['web', 'api', 'whatsapp', 'instagram'];
 
 function getToken() {
   return localStorage.getItem(AGENT_TOKEN);
@@ -22,11 +24,33 @@ function clearAndRedirectLogin() {
   if (typeof window !== 'undefined') window.location.href = `${base}/login`;
 }
 
+function normalizeChannelHeader(value) {
+  const v = value == null || value === '' ? 'web' : String(value).trim().toLowerCase();
+  return VALID_CHANNELS.includes(v) ? v : 'web';
+}
+
+/** Canal sempre válido para o header x-channel (nunca null/undefined). */
+function getActiveChannelForHeader() {
+  if (typeof window === 'undefined') return 'web';
+  try {
+    const raw = localStorage.getItem(CHANNEL_STORAGE_KEY);
+    return normalizeChannelHeader(raw);
+  } catch {
+    return 'web';
+  }
+}
+
 async function request(path, options = {}) {
   const token = getToken();
+  const explicit = options.headers && options.headers['x-channel'];
+  const channelHeader = explicit != null && explicit !== ''
+    ? normalizeChannelHeader(explicit)
+    : getActiveChannelForHeader();
+
   const headers = {
     'Content-Type': 'application/json',
     ...options.headers,
+    'x-channel': channelHeader,
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -65,7 +89,10 @@ export const agentApi = {
     const url = `${BASE()}/api/agent/auth/login`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-channel': getActiveChannelForHeader(),
+      },
       body: JSON.stringify({ email, password }),
     });
     const data = await res.json().catch(() => ({}));

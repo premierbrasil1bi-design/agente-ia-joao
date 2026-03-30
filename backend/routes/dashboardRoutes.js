@@ -26,7 +26,11 @@ function safeJson(res, data) {
 router.get('/summary', async (req, res) => {
   try {
     const clientId = req.query.client_id || null;
-    const data = await dashboardService.getSummary(clientId);
+    const tenantId = req.tenantId || req.user?.tenantId || null;
+    const data = await dashboardService.getSummary(clientId, {
+      tenantId,
+      req,
+    });
     return safeJson(res, data);
   } catch (err) {
     console.error(`${LOG_PREFIX} GET /summary:`, err.message);

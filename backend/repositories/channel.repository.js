@@ -10,12 +10,18 @@ const CHANNEL_SELECT = `id, tenant_id, agent_id, name, type, instance, is_active
   provider, fallback_providers, config, provider_config, external_id, connected_at, last_error, status, connection_status,
   created_at, updated_at`;
 
+function withProviderConfigFallback(row) {
+  if (!row || typeof row !== 'object') return row;
+  const providerConfig = row.provider_config && typeof row.provider_config === 'object' ? row.provider_config : {};
+  return { ...row, provider_config: providerConfig };
+}
+
 export async function findAllByTenant(tenantId) {
   const { rows } = await pool.query(
     `SELECT ${CHANNEL_SELECT} FROM channels WHERE tenant_id = $1 ORDER BY created_at DESC`,
     [tenantId]
   );
-  return rows;
+  return rows.map(withProviderConfigFallback);
 }
 
 export async function findById(id, tenantId) {
@@ -23,7 +29,8 @@ export async function findById(id, tenantId) {
     `SELECT ${CHANNEL_SELECT} FROM channels WHERE id = $1 AND tenant_id = $2`,
     [id, tenantId]
   );
-  return rows[0] ?? null;
+  const row = rows[0] ?? null;
+  return row ? withProviderConfigFallback(row) : null;
 }
 
 /** Evita duplicate key em idx_channels_type_instance (mesmo tenant, mesmo type+instance). */
@@ -33,7 +40,8 @@ export async function findByTenantTypeAndInstance(tenantId, type, instance) {
     `SELECT ${CHANNEL_SELECT} FROM channels WHERE tenant_id = $1 AND type = $2 AND instance = $3 LIMIT 1`,
     [tenantId, String(type).toLowerCase().trim(), String(instance).trim()]
   );
-  return rows[0] ?? null;
+  const row = rows[0] ?? null;
+  return row ? withProviderConfigFallback(row) : null;
 }
 
 /**
@@ -167,8 +175,9 @@ export async function updateConnection(id, tenantId, data) {
     values
   );
   const updated = rows[0] ?? null;
-  if (updated) emitChannelUpdated(updated, { source: 'repository.updateConnection' });
-  return updated;
+  const out = updated ? withProviderConfigFallback(updated) : null;
+  if (out) emitChannelUpdated(out, { source: 'repository.updateConnection' });
+  return out;
 }
 
 export async function deleteById(id, tenantId) {

@@ -44,7 +44,7 @@ export function Dashboard() {
         setError(err.message);
       });
     return () => { cancelled = true; };
-  }, [navigate]);
+  }, [navigate, channel]);
 
   const mergedAlerts = useMemo(() => {
     const summaryAlerts = Array.isArray(summary?.alertas) ? summary.alertas.map(normalizeAlert) : [];
@@ -67,7 +67,7 @@ export function Dashboard() {
     return <p className={styles.muted}>Carregando...</p>;
   }
 
-  const canalAtivo = (summary.canalAtivo || channel || 'web').toUpperCase();
+  const canalAtivo = (summary?.canalAtivo || channel || 'web').toUpperCase();
   const mensagensEnviadas = summary.mensagensEnviadas ?? 0;
   const mensagensRecebidas = summary.mensagensRecebidas ?? 0;
   const tokensEstimados = summary.tokensEstimados ?? summary.tokens ?? 0;

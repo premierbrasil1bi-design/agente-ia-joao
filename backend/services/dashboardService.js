@@ -13,6 +13,47 @@ import * as promptsRepo from '../repositories/promptsRepository.js';
 
 const LOG_PREFIX = '[dashboard]';
 
+const VALID_CHANNELS = ['web', 'api', 'whatsapp', 'instagram'];
+
+/**
+ * Resolve canal ativo: header x-channel > query ?channel= > fallback (ex.: inferido do tenant).
+ * Retorna sempre um dos valores válidos em minúsculas.
+ */
+export function resolveChannel(req, fallback = 'web') {
+  const header = req?.headers?.['x-channel'];
+  const query = req?.query?.channel;
+  const h = typeof header === 'string' ? header.trim().toLowerCase() : '';
+  const q = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  if (VALID_CHANNELS.includes(h)) return h;
+  if (VALID_CHANNELS.includes(q)) return q;
+  const fb = typeof fallback === 'string' ? fallback.trim().toLowerCase() : 'web';
+  return VALID_CHANNELS.includes(fb) ? fb : 'web';
+}
+
+/** Primeiro canal do tenant (tipo) para exibir no dashboard quando não há x-channel. */
+async function inferCanalAtivoFromTenant(tenantId) {
+  if (!tenantId) return null;
+  try {
+    const agents = await agentsRepo.findByTenantId(tenantId);
+    if (!Array.isArray(agents) || agents.length === 0) return null;
+    for (const agent of agents) {
+      const chs = await channelsRepo.findByAgentId(agent.id);
+      if (!Array.isArray(chs) || chs.length === 0) continue;
+      const pick = chs.find((c) => c.is_active !== false) || chs[0];
+      const t = String(pick.type || 'whatsapp').toLowerCase();
+      if (t === 'whatsapp') return 'WHATSAPP';
+      if (t === 'instagram') return 'INSTAGRAM';
+      if (t === 'telegram') return 'TELEGRAM';
+      if (t === 'web') return 'WEB';
+      if (t === 'api') return 'API';
+      return t.toUpperCase();
+    }
+  } catch (e) {
+    console.warn(`${LOG_PREFIX} inferCanalAtivoFromTenant:`, e?.message || e);
+  }
+  return null;
+}
+
 function hasDb() {
   try {
     return !!hasDatabaseUrl();
@@ -30,6 +71,7 @@ function mockSummary() {
     mensagensEnviadas: 1247,
     mensagensRecebidas: 1189,
     agentStatus: 'ativo',
+    canalAtivo: 'WEB',
     alertas: [{ tipo: 'info', texto: 'Configure DATABASE_URL para persistir dados no Neon.' }],
     porCanal: undefined,
   };
@@ -44,19 +86,35 @@ function emptySummary(reason = 'Dashboard sem dados configurados.') {
     mensagensEnviadas: 0,
     mensagensRecebidas: 0,
     agentStatus: 'inativo',
+    canalAtivo: 'WEB',
     alertas: [{ tipo: 'info', texto: reason }],
     porCanal: {},
   };
 }
 
 /** Resumo geral. Nunca lança. */
-export async function getSummary(clientId = null) {
-  try {
-    if (!hasDb()) return mockSummary();
+export async function getSummary(clientId = null, opts = {}) {
+  const { tenantId = null, req = null } = opts;
 
-    const agents = await agentsRepo.findAll(clientId);
+  try {
+    if (!hasDb()) {
+      const m = mockSummary();
+      const canal = req ? resolveChannel(req, 'web') : 'web';
+      return { ...m, canalAtivo: canal.toUpperCase() };
+    }
+
+    let agents;
+    if (clientId) {
+      agents = await agentsRepo.findAll(clientId);
+    } else if (tenantId) {
+      agents = await agentsRepo.findByTenantId(tenantId);
+    } else {
+      agents = await agentsRepo.findAll(null);
+    }
     if (!Array.isArray(agents) || agents.length === 0) {
-      return emptySummary('Nenhum agente cadastrado. Execute o seed ou cadastre um agente.');
+      const base = emptySummary('Nenhum agente cadastrado. Execute o seed ou cadastre um agente.');
+      const canal = req ? resolveChannel(req, 'web') : 'web';
+      return { ...base, canalAtivo: canal.toUpperCase() };
     }
 
     const today = new Date().toISOString().slice(0, 10);
@@ -107,6 +165,16 @@ export async function getSummary(clientId = null) {
       if (inativos.length) alertas.push({ tipo: 'warning', texto: `Canal(s) inativo(s) no agente ${agent.name}.` });
     }
 
+    let canalAtivo =
+      canalAtivoFromHeaderOrQuery(headerChannel) ||
+      canalAtivoFromHeaderOrQuery(queryChannel);
+    if (!canalAtivo && tenantId) {
+      canalAtivo = await inferCanalAtivoFromTenant(tenantId);
+    }
+    if (!canalAtivo) {
+      canalAtivo = 'WEB';
+    }
+
     return {
       totalGastoHoje: Math.round(totalHoje * 100) / 100,
       totalGastoSemana: Math.round(totalSemana * 100) / 100,
@@ -114,12 +182,15 @@ export async function getSummary(clientId = null) {
       mensagensEnviadas,
       mensagensRecebidas,
       agentStatus,
+      canalAtivo,
       alertas,
       porCanal: Object.keys(porCanal).length ? porCanal : undefined,
     };
   } catch (err) {
     console.error(`${LOG_PREFIX} getSummary:`, err.message);
-    return emptySummary('Erro ao carregar dados. Exibindo valores zerados.');
+    const base = emptySummary('Erro ao carregar dados. Exibindo valores zerados.');
+    const canal = opts.req ? resolveChannel(opts.req, 'web') : 'web';
+    return { ...base, canalAtivo: canal.toUpperCase() };
   }
 }
 
