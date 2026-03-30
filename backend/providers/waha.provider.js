@@ -11,28 +11,45 @@ export class WahaProvider extends BaseProvider {
   }
 
   async connect() {
-    console.log('PROVIDER:', 'waha');
-    console.log('INSTANCE:', this.session);
-    console.log('WAHA URL:', process.env.WAHA_API_URL || process.env.WAHA_URL || '');
+    console.log('[WAHA] PROVIDER:', 'waha');
+    console.log('[WAHA] SESSION:', this.session);
     try {
+      await wahaService.checkWahaHealth();
       const created = await wahaService.createSession(this.session);
+      if (wahaService.isWahaUnauthorizedResult(created)) {
+        const e = new Error(created.error || 'WAHA não autorizado');
+        e.httpStatus = 401;
+        throw e;
+      }
       if (!created.ok) {
-        throw new Error(created.error || 'Falha ao conectar WhatsApp (WAHA)');
+        const e = new Error(created.error || 'Falha ao conectar WhatsApp (WAHA)');
+        if (created.httpStatus) e.httpStatus = created.httpStatus;
+        throw e;
       }
       return { connected: false, session: this.session };
     } catch (err) {
       const msg = err?.message || '';
-      if (msg.includes('Falha ao conectar WhatsApp (WAHA)')) throw err;
-      console.error('ERRO WAHA:', err.response?.data || err.message);
-      throw new Error('Falha ao conectar WhatsApp (WAHA)');
+      if (err.httpStatus === 401) throw err;
+      if (msg.includes('Falha ao conectar') && err.httpStatus) throw err;
+      if (err.code === 'WAHA_UNREACHABLE') throw err;
+      if (/WAHA_API_URL|WAHA_API_KEY/.test(msg)) throw err;
+      console.error('[WAHA ERROR]:', err.response?.data || err.message);
+      throw new Error(err.message || 'Falha ao conectar WhatsApp (WAHA)');
     }
   }
 
   async getQRCode() {
     try {
       const qrOut = await wahaService.getQrCode(this.session);
+      if (wahaService.isWahaUnauthorizedResult(qrOut)) {
+        const e = new Error(qrOut.error || 'WAHA não autorizado');
+        e.httpStatus = 401;
+        throw e;
+      }
       if (!qrOut.ok) {
-        throw new Error(qrOut.error || 'Falha ao obter QR (WAHA)');
+        const e = new Error(qrOut.error || 'QR não disponível');
+        if (qrOut.httpStatus) e.httpStatus = qrOut.httpStatus;
+        throw e;
       }
       const payload =
         extractQrPayload(qrOut.raw) ||
@@ -41,12 +58,9 @@ export class WahaProvider extends BaseProvider {
       const qr = toQrDataUrl(payload) || payload || qrOut.data;
       return qr;
     } catch (err) {
-      const msg = err?.message || '';
-      if (msg.includes('Falha ao obter QR') || msg.includes('Falha ao conectar WhatsApp (WAHA)')) {
-        throw err;
-      }
-      console.error('ERRO WAHA:', err.response?.data || err.message);
-      throw new Error('Falha ao conectar WhatsApp (WAHA)');
+      if (err.httpStatus === 401) throw err;
+      console.error('[WAHA ERROR]:', err.response?.data || err.message);
+      throw err;
     }
   }
 

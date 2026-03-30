@@ -13,7 +13,11 @@ import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { deriveFlowPhase } from '../utils/whatsappChannelFlow.js';
 import * as whatsappEngine from '../services/whatsappEngine.js';
-import { getProvider } from '../providers/provider.factory.js';
+import {
+  getProviderForChannel,
+  mergeProviderConfigForConnect,
+  resolveProvider,
+} from '../providers/provider.factory.js';
 import { deriveHealth, emitChannelError, emitChannelUpdated } from '../utils/channelRealtime.js';
 import { isWahaUnreachableError } from '../services/wahaService.js';
 
@@ -34,29 +38,6 @@ async function getChannelFromReq(req, res) {
 function isEvolutionOffline(err) {
   const c = err.code;
   return c === 'ECONNREFUSED' || c === 'ENOTFOUND' || c === 'ETIMEDOUT';
-}
-
-/** Garante instance/instanceName para Evolution a partir de external_id / instance do canal. */
-function mergeProviderConfigForConnect(channel) {
-  const pc =
-    channel?.provider_config && typeof channel.provider_config === 'object'
-      ? { ...channel.provider_config }
-      : {};
-  const ext =
-    channel.external_id != null && String(channel.external_id).trim() !== ''
-      ? String(channel.external_id).trim()
-      : null;
-  const inst = channel.instance != null && String(channel.instance).trim() !== '' ? String(channel.instance).trim() : null;
-  const name = pc.instance || pc.instanceName || ext || inst || 'default';
-  return { ...pc, instance: name, instanceName: name, session: name };
-}
-
-function resolveChannelProvider(channel) {
-  const p = String(channel?.provider || '').trim().toLowerCase();
-  if (p) return p;
-  const t = channel?.provider_config?.type;
-  if (t != null && String(t).trim() !== '') return String(t).trim().toLowerCase();
-  return 'waha';
 }
 
 export async function sendChannelMessage(req, res) {
@@ -92,7 +73,7 @@ export async function connectChannel(req, res) {
     channelRef = channel;
 
     console.log('[CONNECT_CHANNEL] channelId:', channel.id, 'tenantId:', channel.tenant_id);
-    const providerLc = resolveChannelProvider(channel);
+    const providerLc = resolveProvider(channel);
     const isWhatsapp = String(channel.type || '').toLowerCase() === 'whatsapp';
     const providerCfg = mergeProviderConfigForConnect(channel);
     const instanceName =
@@ -112,7 +93,15 @@ export async function connectChannel(req, res) {
     }
     if (isWhatsapp) {
       console.log('[CONNECT]');
-      const providerInstance = getProvider(providerLc, providerCfg);
+      let providerInstance;
+      try {
+        providerInstance = getProviderForChannel(channel);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          error: e.message || 'Provider inválido.',
+        });
+      }
       await providerInstance.connect();
       const qr = await providerInstance.getQRCode();
       console.log('[QR RECEIVED]', !!qr);
@@ -195,17 +184,40 @@ export async function connectChannel(req, res) {
         code: 'INSTANCE_NOT_FOUND',
       });
     }
+    if (err.message && String(err.message).includes('Provider não suportado')) {
+      return res.status(400).json({
+        success: false,
+        error: err.message,
+      });
+    }
+    if (err.httpStatus === 401) {
+      return res.status(401).json({
+        success: false,
+        error: err.message || 'WAHA: API Key inválida ou ausente.',
+      });
+    }
+    if (channelRef && /WAHA_API_URL|WAHA_API_KEY/.test(err.message || '')) {
+      return res.status(500).json({
+        success: false,
+        error: err.message,
+        code: 'WAHA_CONFIG',
+      });
+    }
     if (isEvolutionOffline(err)) {
       return res.status(503).json({
         success: false,
         error: 'Evolution API está offline ou inacessível. Verifique o container/serviço e a variável EVOLUTION_API_URL.',
       });
     }
-    if (channelRef && resolveChannelProvider(channelRef) === 'waha' && isWahaUnreachableError(err)) {
+    if (
+      channelRef &&
+      resolveProvider(channelRef) === 'waha' &&
+      (err.code === 'WAHA_UNREACHABLE' || isWahaUnreachableError(err))
+    ) {
       return res.status(503).json({
         success: false,
         error:
-          'WAHA está offline ou inacessível. Verifique WAHA_API_URL / WAHA_URL e se o serviço está em execução.',
+          'WAHA está offline ou inacessível. Verifique WAHA_API_URL e se o serviço está em execução.',
       });
     }
     res.status(500).json({
@@ -227,10 +239,17 @@ export async function getQrCode(req, res) {
     if (!channel) return;
 
     const isWhatsapp = String(channel.type || '').toLowerCase() === 'whatsapp';
-    const providerLc = resolveChannelProvider(channel);
+    const providerLc = resolveProvider(channel);
     if (isWhatsapp && ['waha', 'evolution', 'zapi', 'official', 'whatsapp_oficial'].includes(providerLc)) {
-      const providerCfg = mergeProviderConfigForConnect(channel);
-      const provider = getProvider(providerLc, providerCfg);
+      let provider;
+      try {
+        provider = getProviderForChannel(channel);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          error: e.message || 'Provider inválido.',
+        });
+      }
       const qr = await provider.getQRCode();
       console.log('[PROVIDER]', providerLc);
       console.log('[QR RECEIVED]', !!qr);
@@ -260,13 +279,32 @@ export async function getQrCode(req, res) {
     });
   } catch (err) {
     console.error('[channelConnection] getQrCode:', err.message, err.response?.status || err.code || '');
+    if (err.message && String(err.message).includes('Provider não suportado')) {
+      return res.status(400).json({
+        success: false,
+        error: err.message,
+      });
+    }
+    if (err.httpStatus === 401) {
+      return res.status(401).json({
+        success: false,
+        error: err.message || 'WAHA: API Key inválida ou ausente.',
+      });
+    }
+    if (channel && /WAHA_API_URL|WAHA_API_KEY/.test(err.message || '')) {
+      return res.status(500).json({
+        success: false,
+        error: err.message,
+        code: 'WAHA_CONFIG',
+      });
+    }
     if (isEvolutionOffline(err)) {
       return res.status(503).json({
         success: false,
         error: 'Evolution API está offline ou inacessível.',
       });
     }
-    if (channel && resolveChannelProvider(channel) === 'waha' && isWahaUnreachableError(err)) {
+    if (channel && resolveProvider(channel) === 'waha' && (err.code === 'WAHA_UNREACHABLE' || isWahaUnreachableError(err))) {
       return res.status(503).json({
         success: false,
         error: 'WAHA está offline ou inacessível.',

@@ -15,6 +15,7 @@ import {
   transitionEvolutionChannelConnection,
 } from './channelEvolutionState.service.js';
 import * as wahaService from './wahaService.js';
+import { resolveProvider } from '../providers/resolveProvider.js';
 
 /** @type {Map<string, Promise<object>>} */
 const locks = new Map();
@@ -54,9 +55,7 @@ async function runOnce(channelId, tenantId) {
     return { ok: false, error: 'Provisionamento só se aplica a canais WhatsApp.', technical: 'NOT_WHATSAPP' };
   }
 
-  const prov = String(channel.provider || '').toLowerCase();
-  const typeFromCfg = String(channel.provider_config?.type || '').toLowerCase();
-  if (prov !== 'waha' && typeFromCfg !== 'waha') {
+  if (resolveProvider(channel) !== 'waha') {
     return { ok: false, error: 'Canal não é WAHA.', technical: 'NOT_WAHA' };
   }
 

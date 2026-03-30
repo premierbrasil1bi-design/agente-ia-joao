@@ -23,6 +23,7 @@ import {
   deriveFlowPhase,
 } from '../utils/whatsappChannelFlow.js';
 import * as wahaService from './wahaService.js';
+import { resolveProvider } from '../providers/resolveProvider.js';
 
 const { resolveWahaSessionName } = wahaService;
 
@@ -252,9 +253,7 @@ export async function createWhatsAppInstance(channel) {
 }
 
 function isWahaChannel(channel) {
-  if (String(channel?.provider || '').toLowerCase() === 'waha') return true;
-  const t = channel?.provider_config?.type;
-  return t != null && String(t).trim().toLowerCase() === 'waha';
+  return resolveProvider(channel) === 'waha';
 }
 
 function mapWahaSessionStatusToConnection(wahaStatus, sessionPayload) {

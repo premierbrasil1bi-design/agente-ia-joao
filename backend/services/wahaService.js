@@ -1,61 +1,86 @@
 /**
  * Cliente HTTP WAHA (WhatsApp HTTP API) — https://waha.devlike.pro
- * Autenticação opcional: header X-Api-Key (WAHA_API_KEY) quando definido.
+ * Requer WAHA_API_KEY. URL base: WAHA_API_URL (obrigatório em produção).
  */
 
 import axios from 'axios';
 
-function getBaseURL() {
-  const raw =
-    process.env.WAHA_API_URL || process.env.WAHA_URL || 'http://127.0.0.1:3000';
-  return String(raw).replace(/\/$/, '');
+const DEV_FALLBACK_WAHA_URL = 'http://saas_waha:3000';
+
+function isProduction() {
+  return String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 }
 
-function getApiKey() {
-  return String(process.env.WAHA_API_KEY || '').trim();
+/**
+ * URL base do WAHA (sem barra final). Sem localhost fixo: fallback só em dev (rede Docker).
+ */
+export function getResolvedWahaUrl() {
+  const primary = (process.env.WAHA_API_URL || '').trim();
+  if (primary) return primary.replace(/\/$/, '');
+  const legacy = (process.env.WAHA_URL || '').trim();
+  if (legacy) return legacy.replace(/\/$/, '');
+  if (!isProduction()) {
+    return DEV_FALLBACK_WAHA_URL;
+  }
+  throw new Error('WAHA_API_URL não configurado');
+}
+
+function assertWahaApiKey() {
+  const key = String(process.env.WAHA_API_KEY || '').trim();
+  if (!key) {
+    throw new Error('WAHA_API_KEY não configurado');
+  }
+  return key;
+}
+
+/** @type {import('axios').AxiosInstance | null} */
+let _api = null;
+
+function getApi() {
+  assertWahaApiKey();
+  const baseURL = getResolvedWahaUrl();
+  if (!_api) {
+    _api = axios.create({
+      baseURL,
+      headers: buildHeaders(),
+      timeout: 60000,
+    });
+    _api.interceptors.request.use((config) => {
+      config.baseURL = getResolvedWahaUrl();
+      config.headers = { ...buildHeaders(), ...config.headers };
+      const method = (config.method || 'get').toUpperCase();
+      const path = config.url || '';
+      console.log(`[WAHA] Request → ${method} ${path}`);
+      return config;
+    });
+    _api.interceptors.response.use(
+      (response) => {
+        const path = response.config?.url || '';
+        console.log(`[WAHA] Response OK ${path}`);
+        return response;
+      },
+      (err) => {
+        const st = err.response?.status;
+        if (st === 401) {
+          console.error('[WAHA ERROR]:', err.response?.data || err.message);
+        } else {
+          console.error('[WAHA ERROR]:', err.response?.data || err.message);
+        }
+        return Promise.reject(err);
+      }
+    );
+  }
+  return _api;
 }
 
 function buildHeaders() {
-  const headers = {
+  const key = assertWahaApiKey();
+  return {
     Accept: 'application/json',
     'Content-Type': 'application/json',
+    'X-Api-Key': key,
   };
-  const key = getApiKey();
-  if (key) headers['X-Api-Key'] = key;
-  return headers;
 }
-
-const api = axios.create({
-  baseURL: getBaseURL(),
-  headers: buildHeaders(),
-  timeout: 60000,
-});
-
-api.interceptors.request.use((config) => {
-  config.baseURL = getBaseURL();
-  config.headers = { ...buildHeaders(), ...config.headers };
-  const method = (config.method || 'get').toUpperCase();
-  const path = config.url || '';
-  console.log(`[WAHA] Request → ${method} ${path}`);
-  return config;
-});
-
-api.interceptors.response.use(
-  (response) => {
-    const path = response.config?.url || '';
-    console.log(`[WAHA] Response OK ${path}`);
-    return response;
-  },
-  (err) => {
-    const st = err.response?.status;
-    if (st === 401) {
-      console.error('[WAHA ERROR] Unauthorized - API KEY inválida ou ausente');
-    } else {
-      console.error('[WAHA ERROR]', err.response?.status || err.code || '', err.message);
-    }
-    return Promise.reject(err);
-  }
-);
 
 function wahaErr(err) {
   const st = err.response?.status;
@@ -63,7 +88,12 @@ function wahaErr(err) {
     st === 401
       ? 'WAHA: não autorizado (verifique WAHA_API_KEY).'
       : err.message || 'Erro na API WAHA.';
-  return { ok: false, error: msg, code: st === 401 ? 'UNAUTHORIZED' : undefined };
+  return {
+    ok: false,
+    error: msg,
+    httpStatus: st,
+    code: st === 401 ? 'UNAUTHORIZED' : undefined,
+  };
 }
 
 function normalizeSessionName(name) {
@@ -97,27 +127,45 @@ export function resolveWahaSessionName(channel) {
 }
 
 /**
- * Teste de conectividade e autenticação (GET /api/sessions).
+ * Valida URL + API key e conectividade básica (GET /api/sessions).
  */
-export async function testWahaConnection() {
+export async function checkWahaHealth() {
+  const WAHA_URL = getResolvedWahaUrl();
+  console.log('[WAHA] URL:', WAHA_URL);
+  console.log('[WAHA] PROVIDER:', 'waha');
+  const api = getApi();
   try {
-    const res = await api.get('/api/sessions');
-    console.log('[WAHA] Conexão OK');
-    return res.data;
+    await api.get('/api/sessions');
+    return true;
   } catch (err) {
-    console.error('[WAHA] Falha na conexão', err.message);
-    throw err;
+    console.error('[WAHA ERROR]:', err.response?.data || err.message);
+    if (err.response?.status === 401) {
+      const e = new Error('WAHA: não autorizado (verifique WAHA_API_KEY).');
+      e.httpStatus = 401;
+      throw e;
+    }
+    const e = new Error('WAHA não acessível');
+    e.code = 'WAHA_UNREACHABLE';
+    e.cause = err;
+    throw e;
   }
+}
+
+/** @deprecated use checkWahaHealth */
+export async function testWahaConnection() {
+  return checkWahaHealth();
 }
 
 /**
  * Cria ou inicia sessão no WAHA.
- * Tenta: POST /api/sessions { name, start }; depois POST .../sessions/:name/start; depois POST /api/sessions/start.
  */
 export async function createSession(name) {
   const sessionName = normalizeSessionName(name);
-  console.log('[WAHA] Creating session', sessionName);
-  console.log('WAHA URL:', getBaseURL());
+  const WAHA_URL = getResolvedWahaUrl();
+  console.log('[WAHA] URL:', WAHA_URL);
+  console.log('[WAHA] SESSION:', sessionName);
+  console.log('[WAHA] PROVIDER:', 'waha');
+  const api = getApi();
   try {
     const { data } = await api.post('/api/sessions', {
       name: sessionName,
@@ -125,14 +173,17 @@ export async function createSession(name) {
     });
     return { ok: true, data };
   } catch (err) {
-    console.error('ERRO WAHA:', err.response?.data || err.message);
+    console.error('[WAHA ERROR]:', err.response?.data || err.message);
     const st = err.response?.status;
+    if (st === 401) {
+      return { ...wahaErr(err), httpStatus: 401 };
+    }
     if (st === 409 || st === 400) {
       try {
         await api.post(`/api/sessions/${encodeURIComponent(sessionName)}/start`, {});
         return { ok: true, data: { name: sessionName, reused: true } };
       } catch (e2) {
-        console.error('ERRO WAHA:', e2.response?.data || e2.message);
+        console.error('[WAHA ERROR]:', e2.response?.data || e2.message);
         try {
           await api.post('/api/sessions/start', { name: sessionName });
           return { ok: true, data: { name: sessionName, reused: true } };
@@ -151,15 +202,19 @@ export async function createSession(name) {
 }
 
 /**
- * QR — tenta rotas comuns conforme versão do WAHA (GOWS / NOWEB).
+ * QR — ordem: auth/qr → sessions/qr → sessions/qrcode
  */
 export async function getQrCode(name) {
   const sessionName = normalizeSessionName(name);
-  console.log('[WAHA] Fetching QR for session', sessionName);
+  const WAHA_URL = getResolvedWahaUrl();
+  console.log('[WAHA] URL:', WAHA_URL);
+  console.log('[WAHA] SESSION:', sessionName);
+  console.log('[WAHA] PROVIDER:', 'waha');
+  const api = getApi();
   const paths = [
     `/api/${encodeURIComponent(sessionName)}/auth/qr`,
-    `/api/sessions/${encodeURIComponent(sessionName)}/qrcode`,
     `/api/sessions/${encodeURIComponent(sessionName)}/qr`,
+    `/api/sessions/${encodeURIComponent(sessionName)}/qrcode`,
   ];
   let lastErr;
   for (const path of paths) {
@@ -169,21 +224,26 @@ export async function getQrCode(name) {
       return { ok: true, data: raw, raw: data };
     } catch (err) {
       lastErr = err;
-      console.error('ERRO WAHA:', err.response?.data || err.message);
+      console.error('[WAHA ERROR]:', err.response?.data || err.message);
       const st = err.response?.status;
       if (st && st !== 404) {
         return { ...wahaErr(err), raw: null };
       }
     }
   }
-  return { ...wahaErr(lastErr || new Error('QR não disponível')), raw: null };
+  const msg = 'QR não disponível';
+  console.error('[WAHA ERROR]:', msg, lastErr?.response?.data || lastErr?.message);
+  return {
+    ok: false,
+    error: msg,
+    raw: null,
+    httpStatus: lastErr?.response?.status,
+  };
 }
 
-/**
- * GET /api/sessions/{name}
- */
 export async function getSessionStatus(name) {
   const sessionName = normalizeSessionName(name);
+  const api = getApi();
   try {
     const { data } = await api.get(`/api/sessions/${encodeURIComponent(sessionName)}`, {
       timeout: 30000,
@@ -194,9 +254,6 @@ export async function getSessionStatus(name) {
   }
 }
 
-/**
- * chatId = número apenas dígitos + @c.us
- */
 export async function sendMessage(name, number, text) {
   const sessionName = normalizeSessionName(name);
   const digits = String(number || '').replace(/\D/g, '');
@@ -206,6 +263,7 @@ export async function sendMessage(name, number, text) {
     text: String(text ?? ''),
   };
   console.log('[WAHA] Sending message', { session: sessionName, chatId: body.chatId });
+  const api = getApi();
   try {
     const { data } = await api.post('/api/sendText', body, { timeout: 20000 });
     return { ok: true, data };
@@ -216,6 +274,7 @@ export async function sendMessage(name, number, text) {
 
 export async function logoutSession(name) {
   const sessionName = normalizeSessionName(name);
+  const api = getApi();
   try {
     await api.post(`/api/sessions/${encodeURIComponent(sessionName)}/logout`, {});
     return { ok: true };
@@ -227,6 +286,7 @@ export async function logoutSession(name) {
 
 export async function deleteSession(name) {
   const sessionName = normalizeSessionName(name);
+  const api = getApi();
   try {
     await api.delete(`/api/sessions/${encodeURIComponent(sessionName)}`);
     return { ok: true };
@@ -237,9 +297,6 @@ export async function deleteSession(name) {
   }
 }
 
-/**
- * Configura webhooks na sessão (message + session.status).
- */
 export async function setWebhook(name) {
   const sessionName = normalizeSessionName(name);
 
@@ -259,6 +316,7 @@ export async function setWebhook(name) {
     },
   };
 
+  const api = getApi();
   try {
     const { data } = await api.put(`/api/sessions/${encodeURIComponent(sessionName)}`, body);
     return { ok: true, data };
@@ -267,7 +325,7 @@ export async function setWebhook(name) {
       const { data } = await api.put(`/api/sessions/${encodeURIComponent(sessionName)}/`, body);
       return { ok: true, data };
     } catch (err2) {
-      console.error('ERRO WAHA:', err2.response?.data || err2.message);
+      console.error('[WAHA ERROR]:', err2.response?.data || err2.message);
       return wahaErr(err2);
     }
   }
@@ -275,5 +333,10 @@ export async function setWebhook(name) {
 
 export function isWahaUnreachableError(err) {
   const c = err?.code;
+  if (c === 'WAHA_UNREACHABLE') return true;
   return c === 'ECONNREFUSED' || c === 'ENOTFOUND' || c === 'ETIMEDOUT';
+}
+
+export function isWahaUnauthorizedResult(result) {
+  return result && result.ok === false && (result.httpStatus === 401 || result.code === 'UNAUTHORIZED');
 }
