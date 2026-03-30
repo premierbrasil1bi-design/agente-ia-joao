@@ -46,6 +46,11 @@ export function Dashboard() {
     return () => { cancelled = true; };
   }, [navigate]);
 
+  const mergedAlerts = useMemo(() => {
+    const summaryAlerts = Array.isArray(summary?.alertas) ? summary.alertas.map(normalizeAlert) : [];
+    return summaryAlerts.slice(0, 6);
+  }, [summary]);
+
   if (!agentApi.getToken()) {
     return null;
   }
@@ -67,10 +72,6 @@ export function Dashboard() {
   const mensagensRecebidas = summary.mensagensRecebidas ?? 0;
   const tokensEstimados = summary.tokensEstimados ?? summary.tokens ?? 0;
   const custoEstimado = summary.totalGastoMes ?? summary.custoEstimado ?? 0;
-  const mergedAlerts = useMemo(() => {
-    const summaryAlerts = Array.isArray(summary.alertas) ? summary.alertas.map(normalizeAlert) : [];
-    return summaryAlerts.slice(0, 6);
-  }, [summary.alertas]);
 
   return (
     <div className={styles.page}>
