@@ -24,7 +24,6 @@ export function Dashboard() {
   const navigate = useNavigate();
   const [summary, setSummary] = useState(null);
   const [error, setError] = useState(null);
-  const [metricAlerts, setMetricAlerts] = useState([]);
 
   useEffect(() => {
     if (!agentApi.getToken()) {
@@ -46,24 +45,6 @@ export function Dashboard() {
       });
     return () => { cancelled = true; };
   }, [navigate]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadMetricsAlerts = async () => {
-      try {
-        const data = await agentApi.request('/api/global-admin/socket-metrics?range=1h');
-        if (cancelled) return;
-        const alerts = Array.isArray(data?.alerts) ? data.alerts.map(normalizeAlert) : [];
-        setMetricAlerts(alerts.slice(0, 5));
-      } catch {
-        if (!cancelled) setMetricAlerts([]);
-      }
-    };
-    loadMetricsAlerts();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   if (!agentApi.getToken()) {
     return null;
@@ -88,8 +69,8 @@ export function Dashboard() {
   const custoEstimado = summary.totalGastoMes ?? summary.custoEstimado ?? 0;
   const mergedAlerts = useMemo(() => {
     const summaryAlerts = Array.isArray(summary.alertas) ? summary.alertas.map(normalizeAlert) : [];
-    return [...metricAlerts, ...summaryAlerts].slice(0, 6);
-  }, [metricAlerts, summary.alertas]);
+    return summaryAlerts.slice(0, 6);
+  }, [summary.alertas]);
 
   return (
     <div className={styles.page}>
@@ -129,12 +110,15 @@ export function Dashboard() {
         </div>
       </div>
 
-      {mergedAlerts.length > 0 && <AlertBanner alert={mergedAlerts[0]} />}
-
-      <section className={styles.card}>
-        <h2 className={styles.sectionTitle}>Alertas recentes</h2>
-        <AlertList alerts={mergedAlerts} />
-      </section>
+      {mergedAlerts.length > 0 && (
+        <>
+          <AlertBanner alert={mergedAlerts[0]} />
+          <section className={styles.card}>
+            <h2 className={styles.sectionTitle}>Alertas recentes</h2>
+            <AlertList alerts={mergedAlerts} />
+          </section>
+        </>
+      )}
     </div>
   );
 }

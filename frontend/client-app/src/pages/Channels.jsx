@@ -4,8 +4,6 @@ import { socket } from '../lib/socket.js';
 import { agentApi } from '../services/agentApi.js';
 import { channelsService } from '../services/channels.service.js';
 import StatusBadge from '../components/StatusBadge.jsx';
-import AlertBanner from '../components/AlertBanner.jsx';
-import AlertList from '../components/AlertList.jsx';
 import useAutoReconnect from '../hooks/useAutoReconnect.js';
 
 const styles = {
@@ -301,14 +299,7 @@ export function Channels() {
   const [loadingDeleteId, setLoadingDeleteId] = useState(null);
   const [loadingToggleId, setLoadingToggleId] = useState(null);
   const [loadingEditId, setLoadingEditId] = useState(null);
-  const [incidentAlerts, setIncidentAlerts] = useState([]);
   const pollingRefs = useRef({});
-
-  const normalizeAlert = (item) => ({
-    type: (item?.type || item?.tipo || 'info').toLowerCase(),
-    message: item?.message || item?.texto || 'Alerta operacional',
-    timestamp: item?.timestamp || item?.createdAt || new Date().toISOString(),
-  });
 
   async function loadChannels() {
     const data = await channelsService.listAgentChannels();
@@ -447,6 +438,9 @@ export function Channels() {
         agentId,
         type: channelType,
       };
+      if (channelType === 'whatsapp') {
+        payload.provider = 'evolution';
+      }
       if (channelType === 'whatsapp' && whatsappAdvanced) {
         const inst = (whatsappInstanceManual || whatsappInstanceSelect || '').trim().replace(/\s+/g, '-');
         payload.instance = inst;
@@ -637,15 +631,6 @@ export function Channels() {
   useEffect(() => {
     loadChannels();
     loadAgents();
-    agentApi
-      .request('/api/global-admin/socket-metrics?range=1h')
-      .then((data) => {
-        const alerts = Array.isArray(data?.alerts) ? data.alerts.map(normalizeAlert) : [];
-        setIncidentAlerts(alerts.slice(0, 4));
-      })
-      .catch(() => {
-        setIncidentAlerts([]);
-      });
 
     socket.on('channel_status_update', ({ channelId, status }) => {
       setChannels((prev) =>
@@ -1056,8 +1041,6 @@ export function Channels() {
           </div>
         </section>
 
-        {incidentAlerts.length > 0 && <AlertBanner alert={incidentAlerts[0]} />}
-
         <div
           style={
             agents.length > 0
@@ -1106,12 +1089,6 @@ export function Channels() {
                 </select>
               </div>
             </div>
-
-            {incidentAlerts.length > 0 && (
-              <div style={{ marginBottom: '0.8rem' }}>
-                <AlertList alerts={incidentAlerts} />
-              </div>
-            )}
 
             {filteredChannels.length === 0 ? (
               <div style={styles.emptyState}>
