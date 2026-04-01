@@ -9,11 +9,13 @@ export class EvolutionProvider extends BaseProvider {
   }
 
   async connect() {
+    console.log('[EVOLUTION] connect', { provider: 'evolution', instance: this.instance });
     await evolutionService.connectInstance(this.instance, { reset: false });
     return { connected: false, instance: this.instance };
   }
 
   async getQRCode() {
+    console.log('[EVOLUTION] getQRCode', { provider: 'evolution', instance: this.instance });
     const qrRaw = await evolutionService.getQRCode(this.instance);
     const payload = extractQrPayload(qrRaw);
     return toQrDataUrl(payload) || payload || qrRaw;

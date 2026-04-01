@@ -10,7 +10,6 @@ import { requireActiveTenant } from '../middleware/requireActiveTenant.js';
 import { sendBadRequest, sendNotFound } from '../utils/errorResponses.js';
 import { pool } from '../db/pool.js';
 import * as channelConnectionService from '../services/channelConnection.service.js';
-import * as wahaService from '../services/wahaService.js';
 import * as evolutionService from '../services/evolutionService.js';
 import * as evolutionGateway from '../controllers/evolutionGateway.controller.js';
 import * as evolutionProvision from '../services/evolutionProvision.service.js';
@@ -22,6 +21,7 @@ import {
   mergeWhatsappConfig,
 } from '../utils/whatsappChannelFlow.js';
 import { invalidateTenantChannels } from '../utils/channelCache.js';
+import { resolveSessionName } from '../utils/resolveSessionName.js';
 import {
   CONNECTION,
   transitionEvolutionChannelConnection,
@@ -352,7 +352,8 @@ router.post('/', requireActiveTenant, async (req, res) => {
     }
 
     if (providerLc === 'waha') {
-      const ext = 'default';
+      const row = await channelRepo.findById(channel.id, tenantId);
+      const ext = resolveSessionName(row || channel);
       const cfgDraft = mergeWhatsappConfig(configInput, { phase: WHATSAPP_PHASE.DRAFT });
       await channelRepo.updateConnection(channel.id, tenantId, {
         provider: 'waha',
@@ -360,7 +361,7 @@ router.post('/', requireActiveTenant, async (req, res) => {
         external_id: ext,
         instance: ext,
         config: cfgDraft,
-        provider_config: { session: 'default', ...providerConfigInput },
+        provider_config: { session: ext, ...providerConfigInput },
         last_error: null,
       });
       invalidateTenantChannels(tenantId);
@@ -430,7 +431,7 @@ router.post('/', requireActiveTenant, async (req, res) => {
 
     const cfgDraft = mergeWhatsappConfig(configInput, { phase: WHATSAPP_PHASE.DRAFT });
     await channelRepo.updateConnection(channel.id, tenantId, {
-      provider: providerLc || 'waha',
+      provider: providerLc,
       fallback_providers: fallbackProviders,
       config: cfgDraft,
       provider_config: providerConfigInput,

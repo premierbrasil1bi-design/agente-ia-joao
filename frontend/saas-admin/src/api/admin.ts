@@ -164,6 +164,31 @@ export interface SocketMetricsResponse {
   computedAt: string;
 }
 
+export type ProviderHealthStatus = "ok" | "degraded" | "down";
+
+export interface ProviderHealthItem {
+  status: ProviderHealthStatus;
+  latencyMs: number | null;
+  lastCheckAt?: string | null;
+  consecutiveFailures?: number;
+  retryCount?: number;
+  lastAutoReconnectAt?: string | null;
+  nextRetryInMs?: number | null;
+  message: string | null;
+}
+
+export interface ProvidersHealthResponse {
+  success: boolean;
+  providers: Record<string, ProviderHealthItem>;
+  timestamp: string;
+}
+
+export interface ProviderReconnectResponse {
+  success: boolean;
+  message?: string;
+  mocked?: boolean;
+}
+
 /* Mocks for when API is not available */
 const MOCK_TENANTS: Tenant[] = [
   {
@@ -308,5 +333,29 @@ export const adminApi = {
     if (params?.provider) q.set("provider", params.provider);
     const suffix = q.toString() ? `?${q.toString()}` : "";
     return request<SocketMetricsResponse>(`/api/global-admin/socket-metrics${suffix}`);
+  },
+
+  getProvidersHealth(): Promise<ProvidersHealthResponse> {
+    return request<ProvidersHealthResponse>("/api/health/providers");
+  },
+
+  async reconnectProvider(provider: string): Promise<ProviderReconnectResponse> {
+    try {
+      return await request<ProviderReconnectResponse>(
+        `/api/health/providers/${encodeURIComponent(provider)}/reconnect`,
+        { method: "POST" }
+      );
+    } catch (e: any) {
+      const status = Number(e?.status || 0);
+      if (status === 404 || status === 405) {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        return {
+          success: true,
+          mocked: true,
+          message: "Reconexão iniciada (modo mock).",
+        };
+      }
+      throw e;
+    }
   },
 };

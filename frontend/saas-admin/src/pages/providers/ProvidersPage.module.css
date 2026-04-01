@@ -1,0 +1,139 @@
+.page {
+  width: 100%;
+  display: grid;
+  gap: var(--space-4);
+}
+
+.headerRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.subtitle {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.updatedAt {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.metaRow {
+  margin-top: var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.filtersRow {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.controlsRow {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.controlItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.select {
+  border: 1px solid var(--border);
+  background: var(--bg-overlay);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+}
+
+.toast {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 40;
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.85rem;
+  box-shadow: var(--shadow);
+}
+
+.toastSuccess {
+  background: rgba(34, 197, 94, 0.18);
+  color: var(--success);
+  border: 1px solid rgba(34, 197, 94, 0.45);
+}
+
+.toastError {
+  background: rgba(239, 68, 68, 0.18);
+  color: var(--danger);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+}
+
+.filterBtn {
+  border: 1px solid var(--border);
+  background: var(--bg-overlay);
+  color: var(--text-muted);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.filterBtn:hover {
+  color: var(--text);
+}
+
+.filterBtnActive {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(99, 102, 241, 0.12);
+}
+
+.errorCard {
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.errorText {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.skeletonRows {
+  margin-top: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.emptyText {
+  margin: 0;
+  color: var(--text-muted);
+}

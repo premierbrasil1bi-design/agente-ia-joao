@@ -268,7 +268,7 @@ router.post('/login', globalAdminRateLimit, async (req, res) => {
     console.info('[global-admin] Login ok: id=', admin.id, 'email=', admin.email);
     res.status(200).json({
       token,
-      admin: { id: admin.id, email: admin.email, name: admin.name },
+      admin: { id: admin.id, email: admin.email, name: admin.name, role: 'SUPER_ADMIN' },
     });
   } catch (err) {
     if (err.message?.includes('JWT_SECRET')) {

@@ -1,10 +1,9 @@
 /**
- * Configuração centralizada – variáveis de ambiente.
- * Valida obrigatórios em produção e loga avisos (nunca loga valores de secrets).
+ * Configuração centralizada – variáveis de ambiente e providers (WAHA, Evolution).
+ * Validação de canais: validateChannelProvidersConfig() no startup do servidor.
  */
 
 import dotenv from 'dotenv';
-
 
 dotenv.config();
 
@@ -35,17 +34,40 @@ if (isProd) {
   if (!raw.JWT_SECRET) warn('JWT_SECRET', 'não definida – usando fallback interno (apenas desenvolvimento)');
 }
 
-const evoUrl = (process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL || '').trim();
+const wahaUrlRaw = (process.env.WAHA_API_URL || process.env.WAHA_URL || '').trim();
+const wahaKeyRaw = (process.env.WAHA_API_KEY || '').trim();
+const wahaTimeoutRaw = parseInt(process.env.WAHA_REQUEST_TIMEOUT_MS || '5000', 10);
+const evoUrlRaw = (process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL || '').trim();
 const evoKeyStrict = (process.env.EVOLUTION_API_KEY || '').trim();
 const evoKeyLegacy = (process.env.AUTHENTICATION_API_KEY || '').trim();
-if (evoUrl && !evoKeyStrict) {
+
+if (evoUrlRaw && !evoKeyStrict) {
   warn(
     'EVOLUTION_API_KEY',
-    'EVOLUTION_API_URL definida — defina EVOLUTION_API_KEY (obrigatório; o backend encerra o startup se ausente).'
+    'EVOLUTION_API_URL definida — defina EVOLUTION_API_KEY (obrigatório se usar Evolution).'
   );
 }
-if (!evoUrl && (evoKeyStrict || evoKeyLegacy)) {
+if (!evoUrlRaw && (evoKeyStrict || evoKeyLegacy)) {
   warn('EVOLUTION_API_URL', 'Chave Evolution definida mas URL ausente.');
+}
+
+/**
+ * Falha rápido no boot se integração WAHA não estiver configurada (Docker / produção).
+ * Evolution: se URL estiver definida, exige EVOLUTION_API_KEY.
+ */
+export function validateChannelProvidersConfig() {
+  if (!wahaUrlRaw) {
+    throw new Error('WAHA_API_URL não configurado');
+  }
+  if (!wahaKeyRaw) {
+    throw new Error('WAHA_API_KEY não configurado');
+  }
+  if (evoUrlRaw && !evoKeyStrict && !evoKeyLegacy) {
+    throw new Error(
+      'EVOLUTION_API_URL definida mas EVOLUTION_API_KEY (ou AUTHENTICATION_API_KEY) não configurado'
+    );
+  }
+  console.log('[config] providers: WAHA URL OK | Evolution:', evoUrlRaw ? 'habilitado' : 'não usado');
 }
 
 export const config = {
@@ -63,6 +85,18 @@ export const config = {
   },
   openai: {
     apiKey: raw.OPENAI_API_KEY,
+  },
+  /** Config somente leitura para clientes HTTP dos providers (sem localhost fixo). */
+  providers: {
+    waha: {
+      url: wahaUrlRaw,
+      apiKey: wahaKeyRaw,
+      requestTimeoutMs: Number.isFinite(wahaTimeoutRaw) && wahaTimeoutRaw > 0 ? wahaTimeoutRaw : 5000,
+    },
+    evolution: {
+      url: evoUrlRaw,
+      apiKey: evoKeyStrict || evoKeyLegacy || '',
+    },
   },
 };
 

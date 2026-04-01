@@ -10,7 +10,7 @@ import jwt from 'jsonwebtoken';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { createClient } from 'redis';
 
-import { config } from './config/env.js';
+import { config, validateChannelProvidersConfig } from './config/env.js';
 import { isDbConnected } from './db/connection.js';
 import { pool } from './db/pool.js';
 import { requireTenant } from './middleware/requireTenant.js';
@@ -35,8 +35,7 @@ import webhooksRoutes from './routes/webhooks.routes.js';
 import evolutionGatewayRoutes from './routes/evolutionGateway.routes.js';
 import evolutionIngressRoutes from './routes/evolutionIngress.routes.js';
 import wahaWebhookRoutes from './routes/wahaWebhook.routes.js';
-import { getEvolutionApiKey } from './services/evolutionHttp.client.js';
-
+import globalAdminAuth from './middlewares/globalAdminAuth.js';
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { startChannelMonitor } from './services/channelMonitor.service.js';
 import { agentAuth } from './middleware/agentAuth.js';
@@ -44,6 +43,9 @@ import { getRedisConnection, getRedisUrl, initEvolutionQueueInfra } from './queu
 import { startEvolutionWorker } from './workers/evolution.worker.js';
 import { runChannelsSchemaGuard } from './services/channelsSchemaGuard.service.js';
 import * as evolutionService from './services/evolutionService.js';
+import { checkProviderHealth, getProvidersHealthSnapshot } from './services/providerHealth.service.js';
+import { invalidateProviderHealthCache } from './services/providerHealth.service.js';
+import { logAdminAction } from './services/adminActionsLog.service.js';
 
 console.log('[ENV] REDIS:', process.env.REDIS_HOST || 'MISSING');
 console.log('[ENV] DATABASE:', process.env.DATABASE_URL ? 'OK' : 'MISSING');
@@ -52,14 +54,11 @@ console.log('[REDIS CONFIG]', {
   port: process.env.REDIS_PORT,
 });
 
-if ((process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL || '').trim()) {
-  try {
-    getEvolutionApiKey();
-  } catch (e) {
-    console.error('[EVOLUTION] startup: EVOLUTION_API_URL definida mas EVOLUTION_API_KEY ausente ou inválida.');
-    console.error('[EVOLUTION]', e.message);
-    process.exit(1);
-  }
+try {
+  validateChannelProvidersConfig();
+} catch (e) {
+  console.error('[config] validateChannelProvidersConfig:', e.message);
+  process.exit(1);
 }
 
 process.on('unhandledRejection', console.error);
@@ -149,6 +148,75 @@ app.get('/api/health/db', async (req, res) => {
     res.status(200).json({ database: connected ? 'connected' : 'disconnected' });
   } catch {
     res.status(503).json({ database: 'disconnected', error: 'Unavailable' });
+  }
+});
+
+app.get('/api/health/providers', async (req, res) => {
+  try {
+    const providers = await getProvidersHealthSnapshot();
+    return res.status(200).json({
+      success: true,
+      providers,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[PROVIDER HEALTH] snapshot error:', err?.message || err);
+    return res.status(200).json({
+      success: true,
+      providers: {},
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+app.post('/api/health/providers/:provider/reconnect', globalAdminAuth, async (req, res) => {
+  const provider = String(req.params.provider || '').toLowerCase().trim();
+  const rawRole = String(req.globalAdmin?.role || '').toUpperCase();
+  const mappedRole = rawRole === 'GLOBAL_ADMIN' ? 'SUPER_ADMIN' : rawRole;
+  const allowedRoles = new Set(['SUPER_ADMIN', 'SUPPORT']);
+  if (!allowedRoles.has(mappedRole)) {
+    await logAdminAction({
+      action: 'PROVIDER_RECONNECT',
+      entity: 'provider',
+      entityId: provider,
+      metadata: { provider, context: 'providers_panel' },
+      performedBy: req.globalAdmin?.id,
+      role: mappedRole,
+      status: 'error',
+      message: 'FORBIDDEN',
+    });
+    return res.status(403).json({ success: false, error: 'FORBIDDEN' });
+  }
+
+  try {
+    if (!provider) {
+      throw new Error('Provider inválido.');
+    }
+    invalidateProviderHealthCache(provider);
+    await checkProviderHealth(provider);
+    await logAdminAction({
+      action: 'PROVIDER_RECONNECT',
+      entity: 'provider',
+      entityId: provider,
+      metadata: { provider, context: 'providers_panel' },
+      performedBy: req.globalAdmin?.id,
+      role: mappedRole,
+      status: 'success',
+      message: 'Reconexão iniciada',
+    });
+    return res.status(200).json({ success: true, message: 'Reconexão iniciada' });
+  } catch (err) {
+    await logAdminAction({
+      action: 'PROVIDER_RECONNECT',
+      entity: 'provider',
+      entityId: provider,
+      metadata: { provider, context: 'providers_panel' },
+      performedBy: req.globalAdmin?.id,
+      role: mappedRole,
+      status: 'error',
+      message: err?.message || 'Falha ao reconectar',
+    });
+    return res.status(500).json({ success: false, error: err?.message || 'Falha ao reconectar provider' });
   }
 });
 
@@ -349,6 +417,14 @@ io.on('connection', (socket) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server rodando na porta ${PORT}`);
   startChannelMonitor();
+  (async () => {
+    try {
+      await checkProviderHealth('waha');
+      console.log('[PROVIDER HEALTH] WAHA ok');
+    } catch (e) {
+      console.error('[PROVIDER HEALTH] WAHA error:', e?.message || e);
+    }
+  })();
 });
 
 (async () => {

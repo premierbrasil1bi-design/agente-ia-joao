@@ -4,6 +4,7 @@
 
 import * as evolutionService from './evolutionService.js';
 import * as wahaService from './wahaService.js';
+import { resolveSessionName } from '../utils/resolveSessionName.js';
 
 /**
  * @param {object} channel - linha channels (precisa external_id / provider)
@@ -14,7 +15,7 @@ export async function sendWhatsAppTextForChannel(channel, number, text) {
   const provider = String(channel?.provider || '').toLowerCase();
 
   if (provider === 'waha') {
-    const sessionName = wahaService.resolveWahaSessionName(channel);
+    const sessionName = resolveSessionName(channel);
     const out = await wahaService.sendMessage(sessionName, number, text);
     if (!out.ok) throw new Error(out.error || 'Falha no envio WAHA');
     return out.data;

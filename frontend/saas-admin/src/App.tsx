@@ -17,6 +17,7 @@ import AdminsPage from "./pages/AdminsPage";
 import SettingsPage from "./pages/SettingsPage";
 import SocketMetricsPage from "./pages/SocketMetricsPage";
 import IncidentTimelinePage from "./pages/IncidentTimelinePage";
+import ProvidersPage from "./pages/providers/ProvidersPage";
 
 export default function App() {
   return (
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="/billing" element={<BillingPage />} />
             <Route path="/logs" element={<LogsPage />} />
             <Route path="/socket-metrics" element={<SocketMetricsPage />} />
+            <Route path="/admin/providers" element={<ProvidersPage />} />
             <Route path="/incident-timeline" element={<IncidentTimelinePage />} />
             <Route path="/admins" element={<AdminsPage />} />
             <Route path="/settings" element={<SettingsPage />} />

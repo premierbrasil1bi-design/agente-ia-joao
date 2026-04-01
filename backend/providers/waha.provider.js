@@ -1,21 +1,34 @@
 import * as wahaService from '../services/wahaService.js';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { BaseProvider } from './base.provider.js';
+import { checkProviderHealth } from '../services/providerHealth.service.js';
 
 export class WahaProvider extends BaseProvider {
   constructor(config = {}) {
     super(config);
-    this.session = String(
-      config.session || config.instance || config.instanceName || 'default'
-    ).trim() || 'default';
+    const s = String(config.session || config.instance || config.instanceName || '').trim();
+    if (!s) {
+      throw new Error('Config WAHA sem session/instance (use mergeProviderConfigForConnect)');
+    }
+    this.session = s;
+    this.channelId = config.channelId ?? null;
+    this.tenantId = config.tenantId ?? null;
+  }
+
+  _ctx() {
+    return { channelId: this.channelId, tenantId: this.tenantId };
   }
 
   async connect() {
-    console.log('[WAHA] PROVIDER:', 'waha');
-    console.log('[WAHA] SESSION:', this.session);
+    console.log('[PROVIDER] connect', {
+      provider: 'waha',
+      session: this.session,
+      channelId: this.channelId,
+      tenantId: this.tenantId,
+    });
     try {
-      await wahaService.checkWahaHealth();
-      const created = await wahaService.createSession(this.session);
+      await checkProviderHealth('waha');
+      const created = await wahaService.createSession(this.session, this._ctx());
       if (wahaService.isWahaUnauthorizedResult(created)) {
         const e = new Error(created.error || 'WAHA não autorizado');
         e.httpStatus = 401;
@@ -40,7 +53,7 @@ export class WahaProvider extends BaseProvider {
 
   async getQRCode() {
     try {
-      const qrOut = await wahaService.getQrCode(this.session);
+      const qrOut = await wahaService.getQrCode(this.session, this._ctx());
       if (wahaService.isWahaUnauthorizedResult(qrOut)) {
         const e = new Error(qrOut.error || 'WAHA não autorizado');
         e.httpStatus = 401;
@@ -59,6 +72,7 @@ export class WahaProvider extends BaseProvider {
       return qr;
     } catch (err) {
       if (err.httpStatus === 401) throw err;
+      if (err.message === 'QR não disponível') throw err;
       console.error('[WAHA ERROR]:', err.response?.data || err.message);
       throw err;
     }

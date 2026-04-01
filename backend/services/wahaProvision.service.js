@@ -16,6 +16,7 @@ import {
 } from './channelEvolutionState.service.js';
 import * as wahaService from './wahaService.js';
 import { resolveProvider } from '../providers/resolveProvider.js';
+import { resolveSessionName } from '../utils/resolveSessionName.js';
 
 /** @type {Map<string, Promise<object>>} */
 const locks = new Map();
@@ -64,7 +65,7 @@ async function runOnce(channelId, tenantId) {
     return { ok: true, channel, skipped: true, reason: 'already_connected' };
   }
 
-  const ext = wahaService.resolveWahaSessionName(channel);
+  const ext = resolveSessionName(channel);
 
   const cfg = mergeWhatsappConfig(channel.config, {
     phase: WHATSAPP_PHASE.AWAITING_CONNECTION,

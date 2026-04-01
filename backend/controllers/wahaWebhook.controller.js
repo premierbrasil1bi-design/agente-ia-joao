@@ -54,14 +54,21 @@ export async function handleWahaWebhook(req, res) {
 
     console.log('[WAHA WEBHOOK] recebido', { event: data.event, session: data.session });
 
-    const session = String(data.session || 'default').trim() || 'default';
+    const session = String(data.session || '').trim();
     const event = String(data.event || '').trim();
+
+    if (!session) {
+      console.warn('[WAHA WEBHOOK] session ausente');
+      return res.sendStatus(200);
+    }
 
     // Segurança básica: validar session/event
     if (!event) {
       console.warn('[WAHA WEBHOOK] event ausente', { event });
       return res.sendStatus(200);
     }
+
+    console.log('[WAHA WEBHOOK]', { session, event, channelId: '(lookup)' });
 
     const channel = await channelsRepository.findEvolutionChannelByExternalId(session);
     if (!channel) {

@@ -35,6 +35,9 @@ export function getProvider(provider, config = {}) {
  */
 export function getProviderForChannel(channel) {
   const key = resolveProvider(channel);
-  const config = mergeProviderConfigForConnect(channel);
-  return getProvider(key, config);
+  if (key == null || key === '') {
+    throw new Error('Provider não definido no canal. Defina provider ou provider_config.type.');
+  }
+  const merged = mergeProviderConfigForConnect(channel);
+  return getProvider(key, merged);
 }

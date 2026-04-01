@@ -1,7 +1,8 @@
 import * as wahaService from '../wahaService.js';
+import { resolveSessionName } from '../../utils/resolveSessionName.js';
 
 export async function connect(config = {}, channel = null) {
-  const session = wahaService.resolveWahaSessionName(channel) || 'default';
+  const session = channel ? resolveSessionName(channel) : 'default';
   const created = await wahaService.createSession(session);
   if (!created.ok) {
     throw new Error(created.error || 'Falha ao conectar WhatsApp (WAHA)');
