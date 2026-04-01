@@ -2,6 +2,10 @@
   "name": "agente-ia-omnicanal",
   "version": "1.0.0",
   "private": true,
+  "workspaces": [
+    "frontend/*",
+    "packages/*"
+  ],
   "description": "Agente de IA Omni-Channel",
   "scripts": {
     "start": "npm run start --prefix backend",

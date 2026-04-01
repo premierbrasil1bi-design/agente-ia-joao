@@ -22,11 +22,32 @@ export async function findByAgentId(agentId, { channelId = null, limit = 100, of
   return rows;
 }
 
-export async function create({ agentId, channelId, role, content, senderId = null }) {
+export async function create({
+  agentId,
+  channelId,
+  role,
+  content,
+  senderId = null,
+  conversationId = null,
+  provider = null,
+  externalMessageId = null,
+  status = 'SENT',
+}) {
   const { rows } = await pool.query(
-    `INSERT INTO messages (agent_id, channel_id, role, content, sender_id)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id, agent_id, channel_id, role, content, created_at`,
-    [agentId, channelId ?? null, role, content, senderId ?? null]
+    `INSERT INTO messages (tenant_id, agent_id, channel_id, role, content, sender_id, conversation_id, provider, external_message_id, status, status_updated_at)
+     VALUES ((SELECT tenant_id FROM agents WHERE id = $1), $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+     RETURNING id, agent_id, channel_id, role, content, created_at, status`,
+    [
+      agentId,
+      channelId ?? null,
+      role,
+      content,
+      senderId ?? null,
+      conversationId,
+      provider,
+      externalMessageId,
+      status,
+    ]
   );
   return rows[0];
 }

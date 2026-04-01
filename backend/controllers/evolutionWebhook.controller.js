@@ -25,6 +25,11 @@ import {
   claimWebhookMessageOnce,
 
 } from '../services/evolutionWebhookDedup.service.js';
+import * as inboxRepo from '../repositories/inboxMessages.repository.js';
+import * as messageStatusEventsRepo from '../repositories/messageStatusEvents.repository.js';
+import { normalizeProviderMessageStatus } from '../utils/normalizeProviderMessageStatus.js';
+import { emitChannelSocketEvent } from '../utils/channelRealtime.js';
+import { normalizeChannelType, buildConversationId } from '../utils/inboxNormalization.js';
 
 
 
@@ -68,10 +73,60 @@ export async function handleEvolutionWhatsApp(req, res) {
 
 
 
-    if (payload?.event !== 'messages.upsert') {
+    const eventName = String(payload?.event || '');
 
+    if (eventName === 'messages.update' || eventName === 'messages.status') {
+      const statusData = Array.isArray(payload.data) ? payload.data[0] : payload.data || {};
+      const instanceForStatus =
+        payload?.instance ??
+        payload?.instanceName ??
+        payload?.data?.instance ??
+        null;
+      if (!instanceForStatus) return res.status(200).json({ received: true });
+
+      const channelForStatus = await channelsRepo.findEvolutionChannelByExternalId(instanceForStatus);
+      if (!channelForStatus) return res.status(200).json({ received: true });
+
+      const externalMessageId = statusData?.key?.id || statusData?.id || statusData?.messageId || null;
+      if (!externalMessageId) return res.status(200).json({ received: true });
+
+      const nextStatus = normalizeProviderMessageStatus(
+        'evolution',
+        statusData?.status || statusData?.ack || statusData?.update
+      );
+
+      const existing = await inboxRepo.findMessageByExternalId(
+        channelForStatus.tenant_id,
+        'evolution',
+        externalMessageId
+      );
+      if (!existing) return res.status(200).json({ received: true });
+
+      const updated = await inboxRepo.updateMessageStatusById(existing.id, nextStatus);
+      if (updated) {
+        await messageStatusEventsRepo.createStatusEvent({
+          messageId: updated.id,
+          tenantId: updated.tenant_id,
+          provider: 'evolution',
+          eventType: nextStatus,
+          rawPayload: payload,
+        });
+        const channelType = normalizeChannelType(channelForStatus.type);
+        emitChannelSocketEvent('message:update', {
+          messageId: updated.id,
+          tenantId: updated.tenant_id,
+          channelId: updated.channel_id,
+          channelType,
+          conversationId: buildConversationId(updated.channel_id, updated.contact),
+          participantId: updated.contact,
+          status: nextStatus,
+        });
+      }
       return res.status(200).json({ received: true });
+    }
 
+    if (eventName !== 'messages.upsert') {
+      return res.status(200).json({ received: true });
     }
 
 
@@ -219,6 +274,8 @@ export async function handleEvolutionWhatsApp(req, res) {
           clientId,
 
           channelId,
+
+          tenantId: channel.tenant_id,
 
         },
 

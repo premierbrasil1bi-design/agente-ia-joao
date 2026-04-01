@@ -12,8 +12,12 @@ import * as conversationMemoryService from './conversationMemoryService.js';
 import * as userMemoryService from './userMemoryService.js';
 import * as semanticMemoryService from './semanticMemoryService.js';
 import * as messageEmbeddingsRepo from '../repositories/messageEmbeddingsRepository.js';
+import * as inboxRepo from '../repositories/inboxMessages.repository.js';
+import * as messageStatusEventsRepo from '../repositories/messageStatusEvents.repository.js';
 import { extractAndStoreFacts } from './memoryExtractionService.js';
 import AgentCore from '../agents/AgentCore.js';
+import { emitMessageEvent } from '../utils/channelRealtime.js';
+import { buildConversationId, normalizeChannelType } from '../utils/inboxNormalization.js';
 
 const MIN_CONTENT_LENGTH_FOR_EMBEDDING = 1;
 const MAX_CONTENT_LENGTH_FOR_EMBEDDING = 8000;
@@ -164,20 +168,83 @@ export async function processIncomingMessage(incomingMessage) {
   // Step 4 — persist message (incoming + response) when we have an agent
   if (ctx.agent_id) {
     try {
+      const conversationId = channelId && senderId ? buildConversationId(channelId, String(senderId)) : null;
+      const provider = String(metadata.provider || normalizeChannelType(channelLower) || 'unknown');
       const userMsg = await messagesRepo.create({
         agentId: ctx.agent_id,
         channelId,
         role: 'user',
         content: messageText,
         senderId: senderId ?? null,
+        conversationId,
+        provider,
+        status: 'DELIVERED',
       });
-      await messagesRepo.create({
+      const assistantMsg = await messagesRepo.create({
         agentId: ctx.agent_id,
         channelId,
         role: 'assistant',
         content: replyText,
         senderId: senderId ?? null,
+        conversationId,
+        provider,
+        status: 'SENT',
       });
+      const nowIso = new Date().toISOString();
+      if (channelId && senderId) {
+        const channelType = normalizeChannelType(channelLower);
+        const provider = String(metadata.provider || channelType || 'unknown');
+        try {
+          if (userMsg?.id) await inboxRepo.updateMessageStatusById(userMsg.id, 'DELIVERED');
+          if (assistantMsg?.id) await inboxRepo.updateMessageStatusById(assistantMsg.id, 'SENT');
+          if (metadata.tenantId && userMsg?.id) {
+            await messageStatusEventsRepo.createStatusEvent({
+              messageId: userMsg.id,
+              tenantId: metadata.tenantId,
+              provider,
+              eventType: 'DELIVERED',
+              rawPayload: { source: 'pipeline', direction: 'inbound' },
+            });
+          }
+          if (metadata.tenantId && assistantMsg?.id) {
+            await messageStatusEventsRepo.createStatusEvent({
+              messageId: assistantMsg.id,
+              tenantId: metadata.tenantId,
+              provider,
+              eventType: 'SENT',
+              rawPayload: { source: 'pipeline', direction: 'outbound' },
+            });
+          }
+        } catch {
+          // não bloquear pipeline por falha de status audit
+        }
+        emitMessageEvent('message:new', {
+          messageId: userMsg?.id,
+          channelId,
+          channelType,
+          conversationId,
+          participantId: String(senderId),
+          tenantId: metadata.tenantId ?? null,
+          contact: String(senderId),
+          message: messageText,
+          direction: 'inbound',
+          timestamp: userMsg?.created_at || nowIso,
+          status: 'DELIVERED',
+        });
+        emitMessageEvent('message:new', {
+          messageId: assistantMsg?.id,
+          channelId,
+          channelType,
+          conversationId,
+          participantId: String(senderId),
+          tenantId: metadata.tenantId ?? null,
+          contact: String(senderId),
+          message: replyText,
+          direction: 'outbound',
+          timestamp: nowIso,
+          status: 'SENT',
+        });
+      }
 
       const conversationText = `User: ${messageText}\nAssistant: ${replyText}`;
       extractAndStoreFacts(ctx.agent_id, senderId, conversationText).catch((err) => {

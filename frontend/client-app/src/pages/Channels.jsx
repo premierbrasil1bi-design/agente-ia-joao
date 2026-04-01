@@ -6,6 +6,8 @@ import { channelsService } from '../services/channels.service.js';
 import StatusBadge from '../components/StatusBadge.jsx';
 import useAutoReconnect from '../hooks/useAutoReconnect.js';
 import { useChannel } from '../context/ChannelContext.jsx';
+import { useChannelConnection } from '../hooks/useChannelConnection.js';
+import { ConnectionStateBanner, CHANNEL_CONNECTION_STATE } from '@omnia/channel-core';
 
 const styles = {
   page: {
@@ -289,7 +291,6 @@ export function Channels() {
   const [loadingProvisionId, setLoadingProvisionId] = useState(null);
   const [whatsappAdvanced, setWhatsappAdvanced] = useState(false);
   const [pairingModal, setPairingModal] = useState(null);
-  const [connectStepMessage, setConnectStepMessage] = useState('');
   const artifactPollRefs = useRef({});
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
@@ -303,6 +304,13 @@ export function Channels() {
   const [loadingToggleId, setLoadingToggleId] = useState(null);
   const [loadingEditId, setLoadingEditId] = useState(null);
   const pollingRefs = useRef({});
+  const {
+    qrCode: liveQrCode,
+    connectionState,
+    error: connectionError,
+    startConnection,
+    stopConnection,
+  } = useChannelConnection();
 
   async function loadChannels() {
     const data = await channelsService.listAgentChannels();
@@ -533,33 +541,8 @@ export function Channels() {
   async function connectThenQr(channelId) {
     setLoadingConnectId(channelId);
     try {
-      const cr = await channelsService.connectChannel(channelId);
-      if (cr?.skippedDueToCooldown) {
-        toast(cr?.message || 'Aguarde alguns segundos antes de conectar de novo.');
-      }
-      if (cr?.artifactType && cr?.artifact) {
-        applyArtifactPayload(channelId, cr);
-      } else {
-        try {
-          const art = await channelsService.getConnectionArtifact(channelId);
-          if (art?.artifactType && art?.artifact) {
-            applyArtifactPayload(channelId, art);
-          } else {
-            const data = await channelsService.getQrCode(channelId);
-            applyQrFromResponse(channelId, data);
-          }
-        } catch (inner) {
-          try {
-            const data = await channelsService.getQrCode(channelId);
-            applyQrFromResponse(channelId, data);
-          } catch {
-            throw inner;
-          }
-        }
-      }
-      startArtifactPolling(channelId);
-      startPolling(channelId);
-      toast.success('Escaneie o QR ou use o código de pareamento no WhatsApp.');
+      await startConnection(channelId);
+      toast.success('Aguardando leitura...');
     } catch (err) {
       console.error(err);
       toast.error(
@@ -641,6 +624,19 @@ export function Channels() {
   }, [setActiveUiChannel]);
 
   useEffect(() => {
+    if (liveQrCode) {
+      setQrCode(liveQrCode);
+      setPairingModal(null);
+    }
+    if (connectionState === CHANNEL_CONNECTION_STATE.CONNECTED) {
+      toast.success('Conectado com sucesso');
+      setQrCode(null);
+      setPairingModal(null);
+      loadChannels();
+    }
+  }, [liveQrCode, connectionState]);
+
+  useEffect(() => {
     loadChannels();
     loadAgents();
 
@@ -651,11 +647,12 @@ export function Channels() {
     });
 
     return () => {
+      stopConnection();
       socket.off('channel_status_update');
       Object.values(pollingRefs.current).forEach(clearInterval);
       Object.values(artifactPollRefs.current).forEach(clearInterval);
     };
-  }, []);
+  }, [stopConnection]);
 
   const agentMap = Object.fromEntries((agents || []).map((a) => [a.id, a]));
   const getAgentName = (id) => agentMap[id]?.name || '—';
@@ -726,8 +723,13 @@ export function Channels() {
         loadingConnectId === ch.id ||
         loadingQr === ch.id ||
         loadingCreate ||
-        loadingProvisionId === ch.id;
-      const isConnected = st === 'connected' || st === 'open' || phase === 'connected';
+        loadingProvisionId === ch.id ||
+        (connectionState === CHANNEL_CONNECTION_STATE.GENERATING_QR && loadingConnectId === ch.id);
+      const isConnected =
+        st === 'connected' ||
+        st === 'open' ||
+        phase === 'connected' ||
+        (connectionState === CHANNEL_CONNECTION_STATE.CONNECTED && loadingConnectId === ch.id);
 
       if (phase === 'draft' || phase === 'error') {
         return (
@@ -775,7 +777,7 @@ export function Channels() {
                 connectThenQr(ch.id);
               }}
             >
-              {loadingConnectId === ch.id ? 'Conectando...' : 'Conectar'}
+              {isConnected ? 'Conectado' : loadingConnectId === ch.id || connectionState === CHANNEL_CONNECTION_STATE.GENERATING_QR ? 'Gerando QR Code...' : 'Conectar'}
             </button>
           )}
           {showArtifactBtn && (
@@ -1020,10 +1022,8 @@ export function Channels() {
           <div style={styles.titleBlock}>
             <h1 style={styles.title}>Canais</h1>
             <p style={styles.subtitle}>Centralize e administre todos os canais de atendimento do seu agente omnichannel.</p>
-            {connectStepMessage ? (
-              <p style={{ margin: '0.35rem 0 0', fontSize: '0.85rem', color: 'var(--accent)' }}>
-                {connectStepMessage}
-              </p>
+            {connectionState !== CHANNEL_CONNECTION_STATE.IDLE ? (
+              <ConnectionStateBanner state={connectionState} error={connectionError} />
             ) : null}
           </div>
           <button
@@ -1431,12 +1431,23 @@ export function Channels() {
                 />
               </div>
               <div style={styles.modalFooter}>
+                <ConnectionStateBanner state={connectionState} error={connectionError} />
                 <button
                   type="button"
                   style={styles.buttonPrimary}
                   onClick={() => setQrCode(null)}
                 >
                   Fechar
+                </button>
+                <button
+                  type="button"
+                  style={styles.buttonSecondary}
+                  onClick={() => {
+                    stopConnection();
+                    setConnectStepMessage('');
+                  }}
+                >
+                  Parar conexão
                 </button>
               </div>
             </div>

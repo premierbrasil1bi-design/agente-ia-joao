@@ -31,7 +31,7 @@ export const channelsService = {
   },
 
   connectChannel(channelId) {
-    return agentApi.request(`/api/channels/${channelId}/connect`, {
+    return agentApi.request(`/api/channels/${channelId}/provision-instance`, {
       method: 'POST',
     });
   },

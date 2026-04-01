@@ -36,6 +36,8 @@ import webhooksRoutes from './routes/webhooks.routes.js';
 import evolutionGatewayRoutes from './routes/evolutionGateway.routes.js';
 import evolutionIngressRoutes from './routes/evolutionIngress.routes.js';
 import wahaWebhookRoutes from './routes/wahaWebhook.routes.js';
+import messagesRoutes from './routes/messages.routes.js';
+import alertsRoutes from './routes/alerts.routes.js';
 import globalAdminAuth from './middlewares/globalAdminAuth.js';
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { startChannelMonitor } from './services/channelMonitor.service.js';
@@ -268,6 +270,8 @@ agentRouter.use(requireTenant);
 agentRouter.use('/dashboard', dashboardRoutes);
 agentRouter.use('/channels', channelConnectionRoutes);
 agentRouter.use('/channels', channelsRoutes);
+agentRouter.use('/messages', messagesRoutes);
+agentRouter.use('/alerts', alertsRoutes);
 agentRouter.use('/agents', agentsRoutes);
 agentRouter.use(contextRoutes);
 agentRouter.use(inboundRoutes);
@@ -279,6 +283,8 @@ apiRouter.use('/agents', agentAuth, requireTenant, agentsRoutes);
 /* Conexão WhatsApp (Evolution): /channels/:id/connect, qrcode, status, disconnect – antes das rotas CRUD */
 apiRouter.use('/channels', agentAuth, requireTenant, channelConnectionRoutes);
 apiRouter.use('/channels', agentAuth, requireTenant, channelsRoutes);
+apiRouter.use('/messages', agentAuth, requireTenant, messagesRoutes);
+apiRouter.use('/alerts', agentAuth, requireTenant, alertsRoutes);
 apiRouter.use('/evolution', evolutionIngressRoutes);
 apiRouter.use('/evolution', evolutionGatewayRoutes);
 apiRouter.use('/context', agentAuth, requireTenant, agentContextRoutes);
@@ -415,6 +421,43 @@ io.on('connection', (socket) => {
     }
     socket.join(tenantRoom(authenticated));
     if (typeof ack === 'function') ack({ ok: true, tenantId: authenticated });
+  });
+
+  socket.on('channel:subscribe', (payload = {}, ack) => {
+    const authenticated = String(socket.data?.tenantId || '').trim();
+    const channelId = String(payload?.channelId || '').trim();
+    const tenantId = String(payload?.tenantId || '').trim();
+    if (!authenticated || !channelId || !tenantId || authenticated !== tenantId) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'CHANNEL_FORBIDDEN' });
+      return;
+    }
+    socket.join(`channel:${channelId}`);
+    if (typeof ack === 'function') ack({ ok: true, channelId });
+  });
+
+  socket.on('message:typing', (payload = {}, ack) => {
+    const authenticated = String(socket.data?.tenantId || '').trim();
+    const tenantId = String(payload?.tenantId || '').trim();
+    const channelId = String(payload?.channelId || '').trim();
+    const participantId = String(payload?.participantId || payload?.contact || '').trim();
+    const isTyping = Boolean(payload?.isTyping);
+    if (!authenticated || !tenantId || authenticated !== tenantId || !channelId || !participantId) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'TYPING_FORBIDDEN' });
+      return;
+    }
+    const out = {
+      channelId,
+      channelType: String(payload?.channelType || 'unknown'),
+      conversationId: String(payload?.conversationId || `${channelId}:${participantId}`),
+      participantId,
+      contact: participantId,
+      tenantId,
+      isTyping,
+      sourceSocketId: socket.id,
+    };
+    io.to(tenantRoom(tenantId)).emit('message:typing', out);
+    io.to(`channel:${channelId}`).emit('message:typing', out);
+    if (typeof ack === 'function') ack({ ok: true });
   });
 });
 

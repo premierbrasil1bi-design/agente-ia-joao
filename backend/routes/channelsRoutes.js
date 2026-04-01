@@ -22,6 +22,7 @@ import {
 } from '../utils/whatsappChannelFlow.js';
 import { invalidateTenantChannels } from '../utils/channelCache.js';
 import { resolveSessionName } from '../utils/resolveSessionName.js';
+import { emitChannelSocketEvent } from '../utils/channelRealtime.js';
 import {
   CONNECTION,
   transitionEvolutionChannelConnection,
@@ -91,6 +92,15 @@ function enrichChannelForApi(ch) {
   return base;
 }
 
+function normalizeChannelStatus(status) {
+  if (!status) return 'DISCONNECTED';
+  const s = String(status).toLowerCase();
+  if (['connected', 'online', 'open'].includes(s)) return 'CONNECTED';
+  if (['connecting', 'pending', 'qr', 'created', 'awaiting_connection'].includes(s)) return 'PENDING';
+  if (['disconnected', 'closed', 'close', 'inactive', 'offline', 'error'].includes(s)) return 'DISCONNECTED';
+  return 'DISCONNECTED';
+}
+
 /**
  * GET /api/channels (e GET /api/agent/channels – mesma rota)
  * Lista canais do tenant no banco. Para instâncias na Evolution use GET /evolution-instances.
@@ -126,6 +136,13 @@ router.post('/:id/create-instance', requireActiveTenant, async (req, res) => {
         return res.status(400).json({ success: false, error: true, message: result.error });
       }
       const ch = await channelRepo.findById(req.params.id, tenantId);
+      emitChannelSocketEvent('channel:status', {
+        channelId: req.params.id,
+        tenantId,
+        status: 'PENDING',
+        qrCode: null,
+        connected: false,
+      });
       return res.status(200).json({
         success: true,
         channel: enrichChannelForApi(ch),
@@ -141,6 +158,13 @@ router.post('/:id/create-instance', requireActiveTenant, async (req, res) => {
       return res.status(400).json({ success: false, error: true, message: result.error });
     }
     const ch = await channelRepo.findById(req.params.id, tenantId);
+    emitChannelSocketEvent('channel:status', {
+      channelId: req.params.id,
+      tenantId,
+      status: 'PENDING',
+      qrCode: null,
+      connected: false,
+    });
     return res.status(200).json({
       success: true,
       channel: enrichChannelForApi(ch),
@@ -166,6 +190,11 @@ router.post('/:id/provision-instance', requireActiveTenant, async (req, res) => 
       return res.status(401).json({ error: 'Tenant não identificado.' });
     }
     const existing = await channelRepo.findById(req.params.id, tenantId);
+    console.log('[CHANNEL] [PROVISION] Creating instance', {
+      channelId: req.params.id,
+      tenantId,
+      provider: existing?.provider || null,
+    });
     if (existing && String(existing.provider || '').toLowerCase() === 'waha') {
       const result = await wahaProvision.provisionWhatsAppInstance(req.params.id, tenantId);
       if (!result.ok) {
@@ -208,6 +237,89 @@ router.post('/:id/provision-instance', requireActiveTenant, async (req, res) => 
       error: true,
       message: 'Não foi possível provisionar a instância do WhatsApp.',
     });
+  }
+});
+
+router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
+  try {
+    const tenantId = req.tenantId || req.user?.tenantId;
+    if (!tenantId) {
+      return res.status(401).json({ error: 'Tenant não identificado.' });
+    }
+
+    const channel = await channelRepo.findById(req.params.id, tenantId);
+    if (!channel) {
+      return res.status(404).json({ error: 'Channel not found' });
+    }
+
+    const qrData = await channelConnectionService.getChannelQrCode(channel).catch(() => null);
+    const qrPayload =
+      channel.qr_code ||
+      qrData?.qr ||
+      qrData?.qrcode ||
+      qrData?.base64 ||
+      qrData?.data ||
+      null;
+    const normalizedStatus = normalizeChannelStatus(channel.connection_status || channel.status);
+
+    if (!qrPayload) {
+      return res.json({
+        qrCode: null,
+        qr: null,
+        qrcode: null,
+        status: normalizedStatus,
+        message: 'QR ainda não disponível',
+      });
+    }
+
+    console.log('[CHANNEL] [QR] Generated', { id: req.params.id, tenantId });
+
+    return res.json({
+      qrCode: qrPayload,
+      qr: qrPayload,
+      qrcode: qrPayload,
+      status: normalizedStatus,
+    });
+  } catch (err) {
+    console.error('[channels] qrcode:', err.message);
+    return res.status(500).json({ error: 'Failed to get QR code' });
+  }
+});
+
+router.get('/:id/status', requireActiveTenant, async (req, res) => {
+  try {
+    const tenantId = req.tenantId || req.user?.tenantId;
+    if (!tenantId) {
+      return res.status(401).json({ error: 'Tenant não identificado.' });
+    }
+
+    const channel = await channelRepo.findById(req.params.id, tenantId);
+    if (!channel) {
+      return res.status(404).json({ error: 'Channel not found' });
+    }
+
+    const statusData = await channelConnectionService.getChannelStatus(channel).catch(() => null);
+    const status =
+      statusData?.normalizedStatus ||
+      statusData?.publicStatus ||
+      channel.connection_status ||
+      channel.status ||
+      'disconnected';
+    const normalizedStatus = normalizeChannelStatus(status);
+    const connected = normalizedStatus === 'CONNECTED';
+
+    if (connected) {
+      console.log('[CHANNEL] [STATUS] CONNECTED', { id: req.params.id, tenantId });
+    }
+
+    return res.json({
+      status: normalizedStatus,
+      connected,
+      channel: statusData?.channel || channel,
+    });
+  } catch (err) {
+    console.error('[channels] status:', err.message);
+    return res.status(500).json({ error: 'Failed to get status' });
   }
 });
 

@@ -19,7 +19,12 @@ import {
   mergeProviderConfigForConnect,
   resolveProvider,
 } from '../providers/provider.factory.js';
-import { deriveHealth, emitChannelError, emitChannelUpdated } from '../utils/channelRealtime.js';
+import {
+  deriveHealth,
+  emitChannelError,
+  emitChannelUpdated,
+  emitChannelSocketEvent,
+} from '../utils/channelRealtime.js';
 import { getResolvedWahaUrl, isWahaUnreachableError } from '../services/wahaService.js';
 import { getProvidersHealthSnapshot } from '../services/providerHealth.service.js';
 
@@ -343,6 +348,14 @@ export async function getQrCode(req, res) {
       const qr = await provider.getQRCode();
       console.log('[PROVIDER]', providerLc);
       console.log('[QR RECEIVED]', !!qr);
+      emitChannelSocketEvent('channel:qr', {
+        channelId: channel.id,
+        tenantId: channel.tenant_id,
+        status: 'PENDING',
+        qrCode: qr || null,
+        connected: false,
+      });
+      console.log('[CHANNEL SOCKET] QR emitted', { id: channel.id, tenantId: channel.tenant_id });
       return res.status(200).json({
         success: true,
         qr,
@@ -367,6 +380,14 @@ export async function getQrCode(req, res) {
       qr: dataUrl,
       qrcode: dataUrl,
     });
+    emitChannelSocketEvent('channel:qr', {
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+      status: 'PENDING',
+      qrCode: dataUrl,
+      connected: false,
+    });
+    console.log('[CHANNEL SOCKET] QR emitted', { id: channel.id, tenantId: channel.tenant_id });
   } catch (err) {
     console.error('[channelConnection] getQrCode:', err.message, err.response?.status || err.code || '');
     if (err.message && String(err.message).includes('Provider não suportado')) {
@@ -440,6 +461,12 @@ export async function getStatus(req, res) {
 
     const rawState = result.state?.state ?? result.state?.instance?.state ?? null;
     const publicStatus = result.publicStatus ?? result.normalizedStatus;
+    const normalizedRealtimeStatus =
+      String(publicStatus || '').toLowerCase() === 'connected'
+        ? 'CONNECTED'
+        : String(publicStatus || '').toLowerCase() === 'awaiting_connection'
+          ? 'PENDING'
+          : 'DISCONNECTED';
     let userMessage = null;
     const ps = String(publicStatus || '').toLowerCase();
     if (ps === 'connected') userMessage = 'Canal já conectado.';
@@ -460,6 +487,29 @@ export async function getStatus(req, res) {
       latencyMs,
       health: derived,
     });
+
+    emitChannelSocketEvent('channel:status', {
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+      status: normalizedRealtimeStatus,
+      qrCode: null,
+      connected: normalizedRealtimeStatus === 'CONNECTED',
+    });
+    console.log('[CHANNEL SOCKET] STATUS emitted', {
+      id: channel.id,
+      tenantId: channel.tenant_id,
+      status: normalizedRealtimeStatus,
+    });
+    if (normalizedRealtimeStatus === 'CONNECTED') {
+      emitChannelSocketEvent('channel:connected', {
+        channelId: channel.id,
+        tenantId: channel.tenant_id,
+        status: 'CONNECTED',
+        qrCode: null,
+        connected: true,
+      });
+      console.log('[CHANNEL SOCKET] CONNECTED emitted', { id: channel.id, tenantId: channel.tenant_id });
+    }
 
     res.status(200).json({
       success: true,

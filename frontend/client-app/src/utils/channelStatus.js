@@ -1,22 +1,15 @@
+import { normalizeChannelStatus } from '@omnia/channel-core';
+
 export const getStatusMeta = (status) => {
-  const s = (status || '').toLowerCase();
+  const s = normalizeChannelStatus(status);
   switch (s) {
-    case 'connected':
-    case 'open':
-    case 'active':
+    case 'CONNECTED':
       return { label: 'Conectado', color: 'green' };
-    case 'connecting':
-    case 'recreated':
-      return { label: s === 'recreated' ? 'Reconectando...' : 'Conectando...', color: 'orange' };
-    case 'created':
-      return { label: 'Criado', color: 'gray' };
-    case 'disconnected':
-    case 'close':
-    case 'inactive':
+    case 'PENDING':
+      return { label: 'Aguardando leitura...', color: 'orange' };
+    case 'DISCONNECTED':
       return { label: 'Desconectado', color: 'red' };
-    case 'error':
-      return { label: 'Erro', color: 'red' };
-    case 'unknown':
+    case 'UNKNOWN':
       return { label: 'Indisponível', color: 'gray' };
     default:
       return { label: '—', color: 'black' };

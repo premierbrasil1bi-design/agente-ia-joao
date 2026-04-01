@@ -23,6 +23,11 @@ import {
   mergeWhatsappConfig,
   deriveFlowPhase,
 } from '../utils/whatsappChannelFlow.js';
+import * as inboxRepo from '../repositories/inboxMessages.repository.js';
+import * as messageStatusEventsRepo from '../repositories/messageStatusEvents.repository.js';
+import { emitChannelSocketEvent } from '../utils/channelRealtime.js';
+import { normalizeProviderMessageStatus } from '../utils/normalizeProviderMessageStatus.js';
+import { normalizeChannelType, buildConversationId } from '../utils/inboxNormalization.js';
 
 function normalizeBrazilNumber(raw) {
   if (raw == null) return '';
@@ -84,6 +89,51 @@ export async function handleWahaWebhook(req, res) {
       return res.sendStatus(200);
     }
 
+    const tryApplyMessageStatusUpdate = async (statusPayload) => {
+      const externalMessageId =
+        statusPayload?.id ||
+        statusPayload?.messageId ||
+        statusPayload?.msgId ||
+        statusPayload?.key?.id ||
+        null;
+      const normalizedStatus = normalizeProviderMessageStatus('waha', statusPayload?.status || statusPayload?.ack);
+      if (!externalMessageId) return false;
+
+      const existing = await inboxRepo.findMessageByExternalId(channel.tenant_id, 'waha', externalMessageId);
+      if (!existing) return false;
+      const updated = await inboxRepo.updateMessageStatusById(existing.id, normalizedStatus);
+      if (!updated) return false;
+
+      await messageStatusEventsRepo.createStatusEvent({
+        messageId: updated.id,
+        tenantId: updated.tenant_id,
+        provider: 'waha',
+        eventType: normalizedStatus,
+        rawPayload: data,
+      });
+
+      const channelType = normalizeChannelType(channel.type);
+      emitChannelSocketEvent('message:update', {
+        messageId: updated.id,
+        tenantId: updated.tenant_id,
+        channelId: updated.channel_id,
+        channelType,
+        conversationId: buildConversationId(updated.channel_id, updated.contact),
+        participantId: updated.contact,
+        status: normalizedStatus,
+      });
+      return true;
+    };
+
+    if (event === 'message.status' || event === 'message.ack' || event === 'message.any') {
+      try {
+        await tryApplyMessageStatusUpdate(data.payload || {});
+      } catch (statusErr) {
+        console.warn('[WAHA] status update failed:', statusErr.message);
+      }
+      return res.sendStatus(200);
+    }
+
     // ========================================
     // EVENTO: MENSAGEM RECEBIDA
     // ========================================
@@ -123,6 +173,7 @@ export async function handleWahaWebhook(req, res) {
             agentId,
             clientId,
             channelId: channel.id,
+            tenantId: channel.tenant_id,
             provider: 'waha',
             session,
           },

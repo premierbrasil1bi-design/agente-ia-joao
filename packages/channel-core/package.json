@@ -1,0 +1,17 @@
+{
+  "name": "@omnia/channel-core",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "module": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "constants",
+    "utils",
+    "components"
+  ]
+}
+

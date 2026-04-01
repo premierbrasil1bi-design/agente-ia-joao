@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAgentAuth } from '../context/AgentAuthContext';
 import { createChannelsApi } from '../api/channels';
 import { createAgentsApi } from '../api/agents';
 import { agentApi } from '../services/agentApi.js';
 import { io } from 'socket.io-client';
+import {
+  connectChannel as connectChannelApi,
+  getQRCode as getQRCodeApi,
+  getStatus as getStatusApi,
+} from '../api/channels.ts';
+import { mapChannelToConnectionState, ConnectionStateBanner } from '@omnia/channel-core';
 
 const CHANNEL_TYPES = [
   { value: 'whatsapp', label: 'WhatsApp' },
@@ -50,11 +56,19 @@ const styles = {
 };
 
 function mapStatus(raw) {
-  const s = String(raw || '').toLowerCase();
-  if (s === 'connected' || s === 'open' || s === 'online') return 'online';
-  if (s === 'connecting' || s === 'created' || s === 'qr' || s === 'awaiting_connection') return 'instavel';
-  if (s === 'disconnected' || s === 'error' || s === 'offline' || s === 'close') return 'offline';
+  const s = normalizeStatus(raw);
+  if (s === 'CONNECTED') return 'online';
+  if (s === 'PENDING') return 'instavel';
   return 'offline';
+}
+
+function normalizeStatus(status) {
+  if (!status) return 'UNKNOWN';
+  const s = String(status).toLowerCase();
+  if (['connected', 'online', 'open'].includes(s)) return 'CONNECTED';
+  if (['connecting', 'pending', 'qr', 'created', 'awaiting_connection'].includes(s)) return 'PENDING';
+  if (['disconnected', 'closed', 'close', 'inactive', 'offline', 'error'].includes(s)) return 'DISCONNECTED';
+  return 'UNKNOWN';
 }
 
 function statusMeta(status) {
@@ -138,6 +152,25 @@ export function Channels() {
   const [qrModal, setQrModal] = useState({ open: false, channelId: null, qr: '' });
   const [switchTarget, setSwitchTarget] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [connectingMap, setConnectingMap] = useState({});
+  const [connectionTimeout, setConnectionTimeout] = useState(false);
+  const [connectionError, setConnectionError] = useState(null);
+  const pollingRef = useRef(null);
+  const timeoutRef = useRef(null);
+  const modalSocketRef = useRef(null);
+  const realtimeActiveRef = useRef(false);
+
+  const clearPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    setConnectionTimeout(false);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -229,27 +262,139 @@ export function Channels() {
   }, []);
 
   useEffect(() => {
-    if (!qrModal.open || !qrModal.channelId) return undefined;
-    const int = setInterval(async () => {
+    if (!qrModal.open || !qrModal.channelId) {
+      clearPolling();
+      return undefined;
+    }
+
+    clearPolling();
+
+    const poll = async () => {
+      if (realtimeActiveRef.current) return;
       try {
-        const statusData = await agentApi.request(`/api/channels/${qrModal.channelId}/status`, { method: 'GET' });
-        const status = mapStatus(statusData.connection_status || statusData.status || statusData?.channel?.connection_status);
-        if (status === 'online') {
+        const statusData = await getStatusApi(qrModal.channelId);
+        const normalized = normalizeStatus(
+          statusData.connection_status || statusData.status || statusData?.channel?.connection_status
+        );
+        if (normalized === 'CONNECTED') {
           setToast('Canal conectado com sucesso.');
+          clearPolling();
           setQrModal({ open: false, channelId: null, qr: '' });
           refresh();
           return;
         }
-        const qrData = await agentApi.request(`/api/channels/${qrModal.channelId}/qrcode`, { method: 'GET' });
-        const raw = qrData.qr || qrData.qrcode || '';
-        const formatted = typeof raw === 'string' && raw ? (raw.startsWith('data:') ? raw : `data:image/png;base64,${raw}`) : '';
-        setQrModal((m) => ({ ...m, qr: formatted || m.qr }));
-      } catch {
-        // noop
+        setToast('Aguardando leitura...');
+        if (normalized !== 'CONNECTED') {
+          const qrData = await getQRCodeApi(qrModal.channelId);
+          const raw = qrData.qr || qrData.qrcode || qrData.qrCode || '';
+          const formatted = typeof raw === 'string' && raw ? (raw.startsWith('data:') ? raw : `data:image/png;base64,${raw}`) : '';
+          setQrModal((m) => ({ ...m, qr: formatted || m.qr }));
+          if (!formatted) setToast('Gerando QR Code...');
+        }
+      } catch (err) {
+        setConnectionError(err?.message || 'Erro ao conectar');
+        console.warn('[QR POLLING]', err?.message || err);
       }
-    }, 4000);
-    return () => clearInterval(int);
-  }, [qrModal.open, qrModal.channelId, refresh]);
+    };
+
+    poll();
+    pollingRef.current = setInterval(poll, 2000);
+    timeoutRef.current = setTimeout(() => {
+      clearPolling();
+      setConnectionTimeout(true);
+      setToast('Tempo expirado. Tente conectar novamente.');
+    }, 60000);
+
+    return () => clearPolling();
+  }, [qrModal.open, qrModal.channelId, refresh, clearPolling]);
+
+  useEffect(() => {
+    if (!qrModal.open || !qrModal.channelId) {
+      realtimeActiveRef.current = false;
+      if (modalSocketRef.current) {
+        modalSocketRef.current.disconnect();
+        modalSocketRef.current = null;
+      }
+      return;
+    }
+
+    const baseUrl = import.meta.env.VITE_API_URL || window.location.origin;
+    const token = agentApi.getToken();
+    const tenantId = extractTenantId(agentApi.getAgent());
+    if (!token || !tenantId) {
+      console.warn('[CHANNEL SOCKET] fallback polling enabled');
+      return;
+    }
+
+    const socket = io(baseUrl, {
+      transports: ['websocket'],
+      withCredentials: true,
+      auth: { token, tenantId },
+      reconnection: true,
+    });
+    modalSocketRef.current = socket;
+
+    const onQr = (evt) => {
+      if (!evt || String(evt.channelId) !== String(qrModal.channelId)) return;
+      realtimeActiveRef.current = true;
+      clearPolling();
+      const raw = evt.qrCode;
+      if (typeof raw === 'string' && raw) {
+        const formatted = raw.startsWith('data:') ? raw : `data:image/png;base64,${raw}`;
+        setQrModal((m) => ({ ...m, qr: formatted || m.qr }));
+      }
+      setToast('Aguardando leitura...');
+    };
+
+    const onStatus = (evt) => {
+      if (!evt || String(evt.channelId) !== String(qrModal.channelId)) return;
+      realtimeActiveRef.current = true;
+      clearPolling();
+      const normalized = normalizeStatus(evt.status);
+      if (normalized === 'CONNECTED') {
+        setToast('Conectado com sucesso');
+        setQrModal({ open: false, channelId: null, qr: '' });
+        refresh();
+      } else {
+        setToast('Aguardando leitura...');
+      }
+    };
+
+    const onConnected = (evt) => {
+      if (!evt || String(evt.channelId) !== String(qrModal.channelId)) return;
+      realtimeActiveRef.current = true;
+      clearPolling();
+      setToast('Conectado com sucesso');
+      setQrModal({ open: false, channelId: null, qr: '' });
+      refresh();
+    };
+
+    socket.on('connect', () => {
+      console.info('[CHANNEL SOCKET] connected');
+      socket.emit('channels:subscribe', { tenantId }, () => {});
+      socket.emit('channel:subscribe', { tenantId, channelId: qrModal.channelId }, () => {});
+    });
+    socket.on('disconnect', () => {
+      realtimeActiveRef.current = false;
+      console.warn('[CHANNEL SOCKET] fallback polling enabled');
+    });
+    socket.on('connect_error', () => {
+      realtimeActiveRef.current = false;
+      console.warn('[CHANNEL SOCKET] fallback polling enabled');
+    });
+    socket.on('channel:qr', onQr);
+    socket.on('channel:status', onStatus);
+    socket.on('channel:connected', onConnected);
+
+    return () => {
+      socket.off('channel:qr', onQr);
+      socket.off('channel:status', onStatus);
+      socket.off('channel:connected', onConnected);
+      socket.disconnect();
+      modalSocketRef.current = null;
+      realtimeActiveRef.current = false;
+    };
+  }, [qrModal.open, qrModal.channelId, refresh, clearPolling]);
 
   const counters = useMemo(() => {
     const base = { online: 0, instavel: 0, offline: 0 };
@@ -290,18 +435,26 @@ export function Channels() {
   };
 
   const connectChannel = async (card) => {
+    if (card.status === 'online') {
+      setToast('Conectado');
+      return;
+    }
+    setConnectingMap((prev) => ({ ...prev, [card.id]: true }));
+    setConnectionError(null);
+    setConnectionTimeout(false);
     try {
-      await agentApi.request(`/api/channels/${card.id}/connect`, { method: 'POST' });
-      if (card.api === 'waha') {
-        const data = await agentApi.request(`/api/channels/${card.id}/qrcode`, { method: 'GET' });
-        const raw = data.qr || data.qrcode || '';
-        const formatted = typeof raw === 'string' && raw ? (raw.startsWith('data:') ? raw : `data:image/png;base64,${raw}`) : '';
-        setQrModal({ open: true, channelId: card.id, qr: formatted });
-      }
-      setToast('Conexão iniciada.');
+      await connectChannelApi(card.id);
+      const data = await getQRCodeApi(card.id).catch(() => ({}));
+      const raw = data?.qr || data?.qrcode || '';
+      const formatted = typeof raw === 'string' && raw ? (raw.startsWith('data:') ? raw : `data:image/png;base64,${raw}`) : '';
+      setQrModal({ open: true, channelId: card.id, qr: formatted });
+      setToast('Gerando QR Code...');
       refresh();
     } catch (err) {
+      setConnectionError(err?.message || 'Erro ao conectar');
       setToast(formatApiError(err));
+    } finally {
+      setConnectingMap((prev) => ({ ...prev, [card.id]: false }));
     }
   };
 
@@ -337,6 +490,12 @@ export function Channels() {
   };
 
   const agentName = (id) => agents.find((a) => a.id === id)?.name || '—';
+  const currentConnectionState = mapChannelToConnectionState({
+    status: qrModal.channelId ? cards.find((c) => c.id === qrModal.channelId)?.status : null,
+    loading: qrModal.channelId ? Boolean(connectingMap[qrModal.channelId]) : false,
+    timeout: connectionTimeout,
+    error: connectionError,
+  });
 
   if (loading) return <div style={{ color: 'var(--text-muted)' }}>Carregando...</div>;
 
@@ -384,8 +543,9 @@ export function Channels() {
                   {card.lastError ? <div style={{ color: '#c0392b' }}><b>Último erro:</b> {card.lastError}</div> : null}
                 </div>
                 <div style={styles.actions}>
-                  {card.status === 'offline' && <button style={styles.primaryBtn} onClick={() => connectChannel(card)}>Conectar</button>}
-                  {card.status === 'instavel' && <button style={styles.primaryBtn} onClick={() => connectChannel(card)}>Reconectar</button>}
+                  {card.status === 'offline' && <button style={styles.primaryBtn} onClick={() => connectChannel(card)} disabled={Boolean(connectingMap[card.id])}>{connectingMap[card.id] ? 'Conectando...' : 'Conectar WhatsApp'}</button>}
+                  {card.status === 'instavel' && <button style={styles.primaryBtn} onClick={() => connectChannel(card)} disabled={Boolean(connectingMap[card.id])}>{connectingMap[card.id] ? 'Conectando...' : 'Reconectar WhatsApp'}</button>}
+                  {card.status === 'online' && <button style={styles.btn} disabled>Conectado</button>}
                   {card.status === 'online' && <button style={styles.primaryBtn} onClick={() => setDetail(card)}>Gerenciar</button>}
                   <button style={styles.btn} onClick={() => setSwitchTarget({ ...card, providerDraft: card.api, evolutionInstanceName: card.raw?.provider_config?.instanceName || '', zapiInstanceId: card.raw?.provider_config?.instanceId || '', zapiToken: card.raw?.provider_config?.token || '' })}>Trocar API</button>
                   {card.status === 'online' && <button style={styles.btnDanger} onClick={() => disconnectChannel(card)}>Desconectar</button>}
@@ -470,7 +630,7 @@ export function Channels() {
         <div style={styles.overlay} onClick={() => setQrModal({ open: false, channelId: null, qr: '' })}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h3 style={styles.modalTitle}>Conectar WhatsApp (WAHA)</h3>
-            <p style={styles.subtitle}>Aguardando leitura</p>
+            <ConnectionStateBanner state={currentConnectionState} error={connectionError} />
             <div style={{ textAlign: 'center', border: '1px dashed var(--border)', borderRadius: 10, padding: 10 }}>
               {qrModal.qr ? <img src={qrModal.qr} alt="QR Code" style={{ width: 280, maxWidth: '100%' }} /> : <div style={styles.subtitle}>QR ainda não disponível</div>}
             </div>

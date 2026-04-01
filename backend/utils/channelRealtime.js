@@ -3,6 +3,7 @@ function getIo() {
 }
 
 const ROOM_PREFIX = 'tenant:';
+const CHANNEL_ROOM_PREFIX = 'channel:';
 const throttleMap = new Map();
 const METRIC_KEY_EVENTS = 'socket:metrics:events';
 const METRIC_KEY_ERRORS = 'socket:metrics:errors';
@@ -17,6 +18,10 @@ function getRedis() {
 
 function tenantRoom(tenantId) {
   return `${ROOM_PREFIX}${String(tenantId)}`;
+}
+
+function channelRoom(channelId) {
+  return `${CHANNEL_ROOM_PREFIX}${String(channelId)}`;
 }
 
 function shouldEmitThrottled(key, minIntervalMs) {
@@ -83,6 +88,17 @@ export function emitChannelEvent(event, payload) {
   const tenantId = payload?.tenantId;
   if (!tenantId) return;
   io.to(tenantRoom(tenantId)).emit(event, payload);
+  if (payload?.channelId) {
+    io.to(channelRoom(payload.channelId)).emit(event, payload);
+  }
+}
+
+export function emitChannelSocketEvent(event, payload) {
+  emitChannelEvent(event, payload);
+}
+
+export function emitMessageEvent(event, payload) {
+  emitChannelEvent(event, payload);
 }
 
 export function emitChannelUpdated(channel, extra = {}) {

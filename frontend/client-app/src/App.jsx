@@ -5,6 +5,7 @@ import { ContextoAgente } from './pages/ContextoAgente';
 import { Prompts } from './pages/Prompts';
 import { Agents } from './pages/Agents';
 import { Channels } from './pages/Channels';
+import { Inbox } from './pages/Inbox';
 import { Login } from './pages/Login';
 import { useAgentAuth } from './context/AgentAuthContext';
 
@@ -25,11 +26,12 @@ function Layout({ children }) {
             PAINEL
           </div>
           <nav>
-            <Link to="/" style={linkStyle}>Dashboard</Link>
+            <Link to="/dashboard" style={linkStyle}>Dashboard</Link>
             <Link to="/contexto" style={linkStyle}>Contexto do Agente</Link>
             <Link to="/prompts" style={linkStyle}>Prompts</Link>
             <Link to="/agents" style={linkStyle}>Agents</Link>
             <Link to="/channels" style={linkStyle}>Channels</Link>
+            <Link to="/inbox" style={linkStyle}>Inbox</Link>
           </nav>
         </aside>
         <main style={{ flex: 1, padding: '1.5rem 2rem', overflow: 'auto' }}>
@@ -68,11 +70,13 @@ export default function App() {
           <RequireAuth>
             <Layout>
               <Routes>
-                <Route path="/" element={<Dashboard />} />
+                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/contexto" element={<ContextoAgente />} />
                 <Route path="/prompts" element={<Prompts />} />
                 <Route path="/agents" element={<Agents />} />
                 <Route path="/channels" element={<Channels />} />
+                <Route path="/inbox" element={<Inbox />} />
               </Routes>
             </Layout>
           </RequireAuth>
