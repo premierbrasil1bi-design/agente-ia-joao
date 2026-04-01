@@ -1,12 +1,23 @@
-node_modules/
+# backups e dumps
+*.sql
+*.rdb
+_backup
+_backup.
+
+# envs
+.env
+.env.
+evolution_env_backup
+
+# build frontend
+frontend/client-app/dist
+
+# dependências
+node_modules
 backend/node_modules/
 frontend/node_modules/
 
-.env
-backend/.env
-frontend/.env
-
-.DS_Storegit
+.DS_Store
 
 # PM2 / deploy
 logs/*.log
