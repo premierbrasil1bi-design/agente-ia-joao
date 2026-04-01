@@ -56,18 +56,22 @@ if (!evoUrlRaw && (evoKeyStrict || evoKeyLegacy)) {
  * Evolution: se URL estiver definida, exige EVOLUTION_API_KEY.
  */
 export function validateChannelProvidersConfig() {
+  const summary = {
+    wahaEnabled: Boolean(wahaUrlRaw),
+    evolutionEnabled: Boolean(evoUrlRaw),
+  };
   if (!wahaUrlRaw) {
-    throw new Error('WAHA_API_URL não configurado');
-  }
-  if (!wahaKeyRaw) {
-    throw new Error('WAHA_API_KEY não configurado');
+    console.error('[CONFIG] WAHA_API_URL não configurado - provider desativado');
+  } else if (!wahaKeyRaw) {
+    console.error('[CONFIG] WAHA_API_KEY não configurado - provider WAHA desativado');
   }
   if (evoUrlRaw && !evoKeyStrict && !evoKeyLegacy) {
-    throw new Error(
-      'EVOLUTION_API_URL definida mas EVOLUTION_API_KEY (ou AUTHENTICATION_API_KEY) não configurado'
+    console.error(
+      '[CONFIG] EVOLUTION_API_KEY/AUTHENTICATION_API_KEY ausente - provider Evolution desativado'
     );
   }
-  console.log('[config] providers: WAHA URL OK | Evolution:', evoUrlRaw ? 'habilitado' : 'não usado');
+  console.log('[config] providers summary:', summary);
+  return summary;
 }
 
 export const config = {

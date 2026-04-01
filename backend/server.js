@@ -1,5 +1,6 @@
 // ================= IMPORTS =================
 
+import dotenv from 'dotenv';
 import './bootstrap/dns-ipv4first.js';
 import 'dotenv/config';
 import express from 'express';
@@ -47,19 +48,23 @@ import { checkProviderHealth, getProvidersHealthSnapshot } from './services/prov
 import { invalidateProviderHealthCache } from './services/providerHealth.service.js';
 import { logAdminAction } from './services/adminActionsLog.service.js';
 
-console.log('[ENV] REDIS:', process.env.REDIS_HOST || 'MISSING');
-console.log('[ENV] DATABASE:', process.env.DATABASE_URL ? 'OK' : 'MISSING');
+dotenv.config();
+
+const WAHA_API_URL = process.env.WAHA_API_URL || null;
+
+if (!WAHA_API_URL) {
+  console.warn('[WAHA] Não configurado, integração desativada');
+}
+
+console.log('[BOOT] WAHA:', WAHA_API_URL || 'NOT CONFIGURED');
+console.log('[BOOT] REDIS:', process.env.REDIS_HOST || 'MISSING');
+console.log('[BOOT] DATABASE:', process.env.DATABASE_URL ? 'OK' : 'MISSING');
 console.log('[REDIS CONFIG]', {
   host: process.env.REDIS_HOST,
   port: process.env.REDIS_PORT,
 });
 
-try {
-  validateChannelProvidersConfig();
-} catch (e) {
-  console.error('[config] validateChannelProvidersConfig:', e.message);
-  process.exit(1);
-}
+validateChannelProvidersConfig();
 
 process.on('unhandledRejection', console.error);
 process.on('uncaughtException', console.error);

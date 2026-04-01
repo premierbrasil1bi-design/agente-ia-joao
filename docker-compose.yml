@@ -113,8 +113,7 @@ services:
     ports:
       - "3000:3000"
     env_file:
-      - path: ./backend/.env
-        required: false
+      - ./backend/.env
 
 volumes:
   postgres_data:
