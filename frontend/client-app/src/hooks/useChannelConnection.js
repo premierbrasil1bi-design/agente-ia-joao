@@ -12,6 +12,8 @@ function toQrDataUrl(raw) {
 
 export function useChannelConnection() {
   const [qrCode, setQrCode] = useState('');
+  /** 'image' = data URL / URL para <img>; 'ascii' = texto para <pre> */
+  const [qrFormat, setQrFormat] = useState('image');
   const [status, setStatus] = useState('UNKNOWN');
   const [loading, setLoading] = useState(false);
   const [timeout, setTimeoutState] = useState(false);
@@ -68,7 +70,10 @@ export function useChannelConnection() {
       const qrData = await channelsService.getQrCode(channelId);
       const raw = qrData?.qrCode || qrData?.qr || qrData?.qrcode || '';
       const formatted = toQrDataUrl(typeof raw === 'string' ? raw : raw?.base64 ?? raw?.code ?? '');
-      if (formatted) setQrCode(formatted);
+      if (formatted) {
+        setQrCode(formatted);
+        setQrFormat('image');
+      }
     } catch (err) {
       console.warn('[CHANNEL HOOK] fallback polling active', err?.message || err);
     }
@@ -112,8 +117,16 @@ export function useChannelConnection() {
       if (!evt || String(evt.channelId) !== String(channelIdRef.current)) return;
       realtimeActiveRef.current = true;
       clearTimers();
-      const formatted = toQrDataUrl(evt.qrCode || '');
-      if (formatted) setQrCode(formatted);
+      if (evt.format === 'ascii' && evt.qrAscii) {
+        setQrCode(String(evt.qrAscii));
+        setQrFormat('ascii');
+      } else {
+        const formatted = toQrDataUrl(evt.qrCode || '');
+        if (formatted) {
+          setQrCode(formatted);
+          setQrFormat('image');
+        }
+      }
       setStatus(normalizeChannelStatus(evt.status || 'PENDING'));
       setLoading(false);
       setError(null);
@@ -164,6 +177,7 @@ export function useChannelConnection() {
     setLoading(true);
     setStatus('PENDING');
     setQrCode('');
+    setQrFormat('image');
     setTimeoutState(false);
     setError(null);
 
@@ -192,6 +206,7 @@ export function useChannelConnection() {
 
   return {
     qrCode,
+    qrFormat,
     connectionState,
     error,
     startConnection,

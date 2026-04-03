@@ -26,6 +26,7 @@ import {
   transitionEvolutionChannelConnection,
 } from '../services/channelEvolutionState.service.js';
 import { ProviderAccessError, validateProviderAccessForTenant } from '../services/providerAccess.service.js';
+import { normalizeQrResult } from '../utils/normalizeQrResult.js';
 
 const router = Router();
 
@@ -328,53 +329,82 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
       });
     }
 
-    const qrPayload =
-      channel.qr_code ||
-      (typeof qrData === 'string' ? qrData : null) ||
-      qrData?.qr ||
-      qrData?.qrcode ||
-      qrData?.base64 ||
-      qrData?.data ||
-      null;
+    let result = normalizeQrResult(qrData);
+    if ((!result.success || !result.qr) && channel.qr_code) {
+      const alt = normalizeQrResult(channel.qr_code);
+      if (alt.success && alt.qr) {
+        result = alt;
+      }
+    }
+
     const normalizedStatus = normalizeChannelStatus(channel.connection_status || channel.status);
 
-    if (!qrPayload) {
+    if (!result.success || !result.qr) {
       if (providerLc === 'waha') {
         return wahaSoft({
           success: false,
-          message: 'QR ainda não disponível, aguardando geração',
+          message: result.message || 'QR ainda não disponível, aguardando geração',
           qr: null,
           qrCode: null,
           qrcode: null,
+          format: null,
           status: normalizedStatus,
         });
       }
       return res.json({
-        qrCode: null,
+        success: false,
+        format: null,
         qr: null,
+        qrCode: null,
         qrcode: null,
         status: normalizedStatus,
-        message: 'QR ainda não disponível',
+        message: result.message || 'QR ainda não disponível',
       });
     }
 
     console.log('[CHANNEL] [QR] Generated', { id: req.params.id, tenantId });
 
     if (providerLc === 'waha') {
+      emitChannelSocketEvent('channel:qr', {
+        channelId: channel.id,
+        tenantId: channel.tenant_id,
+        status: 'PENDING',
+        format: result.format,
+        qr: result.qr,
+        qrCode: result.format === 'image' ? result.qr : null,
+        qrAscii: result.format === 'ascii' ? result.qr : null,
+        connected: false,
+      });
       return wahaSoft({
         success: true,
-        qr: qrPayload,
-        qrCode: qrPayload,
-        qrcode: qrPayload,
+        qr: result.qr,
+        qrCode: result.format === 'image' ? result.qr : null,
+        qrcode: result.format === 'image' ? result.qr : null,
+        format: result.format,
         status: normalizedStatus,
+        message: result.message ?? null,
       });
     }
 
+    emitChannelSocketEvent('channel:qr', {
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+      status: 'PENDING',
+      format: result.format,
+      qr: result.qr,
+      qrCode: result.format === 'image' ? result.qr : null,
+      qrAscii: result.format === 'ascii' ? result.qr : null,
+      connected: false,
+    });
+
     return res.json({
-      qrCode: qrPayload,
-      qr: qrPayload,
-      qrcode: qrPayload,
+      success: true,
+      format: result.format,
+      qr: result.qr,
+      qrCode: result.qr,
+      qrcode: result.qr,
       status: normalizedStatus,
+      message: result.message ?? null,
     });
   } catch (err) {
     console.error('[channels] qrcode:', err.message);

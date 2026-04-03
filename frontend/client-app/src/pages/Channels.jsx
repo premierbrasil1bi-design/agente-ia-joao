@@ -295,6 +295,8 @@ export function Channels() {
   const [whatsappInstanceSelect, setWhatsappInstanceSelect] = useState('');
   const [whatsappInstanceManual, setWhatsappInstanceManual] = useState('');
   const [qrCode, setQrCode] = useState(null);
+  /** 'image' (data URL / URL) ou 'ascii' (QR em texto no terminal WAHA). */
+  const [qrDisplayFormat, setQrDisplayFormat] = useState('image');
   /** Modal de QR: aberto explicitamente (carregando ou após sucesso). */
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [qrModalChannelId, setQrModalChannelId] = useState(null);
@@ -320,6 +322,7 @@ export function Channels() {
   const pollingRefs = useRef({});
   const {
     qrCode: liveQrCode,
+    qrFormat: liveQrFormat,
     connectionState,
     error: connectionError,
     startConnection,
@@ -404,6 +407,7 @@ export function Channels() {
       setPairingModal({ code, channelId });
       sessionStorage.setItem(`pairing_${channelId}`, code);
       setQrCode(null);
+      setQrDisplayFormat('image');
       return;
     }
     const src = data?.artifact || data?.qr || data?.qrcode;
@@ -415,7 +419,9 @@ export function Channels() {
         ? raw
         : `data:image/png;base64,${raw.replace(/^data:image\/\w+;base64,/, '')}`;
     sessionStorage.setItem(`qr_${channelId}`, qr);
+    sessionStorage.setItem(`qr_fmt_${channelId}`, 'image');
     setQrCode(qr);
+    setQrDisplayFormat('image');
     setPairingModal(null);
   }
 
@@ -454,6 +460,7 @@ export function Channels() {
           await loadChannels();
           toast.success('WhatsApp conectado.');
           setQrCode(null);
+          setQrDisplayFormat('image');
           setPairingModal(null);
           setQrModalOpen(false);
           setQrModalChannelId(null);
@@ -540,8 +547,10 @@ export function Channels() {
 
   function restoreQr(channelId) {
     const saved = sessionStorage.getItem(`qr_${channelId}`);
+    const fmt = sessionStorage.getItem(`qr_fmt_${channelId}`);
     if (saved) {
       setQrCode(saved);
+      setQrDisplayFormat(fmt === 'ascii' ? 'ascii' : 'image');
     }
   }
 
@@ -569,6 +578,18 @@ export function Channels() {
   function applyQrFromResponse(data, channelId) {
     if (!data) return false;
 
+    if (data.format === 'ascii' && data.qr != null) {
+      const text = String(data.qr).trim();
+      if (!text) return false;
+      if (channelId) {
+        sessionStorage.setItem(`qr_${channelId}`, text);
+        sessionStorage.setItem(`qr_fmt_${channelId}`, 'ascii');
+      }
+      setQrCode(text);
+      setQrDisplayFormat('ascii');
+      return true;
+    }
+
     let qr = data.qr ?? data.qrCode ?? data.qrcode ?? data.data;
 
     if (qr != null && typeof qr === 'object' && !Array.isArray(qr)) {
@@ -587,8 +608,10 @@ export function Channels() {
 
     if (channelId) {
       sessionStorage.setItem(`qr_${channelId}`, s);
+      sessionStorage.setItem(`qr_fmt_${channelId}`, 'image');
     }
     setQrCode(s);
+    setQrDisplayFormat('image');
     return true;
   }
 
@@ -733,6 +756,7 @@ export function Channels() {
           stopArtifactPolling(channelId);
           toast.success('WhatsApp conectado.');
           setQrCode(null);
+          setQrDisplayFormat('image');
           setPairingModal(null);
           setQrModalOpen(false);
           setQrModalChannelId(null);
@@ -758,6 +782,7 @@ export function Channels() {
   useEffect(() => {
     if (liveQrCode) {
       setQrCode(liveQrCode);
+      setQrDisplayFormat(liveQrFormat === 'ascii' ? 'ascii' : 'image');
       setPairingModal(null);
       setQrModalOpen(true);
       setQrLoadError(null);
@@ -765,13 +790,14 @@ export function Channels() {
     if (connectionState === CHANNEL_CONNECTION_STATE.CONNECTED) {
       toast.success('Conectado com sucesso');
       setQrCode(null);
+      setQrDisplayFormat('image');
       setPairingModal(null);
       setQrModalOpen(false);
       setQrModalChannelId(null);
       setQrLoadError(null);
       loadChannels();
     }
-  }, [liveQrCode, connectionState]);
+  }, [liveQrCode, liveQrFormat, connectionState]);
 
   /** WAHA: renovar QR exibido (expira rápido) enquanto o modal estiver aberto. */
   useEffect(() => {
@@ -802,7 +828,9 @@ export function Channels() {
     const onWahaQr = (payload) => {
       if (typeof payload === 'string' && (payload.startsWith('data:image') || /^https?:\/\//i.test(payload))) {
         sessionStorage.setItem(`qr_${qrModalChannelId}`, payload);
+        sessionStorage.setItem(`qr_fmt_${qrModalChannelId}`, 'image');
         setQrCode(payload);
+        setQrDisplayFormat('image');
         setQrLoadError(null);
       }
     };
@@ -1416,6 +1444,7 @@ export function Channels() {
               setQrModalChannelId(null);
               setQrLoadError(null);
               setQrCode(null);
+              setQrDisplayFormat('image');
             }}
           >
             <div
@@ -1432,7 +1461,24 @@ export function Channels() {
                     {qrLoadError}
                   </p>
                 )}
-                {qrCode && (
+                {qrCode && qrDisplayFormat === 'ascii' && (
+                  <pre
+                    style={{
+                      fontSize: 6,
+                      lineHeight: 1,
+                      margin: '0 auto',
+                      textAlign: 'left',
+                      display: 'inline-block',
+                      fontFamily: 'ui-monospace, Consolas, monospace',
+                      color: 'var(--text)',
+                      overflow: 'auto',
+                      maxWidth: '100%',
+                    }}
+                  >
+                    {qrCode}
+                  </pre>
+                )}
+                {qrCode && qrDisplayFormat === 'image' && (
                   <img
                     src={qrCode}
                     alt="QR Code WhatsApp"
@@ -1446,7 +1492,9 @@ export function Channels() {
                 )}
               </div>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.5rem 0 0' }}>
-                O QR pode expirar; mantenha esta janela aberta — atualizamos automaticamente (WAHA).
+                {qrDisplayFormat === 'ascii'
+                  ? 'QR em modo texto (logs Docker). Escaneie com o WhatsApp apontando para o padrão abaixo, ou aguarde imagem se o WAHA passar a expor REST.'
+                  : 'O QR pode expirar; mantenha esta janela aberta — atualizamos automaticamente (WAHA).'}
               </p>
               <div style={styles.modalFooter}>
                 <ConnectionStateBanner state={connectionState} error={connectionError} />
@@ -1458,6 +1506,7 @@ export function Channels() {
                     setQrModalChannelId(null);
                     setQrLoadError(null);
                     setQrCode(null);
+                    setQrDisplayFormat('image');
                   }}
                 >
                   Fechar

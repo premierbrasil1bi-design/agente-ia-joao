@@ -3,13 +3,13 @@ export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/waha
 
 import * as wahaService from '../services/wahaService.js';
 import { fetchWahaSessionQrcodeRest } from '../services/wahaHttp.js';
-import { getCurrentQr } from '../services/wahaQrCapture.js';
+import { getCurrentQr, getQrSnapshotFromDockerLogs } from '../services/wahaQrCapture.js';
 import { resolveWahaSessionName } from '../utils/wahaSession.util.js';
-import { BaseProvider } from './base.provider.js';
+import { BaseWhatsAppProvider } from './base/BaseWhatsAppProvider.js';
 import { checkProviderHealth } from '../services/providerHealth.service.js';
 import * as wahaProvision from '../services/wahaProvision.service.js';
 
-export class WahaProvider extends BaseProvider {
+export class WahaProvider extends BaseWhatsAppProvider {
   constructor(config = {}) {
     super(config);
     this.channelId = config.channelId ?? null;
@@ -66,13 +66,39 @@ export class WahaProvider extends BaseProvider {
     }
   }
 
-  async getQRCode() {
-    const fromRest = await fetchWahaSessionQrcodeRest(this.session);
-    if (fromRest) {
-      return fromRest;
+  async getQRCode(_channel) {
+    void _channel;
+    try {
+      const fromRest = await fetchWahaSessionQrcodeRest(this.session);
+      if (fromRest) {
+        return this.success(fromRest);
+      }
+    } catch (err) {
+      console.warn('[WAHA] REST QR falhou', err?.message || err);
     }
-    const fromLogs = getCurrentQr();
-    return fromLogs || null;
+
+    try {
+      const fromStream = getCurrentQr();
+      if (fromStream) {
+        return this.success(fromStream);
+      }
+    } catch {
+      /* stream opcional */
+    }
+
+    try {
+      const snap = await getQrSnapshotFromDockerLogs();
+      if (snap?.imageDataUrl) {
+        return this.success(snap.imageDataUrl);
+      }
+      if (snap?.ascii) {
+        return this.success({ format: 'ascii', qr: snap.ascii });
+      }
+    } catch {
+      /* snapshot Docker opcional */
+    }
+
+    return this.fail('QR ainda não disponível, aguardando geração');
   }
 
   async getStatus() {

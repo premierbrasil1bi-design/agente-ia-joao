@@ -10,7 +10,7 @@ import {
   extractConnectArtifactFromPayload,
 } from '../services/channelConnection.service.js';
 import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service.js';
-import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
+import { normalizeQrResult } from '../utils/normalizeQrResult.js';
 import { deriveFlowPhase } from '../utils/whatsappChannelFlow.js';
 import { resolveProvider } from '../providers/provider.factory.js';
 import {
@@ -188,49 +188,75 @@ export async function getQrCode(req, res) {
     const providerLc = String(provider || '').toLowerCase();
 
     const qr = await channelConnectionService.getChannelQrCode(channel);
-    const raw = extractQrPayload(qr) ?? (typeof qr === 'string' ? qr : null);
-    const dataUrl = toQrDataUrl(raw);
+    const result = normalizeQrResult(qr);
 
-    if (providerLc === 'waha') {
-      if (!dataUrl) {
-        return res.status(200).json({
-          success: false,
-          message: 'QR ainda não disponível, aguardando geração',
-          qr: null,
-        });
-      }
-      emitChannelSocketEvent('channel:qr', {
-        channelId: channel.id,
-        tenantId: channel.tenant_id,
-        status: 'PENDING',
-        qrCode: dataUrl,
-        connected: false,
-      });
-      console.log('[CHANNEL SOCKET] QR emitted', { id: channel.id, tenantId: channel.tenant_id });
-      return res.status(200).json({ success: true, qr: dataUrl });
-    }
-
-    if (!dataUrl) {
-      return res.status(404).json({
-        success: false,
-        error: 'QR não disponível ainda',
-      });
-    }
-    res.status(200).json({
-      success: true,
-      provider,
-      qrCode: dataUrl,
-      qr: dataUrl,
-      qrcode: dataUrl,
-      status: 'PENDING',
-    });
-    emitChannelSocketEvent('channel:qr', {
+    const socketPayload = {
       channelId: channel.id,
       tenantId: channel.tenant_id,
       status: 'PENDING',
-      qrCode: dataUrl,
+      format: result.format,
+      qr: result.qr,
+      qrCode: result.format === 'image' ? result.qr : null,
+      qrAscii: result.format === 'ascii' ? result.qr : null,
       connected: false,
+    };
+
+    if (providerLc === 'waha') {
+      if (result.success && result.format === 'ascii' && result.qr) {
+        emitChannelSocketEvent('channel:qr', socketPayload);
+        return res.status(200).json({
+          success: true,
+          format: 'ascii',
+          qr: result.qr,
+          qrCode: null,
+          qrcode: null,
+          message: result.message ?? null,
+        });
+      }
+      if (result.success && result.format === 'image' && result.qr) {
+        emitChannelSocketEvent('channel:qr', socketPayload);
+        console.log('[CHANNEL SOCKET] QR emitted', { id: channel.id, tenantId: channel.tenant_id });
+        return res.status(200).json({
+          success: true,
+          format: 'image',
+          qr: result.qr,
+          qrCode: result.qr,
+          qrcode: result.qr,
+          message: result.message ?? null,
+        });
+      }
+      return res.status(200).json({
+        success: false,
+        format: null,
+        qr: null,
+        qrCode: null,
+        qrcode: null,
+        message: result.message || 'QR ainda não disponível, aguardando geração',
+      });
+    }
+
+    if (!result.success || !result.qr) {
+      return res.status(404).json({
+        success: false,
+        format: null,
+        qr: null,
+        error: 'QR não disponível ainda',
+        message: result.message || 'QR não disponível ainda',
+      });
+    }
+
+    const outQr = result.qr;
+    res.status(200).json({
+      success: true,
+      format: result.format,
+      qr: outQr,
+      qrCode: outQr,
+      qrcode: outQr,
+      provider,
+      status: 'PENDING',
+      message: result.message ?? null,
     });
+    emitChannelSocketEvent('channel:qr', socketPayload);
     console.log('[CHANNEL SOCKET] QR emitted', { id: channel.id, tenantId: channel.tenant_id });
   } catch (err) {
     if (err instanceof ProviderAccessError || err?.code === 'NO_ALLOWED_PROVIDER_AVAILABLE') {
