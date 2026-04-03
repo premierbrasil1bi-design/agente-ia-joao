@@ -9,6 +9,8 @@ import { useChannel } from '../context/ChannelContext.jsx';
 import { useChannelConnection } from '../hooks/useChannelConnection.js';
 import { ConnectionStateBanner } from '../components/ConnectionStateBanner.jsx';
 import { CHANNEL_CONNECTION_STATE } from '../utils/channelCore.js';
+import { CreateChannelCard } from '../components/CreateChannelCard.jsx';
+import chLayout from './Channels.module.css';
 
 const styles = {
   page: {
@@ -58,16 +60,6 @@ const styles = {
     display: 'inline-flex',
     alignItems: 'center',
     gap: '0.4rem',
-  },
-  layoutGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1.2fr)',
-    gap: '1.5rem',
-  },
-  layoutGridSingle: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr)',
-    gap: '1.5rem',
   },
   card: {
     background: 'var(--surface)',
@@ -163,6 +155,21 @@ const styles = {
     borderColor: 'var(--accent)',
     background: 'rgba(88,166,255,0.12)',
     color: 'var(--accent)',
+  },
+  /** CTA principal na lista — conectar WhatsApp */
+  btnConnectWhatsapp: {
+    padding: '0.5rem 1.2rem',
+    borderRadius: 10,
+    border: '1px solid var(--accent)',
+    background: 'linear-gradient(180deg, rgba(88,166,255,0.22) 0%, rgba(88,166,255,0.1) 100%)',
+    color: 'var(--accent)',
+    fontSize: '0.8125rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    width: '100%',
+    maxWidth: '16rem',
+    boxShadow: '0 2px 14px rgba(88, 166, 255, 0.18)',
+    transition: 'filter 0.15s ease, box-shadow 0.15s ease',
   },
   actionButtonMuted: {
     borderColor: 'var(--border)',
@@ -278,7 +285,6 @@ export function Channels() {
 
   const [channels, setChannels] = useState([]);
   const [agents, setAgents] = useState([]);
-  const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState('');
   const [agentId, setAgentId] = useState('');
   const [channelType, setChannelType] = useState('whatsapp');
@@ -313,7 +319,12 @@ export function Channels() {
     error: connectionError,
     startConnection,
     stopConnection,
+    connectStepMessage,
+    setConnectStepMessage,
   } = useChannelConnection();
+
+  /** Banner pós-criação (dismissível) */
+  const [createSuccessKind, setCreateSuccessKind] = useState(null);
 
   async function loadChannels() {
     const data = await channelsService.listAgentChannels();
@@ -467,7 +478,7 @@ export function Channels() {
       if (whatsappAdvanced) {
         const instRaw = (whatsappInstanceManual || whatsappInstanceSelect || '').trim();
         if (!instRaw) {
-          toast.error('No modo avançado, informe ou selecione a instância do provider.');
+          toast.error('Com “instância existente”, informe ou selecione a instância no provedor.');
           return;
         }
       }
@@ -475,6 +486,8 @@ export function Channels() {
       toast.error('Preencha todos os campos');
       return;
     }
+
+    const createdAsWhatsapp = channelType === 'whatsapp';
 
     setLoadingCreate(true);
     try {
@@ -491,11 +504,8 @@ export function Channels() {
         payload.instance = inst;
       }
 
-      const data = await channelsService.createChannel(payload);
-      const newId = data?.channel?.id;
-      const next = data?.nextAction;
+      await channelsService.createChannel(payload);
 
-      setShowModal(false);
       setName('');
       setAgentId('');
       setChannelType('whatsapp');
@@ -506,16 +516,12 @@ export function Channels() {
 
       await loadChannels();
 
-      if (newId && channelType === 'whatsapp' && next === 'provision_instance') {
-        toast.success('Canal criado. Preparando WhatsApp…');
-        await runSaasProvisionConnect(newId);
-      } else if (newId && channelType === 'whatsapp' && next === 'connect') {
-        toast.success('Canal criado. Iniciando conexão…');
-        await connectThenQr(newId);
-      } else {
-        toast.success('Canal criado com sucesso');
-        if (newId) startPolling(newId);
-      }
+      setCreateSuccessKind(createdAsWhatsapp ? 'whatsapp' : 'other');
+      toast.success(
+        createdAsWhatsapp
+          ? 'Canal WhatsApp criado. Conecte na lista à esquerda quando estiver pronto.'
+          : 'Canal criado com sucesso.',
+      );
     } catch (err) {
       console.error(err);
       toast.error(resolveProviderErrorMessage(err));
@@ -725,7 +731,7 @@ export function Channels() {
       if (s === 'error') {
         return 'Houve um erro na conexão. Verifique o canal ou tente preparar de novo.';
       }
-      return 'Use Conectar para iniciar a sessão WhatsApp (fluxo automático, sem acessar a Evolution).';
+      return 'Use “Conectar WhatsApp” na lista para iniciar a sessão (fluxo automático no painel).';
     }
     if (t === 'instagram') {
       return 'Conecte sua conta Instagram via Meta OAuth para receber e responder mensagens do Direct.';
@@ -795,17 +801,18 @@ export function Channels() {
           {showConnect && (
             <button
               type="button"
-              style={{
-                ...styles.actionButton,
-                ...styles.actionButtonPrimary,
-              }}
+              style={styles.btnConnectWhatsapp}
               disabled={busy}
               onClick={() => {
                 restorePairingOrQr(ch.id);
                 connectThenQr(ch.id);
               }}
             >
-              {isConnected ? 'Conectado' : loadingConnectId === ch.id || connectionState === CHANNEL_CONNECTION_STATE.GENERATING_QR ? 'Gerando QR Code...' : 'Conectar'}
+              {isConnected
+                ? 'Conectado'
+                : loadingConnectId === ch.id || connectionState === CHANNEL_CONNECTION_STATE.GENERATING_QR
+                  ? 'Gerando QR Code…'
+                  : 'Conectar WhatsApp'}
             </button>
           )}
           {showArtifactBtn && (
@@ -1044,72 +1051,90 @@ export function Channels() {
   };
 
   return (
-    <div style={styles.page}>
-      <div style={styles.content}>
-        <header style={styles.header}>
-          <div style={styles.titleBlock}>
-            <h1 style={styles.title}>Canais</h1>
-            <p style={styles.subtitle}>Centralize e administre todos os canais de atendimento do seu agente omnichannel.</p>
-            {connectionState !== CHANNEL_CONNECTION_STATE.IDLE ? (
-              <ConnectionStateBanner state={connectionState} error={connectionError} />
-            ) : null}
-            {channelType === 'whatsapp' && allowedProviders.length === 0 ? (
-              <p style={{ ...styles.subtitle, color: 'var(--warning)' }}>
-                Nenhum provider de WhatsApp está liberado para este tenant/plano.
-              </p>
-            ) : null}
-          </div>
-          <button
-            type="button"
-            style={styles.primaryButton}
-            onClick={() => setShowModal(true)}
-          >
-            <span>➕</span>
-            <span>Conectar novo canal</span>
-          </button>
+    <div className={chLayout.page}>
+      <div className={chLayout.content}>
+        <header className={chLayout.header}>
+          <h1 className={chLayout.title}>Canais</h1>
+          <p className={chLayout.subtitle}>
+            Centralize o atendimento: veja seus canais à esquerda e crie novos à direita. A conexão (QR, etc.) fica na
+            lista — não é automática após criar.
+          </p>
+          {connectionState !== CHANNEL_CONNECTION_STATE.IDLE ? (
+            <ConnectionStateBanner state={connectionState} error={connectionError} />
+          ) : null}
+          {channelType === 'whatsapp' && allowedProviders.length === 0 ? (
+            <p className={chLayout.providerWarn}>
+              Nenhum provider de WhatsApp está liberado para este tenant/plano.
+            </p>
+          ) : null}
         </header>
 
-        <section style={{ ...styles.card, padding: '0.9rem 1rem' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.6rem' }}>
-            <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '0.6rem 0.7rem' }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Online</div>
-              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--success)' }}>{statusSummary.online}</div>
+        <section className={chLayout.statsCard}>
+          <div className={chLayout.statsGrid}>
+            <div className={chLayout.statCell}>
+              <div className={chLayout.statLabel}>Online</div>
+              <div className={chLayout.statValue} style={{ color: 'var(--success)' }}>
+                {statusSummary.online}
+              </div>
             </div>
-            <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '0.6rem 0.7rem' }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Instavel</div>
-              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--warning)' }}>{statusSummary.unstable}</div>
+            <div className={chLayout.statCell}>
+              <div className={chLayout.statLabel}>Instável</div>
+              <div className={chLayout.statValue} style={{ color: 'var(--warning)' }}>
+                {statusSummary.unstable}
+              </div>
             </div>
-            <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '0.6rem 0.7rem' }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Offline</div>
-              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--danger)' }}>{statusSummary.offline}</div>
+            <div className={chLayout.statCell}>
+              <div className={chLayout.statLabel}>Offline</div>
+              <div className={chLayout.statValue} style={{ color: 'var(--danger)' }}>
+                {statusSummary.offline}
+              </div>
             </div>
           </div>
         </section>
 
-        <div
-          style={
-            agents.length > 0
-              ? styles.layoutGrid
-              : styles.layoutGridSingle
-          }
-        >
-          <section style={styles.card}>
-            <div style={styles.cardHeader}>
+        <div className={chLayout.mainGrid}>
+          <section className={chLayout.listCard}>
+            {createSuccessKind ? (
+              <div className={chLayout.successBanner} role="status">
+                <div className={chLayout.successBannerBody}>
+                  <p className={chLayout.successBannerTitle}>Canal criado com sucesso</p>
+                  <p className={chLayout.successBannerText}>
+                    {createSuccessKind === 'whatsapp'
+                      ? 'Na lista abaixo, use “Preparar WhatsApp” (se aparecer) e em seguida “Conectar WhatsApp” para escanear o QR ou parear o número.'
+                      : 'O canal já aparece na lista. Configure ou conecte conforme o tipo escolhido.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className={chLayout.successBannerDismiss}
+                  aria-label="Fechar aviso"
+                  onClick={() => setCreateSuccessKind(null)}
+                >
+                  Fechar
+                </button>
+              </div>
+            ) : null}
+            {loadingProvisionId && connectStepMessage ? (
+              <p className={chLayout.provisionHint}>{connectStepMessage}</p>
+            ) : null}
+            <div className={chLayout.listHeader}>
               <div>
-                <h2 style={styles.cardTitle}>Canais configurados</h2>
-                <p style={styles.cardSubtitle}>
-                  Acompanhe o status dos canais e acesse ações rápidas de conexão e configuração.
+                <h2 className={chLayout.listTitle}>Seus canais</h2>
+                <p className={chLayout.listSubtitle}>
+                  Filtre, conecte ou edite. O formulário de criação fica na coluna ao lado.
                 </p>
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <div className={chLayout.filters}>
                 <input
-                  style={{ ...styles.input, maxWidth: 180 }}
+                  className={chLayout.filterInput}
+                  style={styles.input}
                   placeholder="Buscar canal..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
                 <select
-                  style={{ ...styles.select, maxWidth: 140 }}
+                  className={chLayout.filterSelect}
+                  style={styles.select}
                   value={filterType}
                   onChange={(e) => setFilterType(e.target.value)}
                 >
@@ -1121,7 +1146,8 @@ export function Channels() {
                   <option value="api">API/Webhook</option>
                 </select>
                 <select
-                  style={{ ...styles.select, maxWidth: 150 }}
+                  className={chLayout.filterSelect}
+                  style={styles.select}
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
                 >
@@ -1137,18 +1163,12 @@ export function Channels() {
 
             {filteredChannels.length === 0 ? (
               <div style={styles.emptyState}>
-                <div style={{ marginBottom: '0.5rem', fontWeight: 500 }}>Nenhum canal configurado ainda.</div>
-                <div style={{ fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                  Crie um novo canal e conecte seus clientes pelos principais aplicativos de mensagem.
+                <div style={{ marginBottom: '0.5rem', fontWeight: 500 }}>Nenhum canal ainda.</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                  Use o painel <strong style={{ color: 'var(--text)' }}>Criar novo canal</strong> para cadastrar o
+                  primeiro. Em seguida, conecte pelo botão <strong style={{ color: 'var(--text)' }}>Conectar WhatsApp</strong>{' '}
+                  na lista (ou a ação equivalente ao tipo do canal).
                 </div>
-                <button
-                  type="button"
-                  style={styles.primaryButton}
-                  onClick={() => setShowModal(true)}
-                >
-                  <span>➕</span>
-                  <span>Criar primeiro canal</span>
-                </button>
               </div>
             ) : (
               <div style={styles.channelsList}>
@@ -1158,7 +1178,7 @@ export function Channels() {
                       <div>
                         <div style={styles.channelName}>{ch.instance || ch.name}</div>
                         <div style={styles.channelMeta}>
-                          {getChannelTypeLabel(ch.type)} · Agente: {getAgentName(ch.agent_id)} · ID: {ch.id?.slice(0, 8)}
+                          {getChannelTypeLabel(ch.type)} · {getAgentName(ch.agent_id)}
                         </div>
                       </div>
                       <div style={styles.headerBadges}>
@@ -1175,9 +1195,13 @@ export function Channels() {
                         </div>
                       </div>
                       <div style={styles.actionsRow}>
-                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                          {renderTypeActions(ch)}
-                          {renderSecondaryActions(ch)}
+                        <div className={chLayout.channelActionsPrimary}>
+                          <div className={chLayout.channelActionsType}>
+                            {renderTypeActions(ch)}
+                          </div>
+                          <div className={chLayout.channelActionsSecondary}>
+                            {renderSecondaryActions(ch)}
+                          </div>
                         </div>
                         <div>
                           {renderDangerAction(ch)}
@@ -1190,311 +1214,52 @@ export function Channels() {
             )}
           </section>
 
-          <section style={styles.card}>
-            <div style={styles.cardHeader}>
-              <div>
-                <h2 style={styles.cardTitle}>Novo canal</h2>
-                <p style={styles.cardSubtitle}>
-                  Crie um novo canal vinculado a um agente para receber e enviar mensagens nos principais canais digitais.
-                </p>
-              </div>
-            </div>
-
-            <div style={styles.formRow}>
-              <div style={styles.formRowResponsive}>
-                <div style={styles.field}>
-                  <label style={styles.label}>Nome do canal</label>
-                  <input
-                    style={styles.input}
-                    placeholder="Ex.: Consultório Dra Ana Paula"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
-                </div>
-                <div style={styles.field}>
-                  <label style={styles.label}>Tipo de canal</label>
-                  <select
-                    style={styles.select}
-                    value={channelType}
-                    onChange={(e) => {
-                      setChannelType(e.target.value);
-                      if (e.target.value !== 'whatsapp') setWhatsappProvider('evolution');
-                      setWhatsappInstanceSelect('');
-                      setWhatsappInstanceManual('');
-                      setWhatsappAdvanced(false);
-                    }}
-                  >
-                    <option value="whatsapp">WhatsApp</option>
-                    <option value="instagram">Instagram</option>
-                    <option value="telegram">Telegram</option>
-                    <option value="web">Web Chat</option>
-                    <option value="api">API / Webhook</option>
-                  </select>
-                </div>
-                {channelType === 'whatsapp' && (
-                  <div style={styles.field}>
-                    <label style={styles.label}>Provider WhatsApp</label>
-                    <select
-                      style={styles.select}
-                      value={whatsappProvider}
-                      onChange={(e) => {
-                        setWhatsappProvider(e.target.value);
-                        setWhatsappInstanceSelect('');
-                        setWhatsappInstanceManual('');
-                        if (e.target.value !== 'evolution') setWhatsappAdvanced(false);
-                      }}
-                    >
-                      {allowedProviders.map((provider) => (
-                        <option key={provider} value={provider}>
-                          {provider === 'evolution' ? 'Evolution' : provider === 'waha' ? 'WAHA' : provider === 'zapi' ? 'Z-API' : provider}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                {channelType === 'whatsapp' && (
-                  <div style={styles.field}>
-                    <label style={styles.label}>Provider WhatsApp</label>
-                    <select
-                      style={styles.select}
-                      value={whatsappProvider}
-                      onChange={(e) => {
-                        setWhatsappProvider(e.target.value);
-                        setWhatsappInstanceSelect('');
-                        setWhatsappInstanceManual('');
-                        if (e.target.value !== 'evolution') setWhatsappAdvanced(false);
-                      }}
-                    >
-                      {allowedProviders.map((provider) => (
-                        <option key={provider} value={provider}>
-                          {provider === 'evolution' ? 'Evolution' : provider === 'waha' ? 'WAHA' : provider === 'zapi' ? 'Z-API' : provider}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                {channelType === 'whatsapp' && (
-                  <div style={styles.field}>
-                    <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <input
-                        type="checkbox"
-                        checked={whatsappAdvanced}
-                        onChange={(e) => {
-                          setWhatsappAdvanced(e.target.checked);
-                          setWhatsappInstanceSelect('');
-                          setWhatsappInstanceManual('');
-                        }}
-                      />
-                      Modo avançado: vincular instância manual ({whatsappProvider.toUpperCase()})
-                    </label>
-                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.35rem 0 0' }}>
-                      Fluxo normal: criamos a instância automaticamente. Avançado só para integrações que exijam nome manual.
-                    </p>
-                  </div>
-                )}
-                {channelType === 'whatsapp' && whatsappAdvanced && (
-                  <>
-                    {whatsappProvider === 'evolution' && (
-                      <div style={styles.field}>
-                        <label style={styles.label}>Instância Evolution</label>
-                        <select
-                          style={styles.select}
-                          value={whatsappInstanceSelect}
-                          onChange={(e) => setWhatsappInstanceSelect(e.target.value)}
-                        >
-                          <option value="">Selecione uma instância existente</option>
-                          {evolutionInstanceNames.map((n) => (
-                            <option key={n} value={n}>
-                              {n}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                    <div style={styles.field}>
-                      <label style={styles.label}>Ou nome exato da instância</label>
-                      <input
-                        style={styles.input}
-                        placeholder="Se não estiver na lista acima"
-                        value={whatsappInstanceManual}
-                        onChange={(e) => setWhatsappInstanceManual(e.target.value)}
-                      />
-                    </div>
-                  </>
-                )}
-                <div style={styles.field}>
-                  <label style={styles.label}>Agente</label>
-                  <select
-                    style={styles.select}
-                    value={agentId}
-                    onChange={(e) => setAgentId(e.target.value)}
-                  >
-                    <option value="">Selecione um agente</option>
-                    {agents.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div style={styles.formActions}>
-                <button
-                  type="button"
-                  style={styles.buttonSecondary}
-                  onClick={() => {
-                    setName('');
-                    setAgentId('');
-                    setWhatsappProvider('evolution');
-                    setWhatsappInstanceSelect('');
-                    setWhatsappInstanceManual('');
-                    setWhatsappAdvanced(false);
-                  }}
-                >
-                  Limpar
-                </button>
-                <button
-                  type="button"
-                  style={styles.buttonPrimary}
-                  disabled={loadingCreate || (channelType === 'whatsapp' && allowedProviders.length === 0)}
-                  onClick={createChannel}
-                >
-                  {loadingCreate ? 'Criando...' : 'Criar canal'}
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        {showModal && (
-          <div
-            style={styles.modalOverlay}
-            onClick={() => setShowModal(false)}
-          >
-            <div
-              style={styles.modalCard}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h2 style={styles.modalTitle}>Novo Canal</h2>
-              <div style={styles.formRow}>
-                <div style={styles.field}>
-                  <label style={styles.label}>Nome do canal</label>
-                  <input
-                    style={styles.input}
-                    placeholder="Ex.: Consultório Dra Ana Paula"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
-                </div>
-                <div style={styles.field}>
-                  <label style={styles.label}>Tipo de canal</label>
-                  <select
-                    style={styles.select}
-                    value={channelType}
-                    onChange={(e) => {
-                      setChannelType(e.target.value);
-                      if (e.target.value !== 'whatsapp') setWhatsappProvider('evolution');
-                      setWhatsappInstanceSelect('');
-                      setWhatsappInstanceManual('');
-                      setWhatsappAdvanced(false);
-                    }}
-                  >
-                    <option value="whatsapp">WhatsApp</option>
-                    <option value="instagram">Instagram</option>
-                    <option value="telegram">Telegram</option>
-                    <option value="web">Web Chat</option>
-                    <option value="api">API / Webhook</option>
-                  </select>
-                </div>
-                {channelType === 'whatsapp' && (
-                  <div style={styles.field}>
-                    <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <input
-                        type="checkbox"
-                        checked={whatsappAdvanced}
-                        onChange={(e) => {
-                          setWhatsappAdvanced(e.target.checked);
-                          setWhatsappInstanceSelect('');
-                          setWhatsappInstanceManual('');
-                        }}
-                      />
-                      Modo avançado: instância manual ({whatsappProvider.toUpperCase()})
-                    </label>
-                  </div>
-                )}
-                {channelType === 'whatsapp' && whatsappAdvanced && (
-                  <>
-                    {whatsappProvider === 'evolution' && (
-                      <div style={styles.field}>
-                        <label style={styles.label}>Instância Evolution</label>
-                        <select
-                          style={styles.select}
-                          value={whatsappInstanceSelect}
-                          onChange={(e) => setWhatsappInstanceSelect(e.target.value)}
-                        >
-                          <option value="">Selecione uma instância existente</option>
-                          {evolutionInstanceNames.map((n) => (
-                            <option key={n} value={n}>
-                              {n}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                    <div style={styles.field}>
-                      <label style={styles.label}>Ou nome exato</label>
-                      <input
-                        style={styles.input}
-                        placeholder="Instância criada na API"
-                        value={whatsappInstanceManual}
-                        onChange={(e) => setWhatsappInstanceManual(e.target.value)}
-                      />
-                    </div>
-                  </>
-                )}
-                <div style={styles.field}>
-                  <label style={styles.label}>Agente</label>
-                  <select
-                    style={styles.select}
-                    value={agentId}
-                    onChange={(e) => setAgentId(e.target.value)}
-                  >
-                    <option value="">Selecione um agente</option>
-                    {agents.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div style={styles.modalFooter}>
-                <button
-                  type="button"
-                  style={styles.buttonSecondary}
-                  onClick={() => {
-                    setShowModal(false);
-                    setWhatsappProvider('evolution');
-                    setWhatsappInstanceSelect('');
-                    setWhatsappInstanceManual('');
-                    setWhatsappAdvanced(false);
-                  }}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  style={styles.buttonPrimary}
-                  disabled={loadingCreate || (channelType === 'whatsapp' && allowedProviders.length === 0)}
-                  onClick={createChannel}
-                >
-                  {loadingCreate ? 'Criando...' : 'Criar canal'}
-                </button>
-              </div>
+          <div className={chLayout.createColumn}>
+            <div className={chLayout.createColumnInner}>
+              <CreateChannelCard
+                name={name}
+                setName={setName}
+                agentId={agentId}
+                setAgentId={setAgentId}
+                channelType={channelType}
+                onChannelTypeChange={(v) => {
+                  setChannelType(v);
+                  if (v !== 'whatsapp') setWhatsappProvider('evolution');
+                  setWhatsappInstanceSelect('');
+                  setWhatsappInstanceManual('');
+                  setWhatsappAdvanced(false);
+                }}
+                whatsappProvider={whatsappProvider}
+                onWhatsappProviderChange={(v) => {
+                  setWhatsappProvider(v);
+                  setWhatsappInstanceSelect('');
+                  setWhatsappInstanceManual('');
+                  if (v !== 'evolution') setWhatsappAdvanced(false);
+                }}
+                allowedProviders={allowedProviders}
+                whatsappAdvanced={whatsappAdvanced}
+                setWhatsappAdvanced={setWhatsappAdvanced}
+                evolutionInstanceNames={evolutionInstanceNames}
+                whatsappInstanceSelect={whatsappInstanceSelect}
+                setWhatsappInstanceSelect={setWhatsappInstanceSelect}
+                whatsappInstanceManual={whatsappInstanceManual}
+                setWhatsappInstanceManual={setWhatsappInstanceManual}
+                agents={agents}
+                loadingCreate={loadingCreate}
+                onSubmit={createChannel}
+                onClear={() => {
+                  setName('');
+                  setAgentId('');
+                  setWhatsappProvider('evolution');
+                  setWhatsappInstanceSelect('');
+                  setWhatsappInstanceManual('');
+                  setWhatsappAdvanced(false);
+                }}
+                providersBlocked={channelType === 'whatsapp' && allowedProviders.length === 0}
+              />
             </div>
           </div>
-        )}
+        </div>
 
         {qrCode && (
           <div
@@ -1527,7 +1292,6 @@ export function Channels() {
                   style={styles.buttonSecondary}
                   onClick={() => {
                     stopConnection();
-                    setConnectStepMessage('');
                   }}
                 >
                   Parar conexão

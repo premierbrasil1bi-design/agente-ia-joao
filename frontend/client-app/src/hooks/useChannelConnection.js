@@ -16,6 +16,8 @@ export function useChannelConnection() {
   const [loading, setLoading] = useState(false);
   const [timeout, setTimeoutState] = useState(false);
   const [error, setError] = useState(null);
+  /** Mensagem opcional de etapa (ex.: provisionamento SaaS) — consumida pela UI de Canais */
+  const [connectStepMessage, setConnectStepMessage] = useState('');
 
   const channelIdRef = useRef(null);
   const socketRef = useRef(null);
@@ -46,6 +48,7 @@ export function useChannelConnection() {
     channelIdRef.current = null;
     setLoading(false);
     setTimeoutState(false);
+    setConnectStepMessage('');
   }, [clearTimers]);
 
   const pollOnce = useCallback(async () => {
@@ -193,6 +196,8 @@ export function useChannelConnection() {
     error,
     startConnection,
     stopConnection,
+    connectStepMessage,
+    setConnectStepMessage,
   };
 }
 
