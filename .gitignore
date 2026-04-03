@@ -4,6 +4,10 @@
 _backup
 _backup.
 
+# WAHA — conteúdo da pasta de sessões (bind mount); manter waha_sessions/.gitkeep no repo
+waha_sessions/*
+!waha_sessions/.gitkeep
+
 # envs
 .env
 .env.

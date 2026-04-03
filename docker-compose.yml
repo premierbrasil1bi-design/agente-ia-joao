@@ -42,12 +42,15 @@ services:
       - "6379:6379"
 
   # WAHA — WhatsApp HTTP API (provider=waha no OMNIA). Host 3099 evita conflito com API Node na 3000 (PM2).
+  # Persistência: sem volume, sessões somem após restart (GET /api/sessions vazio, 404 em /default).
   saas_waha:
     image: devlikeapro/waha:latest
     container_name: saas_waha
     restart: always
     ports:
       - "3099:3000"
+    volumes:
+      - ./waha_sessions:/app/.sessions
     environment:
       - WAHA_LOG_LEVEL=info
       - WAHA_API_KEY=OMNIA_SECURE_9X7A_2026_JOAO
