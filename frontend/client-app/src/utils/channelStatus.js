@@ -1,4 +1,4 @@
-import { normalizeChannelStatus } from '@omnia/channel-core';
+import { normalizeChannelStatus } from './channelCore.js';
 
 export const getStatusMeta = (status) => {
   const s = normalizeChannelStatus(status);

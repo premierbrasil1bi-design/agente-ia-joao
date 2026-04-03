@@ -7,7 +7,8 @@ import StatusBadge from '../components/StatusBadge.jsx';
 import useAutoReconnect from '../hooks/useAutoReconnect.js';
 import { useChannel } from '../context/ChannelContext.jsx';
 import { useChannelConnection } from '../hooks/useChannelConnection.js';
-import { ConnectionStateBanner, CHANNEL_CONNECTION_STATE } from '@omnia/channel-core';
+import { ConnectionStateBanner } from '../components/ConnectionStateBanner.jsx';
+import { CHANNEL_CONNECTION_STATE } from '../utils/channelCore.js';
 
 const styles = {
   page: {

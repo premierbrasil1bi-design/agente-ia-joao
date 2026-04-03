@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { channelsService } from '../services/channels.service.js';
 import { agentApi } from '../services/agentApi.js';
-import { normalizeChannelStatus, mapChannelToConnectionState } from '@omnia/channel-core';
+import { normalizeChannelStatus, mapChannelToConnectionState } from '../utils/channelCore.js';
 
 function toQrDataUrl(raw) {
   if (!raw || typeof raw !== 'string') return '';

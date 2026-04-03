@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import { channelsService } from '../services/channels.service.js';
 import { messagesService } from '../services/messages.service.js';
 import { agentApi } from '../services/agentApi.js';
-import { normalizeChannelType } from '@omnia/channel-core';
+import { normalizeChannelType } from '../utils/channelCore.js';
 import { getChannelCapabilities } from '../utils/channelCapabilities.js';
 
 const PAGE_SIZE = 40;
