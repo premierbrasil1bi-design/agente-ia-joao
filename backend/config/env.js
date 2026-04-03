@@ -36,7 +36,7 @@ if (isProd) {
 
 const wahaUrlRaw = (process.env.WAHA_API_URL || process.env.WAHA_URL || '').trim();
 const wahaKeyRaw = (process.env.WAHA_API_KEY || '').trim();
-const wahaTimeoutRaw = parseInt(process.env.WAHA_REQUEST_TIMEOUT_MS || '5000', 10);
+const wahaTimeoutRaw = parseInt(process.env.WAHA_REQUEST_TIMEOUT_MS || '15000', 10);
 const evoUrlRaw = (process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL || '').trim();
 const evoKeyStrict = (process.env.EVOLUTION_API_KEY || '').trim();
 const evoKeyLegacy = (process.env.AUTHENTICATION_API_KEY || '').trim();
@@ -95,7 +95,7 @@ export const config = {
     waha: {
       url: wahaUrlRaw,
       apiKey: wahaKeyRaw,
-      requestTimeoutMs: Number.isFinite(wahaTimeoutRaw) && wahaTimeoutRaw > 0 ? wahaTimeoutRaw : 5000,
+      requestTimeoutMs: Number.isFinite(wahaTimeoutRaw) && wahaTimeoutRaw > 0 ? wahaTimeoutRaw : 15000,
     },
     evolution: {
       url: evoUrlRaw,

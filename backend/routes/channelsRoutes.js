@@ -230,6 +230,16 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
       return res.status(404).json({ error: 'Channel not found' });
     }
 
+    const providerLc = String(channel.provider || '').toLowerCase();
+    if (providerLc === 'waha') {
+      if (!process.env.WAHA_API_URL?.trim() || !process.env.WAHA_API_KEY?.trim()) {
+        return res.status(400).json({
+          error: 'WAHA_NOT_CONFIGURED',
+          message: 'WAHA não configurado no servidor',
+        });
+      }
+    }
+
     try {
       await validateProviderAccessForTenant(channel.tenant_id, channel.provider);
     } catch (e) {
@@ -238,9 +248,48 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
       }
       throw e;
     }
-    const qrData = await channelConnectionService.getChannelQrCode(channel).catch(() => null);
+
+    let qrData = null;
+    try {
+      qrData = await channelConnectionService.getChannelQrCode(channel);
+    } catch (qrErr) {
+      console.error('[channels] qrcode:', qrErr.message);
+      if (qrErr.httpStatus === 401 || String(qrErr.message || '').includes('WAHA authentication failed')) {
+        return res.status(401).json({
+          error: 'WAHA_AUTH_FAILED',
+          message: qrErr.message || 'WAHA não autorizado',
+        });
+      }
+      if (
+        String(qrErr.message || '').includes('WAHA não configurado') ||
+        String(qrErr.message || '').includes('WAHA_API_URL')
+      ) {
+        return res.status(400).json({
+          error: 'WAHA_NOT_CONFIGURED',
+          message: 'WAHA não configurado no servidor',
+        });
+      }
+      if (qrErr.code === 'INSTANCE_NOT_FOUND') {
+        return res.status(404).json({ error: qrErr.code, message: qrErr.message || 'Instância não encontrada' });
+      }
+      if (String(qrErr.message || '') === 'QR não disponível') {
+        return res.json({
+          qrCode: null,
+          qr: null,
+          qrcode: null,
+          status: normalizeChannelStatus(channel.connection_status || channel.status),
+          message: 'QR ainda não disponível',
+        });
+      }
+      return res.status(502).json({
+        error: 'QR_FETCH_FAILED',
+        message: qrErr.message || 'Não foi possível obter o QR code',
+      });
+    }
+
     const qrPayload =
       channel.qr_code ||
+      (typeof qrData === 'string' ? qrData : null) ||
       qrData?.qr ||
       qrData?.qrcode ||
       qrData?.base64 ||
@@ -268,7 +317,7 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
     });
   } catch (err) {
     console.error('[channels] qrcode:', err.message);
-    return res.status(500).json({ error: 'Failed to get QR code' });
+    return res.status(502).json({ error: err.message || 'Failed to get QR code' });
   }
 });
 

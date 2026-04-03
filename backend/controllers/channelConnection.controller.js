@@ -40,6 +40,18 @@ function isEvolutionOffline(err) {
   return c === 'ECONNREFUSED' || c === 'ENOTFOUND' || c === 'ETIMEDOUT';
 }
 
+function isWahaAuthError(err) {
+  return err?.httpStatus === 401 || String(err?.message || '').includes('WAHA authentication failed');
+}
+
+function isWahaNotConfiguredMessage(err) {
+  return (
+    String(err?.message || '').includes('WAHA não configurado') ||
+    String(err?.message || '').includes('WAHA_API_URL') ||
+    String(err?.message || '').includes('WAHA_API_KEY')
+  );
+}
+
 export async function sendChannelMessage(req, res) {
   try {
     const channel = await getChannelFromReq(req, res);
@@ -216,13 +228,41 @@ export async function getQrCode(req, res) {
         error: err.message,
       });
     }
+    if (isWahaAuthError(err)) {
+      return res.status(401).json({
+        success: false,
+        error: 'WAHA_AUTH_FAILED',
+        message: err.message || 'API key WAHA inválida ou ausente.',
+      });
+    }
+    if (isWahaNotConfiguredMessage(err)) {
+      return res.status(503).json({
+        success: false,
+        error: 'WAHA_NOT_CONFIGURED',
+        message: 'WAHA não configurado no servidor (defina WAHA_API_URL e WAHA_API_KEY).',
+      });
+    }
+    if (String(err.message || '') === 'QR não disponível') {
+      return res.status(404).json({
+        success: false,
+        error: 'QR_NOT_READY',
+        message: 'QR ainda não disponível. Inicie a sessão ou tente novamente em instantes.',
+      });
+    }
+    if (err.code === 'INSTANCE_NOT_FOUND') {
+      return res.status(404).json({
+        success: false,
+        error: err.code,
+        message: err.userMessage || err.message || 'Instância não encontrada.',
+      });
+    }
     if (isEvolutionOffline(err)) {
       return res.status(503).json({
         success: false,
         error: 'Evolution API está offline ou inacessível.',
       });
     }
-    res.status(500).json({
+    res.status(502).json({
       success: false,
       error: err.message || 'Erro ao obter QR Code.',
     });

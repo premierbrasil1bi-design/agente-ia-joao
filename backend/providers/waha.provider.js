@@ -1,3 +1,5 @@
+export { wahaProvider, wahaRequest, validateWahaEnv } from '../services/wahaHttp.js';
+
 import * as wahaService from '../services/wahaService.js';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { BaseProvider } from './base.provider.js';

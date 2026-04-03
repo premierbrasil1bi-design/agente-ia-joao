@@ -2,9 +2,9 @@
  * Healthcheck com cache curto (10s) para não sobrecarregar APIs externas.
  */
 
-import axios from 'axios';
 import { config } from '../config/env.js';
 import * as evolutionService from './evolutionService.js';
+import { wahaRequest, validateWahaEnv } from './wahaHttp.js';
 import { logAdminAction } from './adminActionsLog.service.js';
 
 const CACHE_TTL_MS = 10_000;
@@ -53,31 +53,25 @@ function setCached(provider, error = null) {
   healthCache.set(provider, { at: Date.now(), error });
 }
 
-function createWahaAxios() {
-  const w = config.providers.waha;
-  return axios.create({
-    baseURL: w.url.replace(/\/$/, ''),
-    timeout: w.requestTimeoutMs ?? 5000,
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'X-Api-Key': w.apiKey,
-    },
-  });
-}
-
 async function checkWaha() {
-  const api = createWahaAxios();
-  const r = await api.get('/api/sessions', { validateStatus: () => true });
-  if (r.status === 401) {
-    const e = new Error('WAHA: não autorizado (verifique WAHA_API_KEY).');
-    e.httpStatus = 401;
-    throw e;
+  try {
+    validateWahaEnv();
+  } catch (e) {
+    const err = new Error('WAHA não configurado (WAHA_API_URL / WAHA_API_KEY).');
+    err.code = 'WAHA_UNREACHABLE';
+    throw err;
   }
-  if (r.status >= 400) {
+  try {
+    await wahaRequest('GET', '/api/sessions');
+  } catch (error) {
+    if (error.httpStatus === 401) {
+      const e = new Error('WAHA: não autorizado (verifique WAHA_API_KEY).');
+      e.httpStatus = 401;
+      throw e;
+    }
     const e = new Error('WAHA não acessível');
     e.code = 'WAHA_UNREACHABLE';
-    e.cause = new Error(`HTTP ${r.status}`);
+    e.cause = error;
     throw e;
   }
 }
