@@ -4,4 +4,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   base: '/', // O projeto rodará na raiz do subdomínio
+  resolve: {
+    dedupe: ['react', 'react-dom'],
+  },
 })

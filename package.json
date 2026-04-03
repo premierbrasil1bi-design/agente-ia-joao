@@ -12,6 +12,10 @@
     "dev": "npm run dev --prefix backend",
     "seed:admin": "node scripts/seed-admin.js"
   },
+  "overrides": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
   "dependencies": {
     "bullmq": "^5.71.0",
     "cors": "^2.8.6",
