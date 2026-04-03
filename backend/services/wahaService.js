@@ -7,7 +7,7 @@ import { checkProviderHealth } from './providerHealth.service.js';
 import { wahaRequest, validateWahaEnv } from './wahaHttp.js';
 import { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
-export { resolveSessionName, resolveSessionName as resolveWahaSessionName } from '../utils/resolveSessionName.js';
+export { resolveSessionName } from '../utils/resolveSessionName.js';
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
 const WAHA_URL_RESOLVED = (process.env.WAHA_API_URL || process.env.WAHA_URL || '').trim();
