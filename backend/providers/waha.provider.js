@@ -1,6 +1,8 @@
 export { wahaProvider, wahaRequest, validateWahaEnv } from '../services/wahaHttp.js';
+export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
 import * as wahaService from '../services/wahaService.js';
+import { resolveWahaSessionName } from '../utils/wahaSession.util.js';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { BaseProvider } from './base.provider.js';
 import { checkProviderHealth } from '../services/providerHealth.service.js';
@@ -9,13 +11,22 @@ import * as wahaProvision from '../services/wahaProvision.service.js';
 export class WahaProvider extends BaseProvider {
   constructor(config = {}) {
     super(config);
-    const s = String(config.session || config.instance || config.instanceName || '').trim();
+    this.channelId = config.channelId ?? null;
+    this.tenantId = config.tenantId ?? null;
+    let s;
+    if (this.tenantId != null && this.channelId != null) {
+      s = resolveWahaSessionName({
+        tenantId: this.tenantId,
+        channelId: this.channelId,
+      });
+    } else {
+      s = String(config.session || config.instance || config.instanceName || '').trim();
+    }
     if (!s) {
       throw new Error('Config WAHA sem session/instance (use mergeProviderConfigForConnect)');
     }
+    console.log('[WAHA] Session:', s);
     this.session = s;
-    this.channelId = config.channelId ?? null;
-    this.tenantId = config.tenantId ?? null;
   }
 
   _ctx() {
@@ -67,6 +78,10 @@ export class WahaProvider extends BaseProvider {
         if (qrOut.httpStatus) e.httpStatus = qrOut.httpStatus;
         throw e;
       }
+      if (qrOut.alreadyConnected) {
+        console.log('[WAHA] Session already connected');
+        return null;
+      }
       const payload =
         extractQrPayload(qrOut.raw) ||
         extractQrPayload(qrOut.data) ||
@@ -82,7 +97,7 @@ export class WahaProvider extends BaseProvider {
   }
 
   async getStatus() {
-    const st = await wahaService.getSessionStatus(this.session);
+    const st = await wahaService.getSessionStatus(this.session, this._ctx());
     if (!st.ok) throw new Error(st.error || 'WAHA status failed');
     return st.data;
   }
@@ -90,7 +105,7 @@ export class WahaProvider extends BaseProvider {
   async sendMessage(payload) {
     const digits = String(payload?.number || '').replace(/\D/g, '');
     const text = String(payload?.text || '');
-    const out = await wahaService.sendMessage(this.session, digits, text);
+    const out = await wahaService.sendMessage(this.session, digits, text, this._ctx());
     if (!out.ok) throw new Error(out.error || 'WAHA sendMessage failed');
     return out.data;
   }
@@ -103,13 +118,13 @@ export class WahaProvider extends BaseProvider {
   }
 
   async disconnect() {
-    const out = await wahaService.logoutSession(this.session);
+    const out = await wahaService.logoutSession(this.session, this._ctx());
     if (!out.ok) throw new Error(out.error || 'WAHA disconnect failed');
     return out;
   }
 
   async removeInstance() {
-    const out = await wahaService.deleteSession(this.session);
+    const out = await wahaService.deleteSession(this.session, this._ctx());
     if (!out.ok) throw new Error(out.error || 'WAHA removeSession failed');
     return out;
   }

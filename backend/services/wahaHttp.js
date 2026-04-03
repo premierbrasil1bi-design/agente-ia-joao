@@ -5,6 +5,8 @@
 
 import axios from 'axios';
 
+export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
+
 const WAHA_API_URL = (process.env.WAHA_API_URL || process.env.WAHA_URL || '').trim();
 const WAHA_API_KEY = (process.env.WAHA_API_KEY || '').trim();
 
@@ -77,14 +79,21 @@ export async function wahaRequest(method, path, data = null) {
 }
 
 export const wahaProvider = {
-  getSessions: () => wahaRequest('GET', '/api/sessions'),
+  getSessions: () => {
+    console.log('[WAHA] Session:', '(getSessions — lista)');
+    return wahaRequest('GET', '/api/sessions');
+  },
 
-  createSession: (sessionName) =>
-    wahaRequest('POST', '/api/sessions', {
+  createSession: (sessionName) => {
+    console.log('[WAHA] Session:', sessionName);
+    return wahaRequest('POST', '/api/sessions', {
       name: sessionName,
       start: true,
-    }),
+    });
+  },
 
-  getQrCode: (sessionName) =>
-    wahaRequest('GET', `/api/sessions/${encodeURIComponent(sessionName)}/qr`),
+  getQrCode: (sessionName) => {
+    console.log('[WAHA] Session:', sessionName);
+    return wahaRequest('GET', `/api/sessions/${encodeURIComponent(sessionName)}/qr`);
+  },
 };

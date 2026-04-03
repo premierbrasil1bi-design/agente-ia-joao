@@ -1,7 +1,9 @@
 /**
- * Nome estável de sessão WAHA por canal — evita colisão entre tenants (multi-tenant).
- * Formato: {tenant_id}_{channel_id}
- *
+ * Nome de sessão WAHA por canal — delega a resolveWahaSessionName (FREE vs PLUS).
+ */
+import { resolveWahaSessionName } from './wahaSession.util.js';
+
+/**
  * @param {object} channel - precisa tenant_id e id (UUID)
  * @returns {string}
  */
@@ -14,5 +16,5 @@ export function resolveSessionName(channel) {
   if (!tid || !cid) {
     throw new Error('Canal sem tenant_id ou id — impossível definir sessão WAHA');
   }
-  return `${tid}_${cid}`;
+  return resolveWahaSessionName({ tenantId: tid, channelId: cid });
 }
