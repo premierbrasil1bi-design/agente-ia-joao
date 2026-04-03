@@ -20,6 +20,7 @@ import {
   emitChannelSocketEvent,
 } from '../utils/channelRealtime.js';
 import { ProviderAccessError } from '../services/providerAccess.service.js';
+import { getCurrentQr as getWahaDockerLogQr, isWahaQrLogCaptureEnabled } from '../services/wahaQrCapture.js';
 
 async function getChannelFromReq(req, res) {
   const tenantId = req.tenantId || req.user?.tenantId;
@@ -184,9 +185,32 @@ export async function getQrCode(req, res) {
     channel = await getChannelFromReq(req, res);
     if (!channel) return;
 
-    const qr = await channelConnectionService.getChannelQrCode(channel);
-    const raw = extractQrPayload(qr);
-    const dataUrl = toQrDataUrl(raw);
+    const provider = resolveProvider(channel);
+    const providerLc = String(provider || '').toLowerCase();
+    let qr;
+    try {
+      qr = await channelConnectionService.getChannelQrCode(channel);
+    } catch (fetchErr) {
+      if (
+        providerLc === 'waha' &&
+        isWahaQrLogCaptureEnabled() &&
+        getWahaDockerLogQr()
+      ) {
+        qr = getWahaDockerLogQr();
+      } else {
+        throw fetchErr;
+      }
+    }
+    let raw = extractQrPayload(qr);
+    let dataUrl = toQrDataUrl(raw);
+    if (
+      !dataUrl &&
+      providerLc === 'waha' &&
+      isWahaQrLogCaptureEnabled() &&
+      getWahaDockerLogQr()
+    ) {
+      dataUrl = toQrDataUrl(getWahaDockerLogQr());
+    }
 
     if (!dataUrl) {
       return res.status(404).json({
@@ -194,8 +218,6 @@ export async function getQrCode(req, res) {
         error: 'QR não disponível ainda',
       });
     }
-
-    const provider = resolveProvider(channel);
     res.status(200).json({
       success: true,
       provider,

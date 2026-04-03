@@ -26,8 +26,14 @@ import {
   transitionEvolutionChannelConnection,
 } from '../services/channelEvolutionState.service.js';
 import { ProviderAccessError, validateProviderAccessForTenant } from '../services/providerAccess.service.js';
+import { getCurrentQr as getWahaDockerLogQr, isWahaQrLogCaptureEnabled } from '../services/wahaQrCapture.js';
 
 const router = Router();
+
+function wahaQrFromDockerLogs() {
+  if (!isWahaQrLogCaptureEnabled()) return null;
+  return getWahaDockerLogQr();
+}
 
 router.use(agentAuth);
 
@@ -273,6 +279,16 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
         return res.status(404).json({ error: qrErr.code, message: qrErr.message || 'Instância não encontrada' });
       }
       if (String(qrErr.message || '') === 'QR não disponível') {
+        const logQr = providerLc === 'waha' ? wahaQrFromDockerLogs() : null;
+        if (logQr) {
+          const normalizedStatus = normalizeChannelStatus(channel.connection_status || channel.status);
+          return res.json({
+            qrCode: logQr,
+            qr: logQr,
+            qrcode: logQr,
+            status: normalizedStatus,
+          });
+        }
         return res.json({
           qrCode: null,
           qr: null,
@@ -298,6 +314,15 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
     const normalizedStatus = normalizeChannelStatus(channel.connection_status || channel.status);
 
     if (!qrPayload) {
+      const logQr = providerLc === 'waha' ? wahaQrFromDockerLogs() : null;
+      if (logQr) {
+        return res.json({
+          qrCode: logQr,
+          qr: logQr,
+          qrcode: logQr,
+          status: normalizedStatus,
+        });
+      }
       return res.json({
         qrCode: null,
         qr: null,

@@ -53,6 +53,7 @@ import { logAdminAction } from './services/adminActionsLog.service.js';
 import { getProviderHealthSnapshot } from './services/providerOrchestrator.service.js';
 import { getTenantById } from './repositories/tenant.repository.js';
 import { filterAllowedProvidersForTenant, getAllowedProviders } from './utils/tenantAllowedProviders.js';
+import { startWahaQrLogCapture } from './services/wahaQrCapture.js';
 
 dotenv.config();
 
@@ -381,6 +382,8 @@ const io = new SocketIOServer(server, {
 // Disponibiliza io globalmente para emissão de eventos de status de canais
 // (ex.: logger.statusChange, monitor de canais, etc.).
 globalThis.io = io;
+
+startWahaQrLogCapture();
 
 const SOCKET_TENANT_ROOM_PREFIX = 'tenant:';
 const tenantRoom = (tenantId) => `${SOCKET_TENANT_ROOM_PREFIX}${tenantId}`;
