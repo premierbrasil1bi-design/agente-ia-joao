@@ -110,6 +110,8 @@ services:
       AUTHENTICATION_API_KEY: EVOLUTION_2026_JOAO_998877
       EVOLUTION_API_URL: http://saas_evolution:8080
       EVOLUTION_API_KEY: EVOLUTION_2026_JOAO_998877
+      WAHA_API_URL: http://saas_waha:3000
+      WAHA_API_KEY: OMNIA_SECURE_9X7A_2026_JOAO
     ports:
       - "3000:3000"
     env_file:
