@@ -1,7 +1,8 @@
-export { wahaProvider, wahaRequest, validateWahaEnv } from '../services/wahaHttp.js';
+export { wahaProvider, wahaRequest, validateWahaEnv, fetchWahaSessionQrcodeRest } from '../services/wahaHttp.js';
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
 import * as wahaService from '../services/wahaService.js';
+import { fetchWahaSessionQrcodeRest } from '../services/wahaHttp.js';
 import { getCurrentQr } from '../services/wahaQrCapture.js';
 import { resolveWahaSessionName } from '../utils/wahaSession.util.js';
 import { BaseProvider } from './base.provider.js';
@@ -66,11 +67,12 @@ export class WahaProvider extends BaseProvider {
   }
 
   async getQRCode() {
-    const qr = getCurrentQr();
-    if (qr) {
-      return qr;
+    const fromRest = await fetchWahaSessionQrcodeRest(this.session);
+    if (fromRest) {
+      return fromRest;
     }
-    return null;
+    const fromLogs = getCurrentQr();
+    return fromLogs || null;
   }
 
   async getStatus() {

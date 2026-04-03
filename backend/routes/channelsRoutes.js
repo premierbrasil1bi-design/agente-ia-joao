@@ -219,6 +219,8 @@ router.post('/:id/provision-instance', requireActiveTenant, async (req, res) => 
 });
 
 router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
+  const wahaSoft = (payload) => res.status(200).json(payload);
+
   try {
     const tenantId = req.tenantId || req.user?.tenantId;
     if (!tenantId) {
@@ -231,11 +233,17 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
     }
 
     const providerLc = String(channel.provider || '').toLowerCase();
+    const channelNormStatus = () => normalizeChannelStatus(channel.connection_status || channel.status);
+
     if (providerLc === 'waha') {
       if (!process.env.WAHA_API_URL?.trim() || !process.env.WAHA_API_KEY?.trim()) {
-        return res.status(400).json({
-          error: 'WAHA_NOT_CONFIGURED',
+        return wahaSoft({
+          success: false,
+          qr: null,
+          qrCode: null,
+          qrcode: null,
           message: 'WAHA não configurado no servidor',
+          status: channelNormStatus(),
         });
       }
     }
@@ -244,6 +252,16 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
       await validateProviderAccessForTenant(channel.tenant_id, channel.provider);
     } catch (e) {
       if (e instanceof ProviderAccessError) {
+        if (providerLc === 'waha') {
+          return wahaSoft({
+            success: false,
+            qr: null,
+            qrCode: null,
+            qrcode: null,
+            message: e.message || 'Provider não permitido',
+            status: channelNormStatus(),
+          });
+        }
         return res.status(e.httpStatus || 403).json({ error: e.code, message: e.message, details: e.details });
       }
       throw e;
@@ -254,6 +272,29 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
       qrData = await channelConnectionService.getChannelQrCode(channel);
     } catch (qrErr) {
       console.error('[channels] qrcode:', qrErr.message);
+      if (providerLc === 'waha') {
+        let message = qrErr.message || 'Não foi possível obter o QR code';
+        if (qrErr.httpStatus === 401 || String(qrErr.message || '').includes('WAHA authentication failed')) {
+          message = qrErr.message || 'WAHA não autorizado';
+        } else if (
+          String(qrErr.message || '').includes('WAHA não configurado') ||
+          String(qrErr.message || '').includes('WAHA_API_URL')
+        ) {
+          message = 'WAHA não configurado no servidor';
+        } else if (qrErr.code === 'INSTANCE_NOT_FOUND') {
+          message = qrErr.message || 'Instância não encontrada';
+        } else if (String(qrErr.message || '') === 'QR não disponível') {
+          message = 'QR ainda não disponível, aguardando geração';
+        }
+        return wahaSoft({
+          success: false,
+          qr: null,
+          qrCode: null,
+          qrcode: null,
+          message,
+          status: channelNormStatus(),
+        });
+      }
       if (qrErr.httpStatus === 401 || String(qrErr.message || '').includes('WAHA authentication failed')) {
         return res.status(401).json({
           error: 'WAHA_AUTH_FAILED',
@@ -273,22 +314,11 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
         return res.status(404).json({ error: qrErr.code, message: qrErr.message || 'Instância não encontrada' });
       }
       if (String(qrErr.message || '') === 'QR não disponível') {
-        const normalizedStatus = normalizeChannelStatus(channel.connection_status || channel.status);
-        if (providerLc === 'waha') {
-          return res.json({
-            success: false,
-            message: 'QR ainda não disponível, aguardando geração',
-            qr: null,
-            qrCode: null,
-            qrcode: null,
-            status: normalizedStatus,
-          });
-        }
         return res.json({
           qrCode: null,
           qr: null,
           qrcode: null,
-          status: normalizedStatus,
+          status: channelNormStatus(),
           message: 'QR ainda não disponível',
         });
       }
@@ -310,7 +340,7 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
 
     if (!qrPayload) {
       if (providerLc === 'waha') {
-        return res.json({
+        return wahaSoft({
           success: false,
           message: 'QR ainda não disponível, aguardando geração',
           qr: null,
@@ -331,7 +361,7 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
     console.log('[CHANNEL] [QR] Generated', { id: req.params.id, tenantId });
 
     if (providerLc === 'waha') {
-      return res.json({
+      return wahaSoft({
         success: true,
         qr: qrPayload,
         qrCode: qrPayload,

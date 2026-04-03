@@ -294,6 +294,10 @@ export function Channels() {
   const [whatsappInstanceSelect, setWhatsappInstanceSelect] = useState('');
   const [whatsappInstanceManual, setWhatsappInstanceManual] = useState('');
   const [qrCode, setQrCode] = useState(null);
+  /** Modal de QR: aberto explicitamente (carregando ou após sucesso). */
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [qrModalChannelId, setQrModalChannelId] = useState(null);
+  const [qrLoadError, setQrLoadError] = useState(null);
   const [loadingCreate, setLoadingCreate] = useState(false);
   const [loadingQr, setLoadingQr] = useState(null);
   const [loadingConnectId, setLoadingConnectId] = useState(null);
@@ -450,6 +454,9 @@ export function Channels() {
           toast.success('WhatsApp conectado.');
           setQrCode(null);
           setPairingModal(null);
+          setQrModalOpen(false);
+          setQrModalChannelId(null);
+          setQrLoadError(null);
           return;
         }
         if (d.artifactType && d.artifact) {
@@ -543,32 +550,51 @@ export function Channels() {
     if (p) setPairingModal({ code: p, channelId });
   }
 
+  /** @returns {boolean} */
   function applyQrFromResponse(channelId, data) {
-    const src = data?.qr || data?.qrcode;
+    const src = data?.qr || data?.qrcode || data?.qrCode;
     if (!src || (typeof src === 'string' && !src.trim())) {
-      throw new Error(data?.error || 'QR não disponível ainda');
+      return false;
     }
     const raw = typeof src === 'string' ? src : src?.base64 ?? src?.code ?? '';
     if (!raw || (typeof raw === 'string' && !raw.trim())) {
-      throw new Error(data?.error || 'QR não disponível ainda');
+      return false;
     }
     const qr = raw.startsWith('data:image') || /^https?:\/\//i.test(raw)
       ? raw
       : `data:image/png;base64,${raw.replace(/^data:image\/\w+;base64,/, '')}`;
     sessionStorage.setItem(`qr_${channelId}`, qr);
     setQrCode(qr);
+    return true;
   }
 
   /** Só busca QR (instância já criada / já em pairing). */
   async function getQr(channelId) {
     setLoadingQr(channelId);
+    setQrLoadError(null);
+    setQrModalChannelId(channelId);
+    setQrModalOpen(true);
     try {
       const data = await channelsService.getQrCode(channelId);
-      applyQrFromResponse(channelId, data);
+      const hasQr = Boolean(data?.qr || data?.qrCode || data?.qrcode);
+      if (!hasQr) {
+        const msg = data?.message || 'QR ainda não disponível. Aguarde ou use “Conectar WhatsApp”.';
+        setQrLoadError(msg);
+        toast.error(msg);
+        return;
+      }
+      if (!applyQrFromResponse(channelId, data)) {
+        const msg = data?.message || 'QR em formato inesperado.';
+        setQrLoadError(msg);
+        toast.error(msg);
+        return;
+      }
       startPolling(channelId);
     } catch (err) {
       console.error(err);
-      toast.error(resolveProviderErrorMessage(err));
+      const msg = resolveProviderErrorMessage(err);
+      setQrLoadError(msg);
+      toast.error(msg);
     } finally {
       setLoadingQr(null);
     }
@@ -590,6 +616,9 @@ export function Channels() {
 
   async function refreshArtifact(channelId) {
     setLoadingQr(channelId);
+    setQrLoadError(null);
+    setQrModalChannelId(channelId);
+    setQrModalOpen(true);
     try {
       const art = await channelsService.getConnectionArtifact(channelId);
       if (art?.artifactType && art?.artifact) {
@@ -598,13 +627,17 @@ export function Channels() {
         toast.success('WhatsApp já está conectado.');
         await loadChannels();
       } else {
-        toast(art?.message || 'A conexão do WhatsApp ainda está aguardando QR ou código.');
+        const msg = art?.message || 'A conexão do WhatsApp ainda está aguardando QR ou código.';
+        setQrLoadError(msg);
+        toast(msg);
       }
       startArtifactPolling(channelId);
       startPolling(channelId);
     } catch (err) {
       console.error(err);
-      toast.error(resolveProviderErrorMessage(err));
+      const msg = resolveProviderErrorMessage(err);
+      setQrLoadError(msg);
+      toast.error(msg);
     } finally {
       setLoadingQr(null);
     }
@@ -638,6 +671,9 @@ export function Channels() {
           toast.success('WhatsApp conectado.');
           setQrCode(null);
           setPairingModal(null);
+          setQrModalOpen(false);
+          setQrModalChannelId(null);
+          setQrLoadError(null);
         }
       } catch (e) {
         console.warn('[channels] polling status:', e.message);
@@ -660,14 +696,56 @@ export function Channels() {
     if (liveQrCode) {
       setQrCode(liveQrCode);
       setPairingModal(null);
+      setQrModalOpen(true);
+      setQrLoadError(null);
     }
     if (connectionState === CHANNEL_CONNECTION_STATE.CONNECTED) {
       toast.success('Conectado com sucesso');
       setQrCode(null);
       setPairingModal(null);
+      setQrModalOpen(false);
+      setQrModalChannelId(null);
+      setQrLoadError(null);
       loadChannels();
     }
   }, [liveQrCode, connectionState]);
+
+  /** WAHA: renovar QR exibido (expira rápido) enquanto o modal estiver aberto. */
+  useEffect(() => {
+    if (!qrModalOpen || !qrModalChannelId) return;
+    const ch = channels.find((c) => c.id === qrModalChannelId);
+    if (String(ch?.provider || '').toLowerCase() !== 'waha') return;
+    const tick = async () => {
+      try {
+        const data = await channelsService.getQrCode(qrModalChannelId);
+        const hasQr = data?.qr || data?.qrCode || data?.qrcode;
+        if (hasQr) {
+          applyQrFromResponse(qrModalChannelId, data);
+          setQrLoadError(null);
+        }
+      } catch {
+        /* silencioso — polling principal trata status */
+      }
+    };
+    const id = setInterval(tick, 15000);
+    return () => clearInterval(id);
+  }, [qrModalOpen, qrModalChannelId, channels]);
+
+  /** QR emitido pelo backend via captura de logs (sessão única WAHA). */
+  useEffect(() => {
+    if (!qrModalOpen || !qrModalChannelId) return;
+    const ch = channels.find((c) => c.id === qrModalChannelId);
+    if (String(ch?.provider || '').toLowerCase() !== 'waha') return;
+    const onWahaQr = (payload) => {
+      if (typeof payload === 'string' && (payload.startsWith('data:image') || /^https?:\/\//i.test(payload))) {
+        sessionStorage.setItem(`qr_${qrModalChannelId}`, payload);
+        setQrCode(payload);
+        setQrLoadError(null);
+      }
+    };
+    socket.on('waha_qr', onWahaQr);
+    return () => socket.off('waha_qr', onWahaQr);
+  }, [qrModalOpen, qrModalChannelId, channels]);
 
   useEffect(() => {
     loadChannels();
@@ -789,12 +867,14 @@ export function Channels() {
           ['created', 'connecting', 'disconnected', 'close', 'unknown', ''].includes(st) ||
           !ch.status);
 
+      const prov = String(ch.provider || '').toLowerCase();
       const showArtifactBtn =
         !isConnected &&
         (st === 'connecting' ||
           st === 'created' ||
           phase === 'awaiting_connection' ||
-          (phase == null && ch.external_id));
+          (phase == null && ch.external_id) ||
+          prov === 'waha');
 
       return (
         <>
@@ -822,7 +902,11 @@ export function Channels() {
               disabled={busy}
               onClick={() => {
                 restorePairingOrQr(ch.id);
-                refreshArtifact(ch.id);
+                if (prov === 'waha') {
+                  void getQr(ch.id);
+                } else {
+                  refreshArtifact(ch.id);
+                }
               }}
             >
               {loadingQr === ch.id ? 'Atualizando...' : 'Ver QR / código'}
@@ -1261,29 +1345,57 @@ export function Channels() {
           </div>
         </div>
 
-        {qrCode && (
+        {(qrModalOpen || qrCode) && (
           <div
             style={styles.modalOverlay}
-            onClick={() => setQrCode(null)}
+            onClick={() => {
+              setQrModalOpen(false);
+              setQrModalChannelId(null);
+              setQrLoadError(null);
+              setQrCode(null);
+            }}
           >
             <div
               style={styles.modalCard}
               onClick={(e) => e.stopPropagation()}
             >
-              <h2 style={styles.modalTitle}>QR Code</h2>
-              <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
-                <img
-                  src={qrCode}
-                  alt="QR Code"
-                  style={{ maxWidth: '100%', borderRadius: 8 }}
-                />
+              <h2 style={styles.modalTitle}>QR Code WhatsApp</h2>
+              <div style={{ textAlign: 'center', marginTop: '0.5rem', minHeight: 120 }}>
+                {loadingQr === qrModalChannelId && !qrCode && (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Carregando QR…</p>
+                )}
+                {qrLoadError && !qrCode && (
+                  <p style={{ color: 'var(--danger, #f85149)', fontSize: '0.88rem', margin: '0.5rem 0' }}>
+                    {qrLoadError}
+                  </p>
+                )}
+                {qrCode && (
+                  <img
+                    src={qrCode}
+                    alt="QR Code WhatsApp"
+                    style={{ width: 220, maxWidth: '100%', borderRadius: 8 }}
+                  />
+                )}
+                {!loadingQr && !qrCode && !qrLoadError && qrModalOpen && (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+                    Nenhum QR carregado. Tente “Ver QR / código” de novo ou use “Conectar WhatsApp”.
+                  </p>
+                )}
               </div>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.5rem 0 0' }}>
+                O QR pode expirar; mantenha esta janela aberta — atualizamos automaticamente (WAHA).
+              </p>
               <div style={styles.modalFooter}>
                 <ConnectionStateBanner state={connectionState} error={connectionError} />
                 <button
                   type="button"
                   style={styles.buttonPrimary}
-                  onClick={() => setQrCode(null)}
+                  onClick={() => {
+                    setQrModalOpen(false);
+                    setQrModalChannelId(null);
+                    setQrLoadError(null);
+                    setQrCode(null);
+                  }}
                 >
                   Fechar
                 </button>
@@ -1296,6 +1408,16 @@ export function Channels() {
                 >
                   Parar conexão
                 </button>
+                {qrModalChannelId && (
+                  <button
+                    type="button"
+                    style={styles.buttonSecondary}
+                    disabled={loadingQr === qrModalChannelId}
+                    onClick={() => void getQr(qrModalChannelId)}
+                  >
+                    Atualizar QR
+                  </button>
+                )}
               </div>
             </div>
           </div>

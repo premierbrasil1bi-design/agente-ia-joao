@@ -4,6 +4,7 @@
  */
 
 import axios from 'axios';
+import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { getCurrentQr } from './wahaQrCapture.js';
 
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
@@ -77,6 +78,48 @@ export async function wahaRequest(method, path, data = null) {
     err.code = error.code;
     throw err;
   }
+}
+
+/**
+ * Obtém imagem QR da sessão via REST (GET /api/sessions/:name/qrcode ou /qr).
+ * Usa WAHA_API_URL (ex.: http://saas_waha:3000) e header x-api-key.
+ * @param {string} sessionName
+ * @returns {Promise<string|null>} data URL ou null se indisponível / rota inexistente
+ */
+export async function fetchWahaSessionQrcodeRest(sessionName) {
+  try {
+    validateWahaEnv();
+  } catch {
+    return null;
+  }
+  const name = String(sessionName ?? 'default').trim() || 'default';
+  const enc = encodeURIComponent(name);
+  const paths = [`/api/sessions/${enc}/qrcode`, `/api/sessions/${enc}/qr`];
+  for (const path of paths) {
+    try {
+      const data = await wahaRequest('GET', path);
+      const raw = data?.qr ?? data?.data ?? data?.base64 ?? data?.qrcode ?? data;
+      const payload =
+        extractQrPayload(data) ||
+        extractQrPayload(raw) ||
+        (typeof raw === 'string' && raw.trim() ? raw.trim() : null);
+      const url = toQrDataUrl(payload);
+      if (url) {
+        console.log('[WAHA] QR obtido via REST', path);
+        return url;
+      }
+    } catch (e) {
+      const st = e.httpStatus ?? e.response?.status;
+      if (st === 401) {
+        console.warn('[WAHA] QR REST não autorizado');
+        return null;
+      }
+      if (st === 404) {
+        continue;
+      }
+    }
+  }
+  return null;
 }
 
 export const wahaProvider = {
