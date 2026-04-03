@@ -59,3 +59,19 @@
   color: var(--text-muted);
   font-size: 0.9rem;
 }
+
+.providersCell {
+  min-width: 170px;
+  max-width: 240px;
+}
+
+.providersWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.providerBadge {
+  font-size: 0.7rem;
+  line-height: 1.1;
+}

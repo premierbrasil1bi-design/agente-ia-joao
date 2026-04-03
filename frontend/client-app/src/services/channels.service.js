@@ -10,6 +10,10 @@ export const channelsService = {
     return agentApi.request('/api/evolution/instances');
   },
 
+  getAllowedProviders() {
+    return agentApi.request('/api/providers/allowed');
+  },
+
   createChannel(payload) {
     return agentApi.request('/api/channels', {
       method: 'POST',

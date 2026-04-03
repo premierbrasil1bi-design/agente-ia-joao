@@ -468,6 +468,10 @@ router.get('/tenants', globalAdminAuth, async (req, res) => {
         t.plan,
         t.max_agents,
         t.max_messages,
+        t.agents_used_current_period,
+        t.messages_used_current_period,
+        t.billing_cycle_start,
+        t.allowed_providers,
         t.active,
         t.created_at
       FROM tenants t
@@ -493,6 +497,7 @@ router.get('/tenants', globalAdminAuth, async (req, res) => {
         name: t.name,
         max_agents: t.max_agents,
         max_messages: t.max_messages,
+        allowed_providers: Array.isArray(t.allowed_providers) ? t.allowed_providers : [],
         agents_used_current_period: t.agents_used_current_period ?? 0,
         messages_used_current_period: t.messages_used_current_period ?? 0,
         billing_cycle_start: t.billing_cycle_start ?? null,
@@ -551,7 +556,7 @@ router.delete('/channels/:channelId', globalAdminAuth, channelsCtrl.deleteChanne
 router.get('/tenants/:id', globalAdminAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, name, slug, plan, max_agents, max_messages, active, created_at FROM tenants WHERE id = $1`,
+      `SELECT id, name, slug, plan, max_agents, max_messages, agents_used_current_period, messages_used_current_period, billing_cycle_start, allowed_providers, active, created_at FROM tenants WHERE id = $1`,
       [req.params.id]
     );
     const row = rows[0];
@@ -574,6 +579,7 @@ router.get('/tenants/:id', globalAdminAuth, async (req, res) => {
       name: t.name,
       max_agents: t.max_agents,
       max_messages: t.max_messages,
+      allowed_providers: Array.isArray(t.allowed_providers) ? t.allowed_providers : [],
       agents_used_current_period: t.agents_used_current_period ?? 0,
       messages_used_current_period: t.messages_used_current_period ?? 0,
       billing_cycle_start: t.billing_cycle_start ?? null,

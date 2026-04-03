@@ -1,0 +1,222 @@
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 720px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.header p {
+  margin: 0.35rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.35rem 1.5rem;
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.15);
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1.1rem;
+}
+
+.planBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.28rem 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-radius: 6px;
+  background: rgb(88 166 255 / 0.15);
+  color: var(--accent);
+  border: 1px solid rgb(88 166 255 / 0.35);
+}
+
+.planBadgeEnterprise {
+  background: rgb(163 113 247 / 0.18);
+  color: #c4a5f5;
+  border-color: rgb(163 113 247 / 0.4);
+}
+
+.planBadgeFree {
+  background: rgb(139 148 158 / 0.2);
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  margin-bottom: 1.1rem;
+}
+
+.alertWarning {
+  background: rgb(210 153 34 / 0.12);
+  border: 1px solid rgb(210 153 34 / 0.45);
+  color: #e3b341;
+}
+
+.alertError {
+  background: rgb(248 81 73 / 0.12);
+  border: 1px solid rgb(248 81 73 / 0.45);
+  color: #ff8a80;
+}
+
+.alert strong {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+.alertActions {
+  margin-top: 0.65rem;
+}
+
+.btnUpgrade {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem 1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  background: linear-gradient(180deg, #58a6ff 0%, #388bfd 100%);
+  color: #0d1117;
+  text-decoration: none;
+  transition: filter 0.15s ease, transform 0.12s ease;
+}
+
+.btnUpgrade:hover {
+  filter: brightness(1.08);
+}
+
+.btnUpgrade:active {
+  transform: scale(0.98);
+}
+
+.summaryText {
+  margin: 0 0 1rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.summaryText em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.progressTrack {
+  height: 10px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.35);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.35s ease, background 0.2s ease;
+  background: linear-gradient(90deg, #388bfd, #58a6ff);
+}
+
+.progressFillWarn {
+  background: linear-gradient(90deg, #9a6700, #d29922);
+}
+
+.progressFillDanger {
+  background: linear-gradient(90deg, #b62324, #f85149);
+}
+
+.progressOver {
+  box-shadow: 0 0 12px rgb(248 81 73 / 0.35);
+}
+
+.metaRow {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.metaRow strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.unlimitedNote {
+  margin: 0.5rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.loading {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  padding: 2rem 0;
+}
+
+.error {
+  color: var(--danger);
+  padding: 1rem;
+  background: rgb(248 81 73 / 0.08);
+  border: 1px solid rgb(248 81 73 / 0.35);
+  border-radius: 8px;
+  font-size: 0.875rem;
+}
+
+.retryBtn {
+  margin-top: 0.75rem;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.8125rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.retryBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}

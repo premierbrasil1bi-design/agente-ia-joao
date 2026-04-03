@@ -1,4 +1,5 @@
 import { pool } from '../db/pool.js';
+import { sanitizeAllowedProviders } from '../utils/tenantAllowedProviders.js';
 
 export const createTenant = async (data) => {
   const name = String(data?.name ?? data?.nome_empresa ?? '').trim() || 'Unnamed';
@@ -7,6 +8,7 @@ export const createTenant = async (data) => {
   const max_agents = data?.max_agents ?? null;
   const max_messages = data?.max_messages ?? null;
   const active = data?.active !== undefined ? Boolean(data.active) : true;
+  const allowedProviders = sanitizeAllowedProviders(data?.allowed_providers);
 
   const result = await pool.query(
     `
@@ -16,12 +18,13 @@ export const createTenant = async (data) => {
       plan,
       max_agents,
       max_messages,
-      active
+      active,
+      allowed_providers
     )
-    VALUES ($1, $2, $3, $4, $5, $6)
+    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
     RETURNING *;
     `,
-    [name, slug, plan, max_agents, max_messages, active]
+    [name, slug, plan, max_agents, max_messages, active, JSON.stringify(allowedProviders)]
   );
 
   return result.rows[0];
@@ -42,6 +45,73 @@ export const getTenantById = async (id) => {
   return result.rows[0] ?? null;
 };
 
+/**
+ * Se o ciclo (desde billing_cycle_start ou created_at) expirou, zera messages_used_current_period e renova billing_cycle_start.
+ * @param {string} tenantId
+ * @param {number} [cycleDays=30]
+ * @returns {Promise<object|null>}
+ */
+export async function refreshTenantAfterBillingCycleCheck(tenantId, cycleDays = 30) {
+  const days = Math.max(1, Number(cycleDays) || 30);
+  const r = await pool.query(
+    `
+    UPDATE tenants
+    SET
+      messages_used_current_period = 0,
+      billing_cycle_start = NOW(),
+      updated_at = NOW()
+    WHERE id = $1::uuid
+      AND COALESCE(billing_cycle_start, created_at) < NOW() - ($2::int * INTERVAL '1 day')
+    RETURNING *;
+    `,
+    [tenantId, days]
+  );
+  if (r.rows[0]) return r.rows[0];
+  return getTenantById(tenantId);
+}
+
+/**
+ * Consome 1 unidade de quota de mensagens de forma atômica (sem race entre checagem e incremento).
+ * @param {string} tenantId
+ * @returns {Promise<{ id: string, max_messages: number | null, messages_used_current_period: number } | null>}
+ */
+export async function tryConsumeTenantMessageQuota(tenantId) {
+  const r = await pool.query(
+    `
+    UPDATE tenants
+    SET
+      messages_used_current_period = COALESCE(messages_used_current_period, 0) + 1,
+      updated_at = NOW()
+    WHERE id = $1::uuid
+      AND (
+        max_messages IS NULL
+        OR max_messages <= 0
+        OR messages_used_current_period < max_messages
+      )
+    RETURNING id, max_messages, messages_used_current_period;
+    `,
+    [tenantId]
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
+ * Reverte uma unidade consumida quando o envio falhou após tryConsume (mantém contagem alinhada a entregas tentadas com sucesso).
+ * @param {string} tenantId
+ */
+export async function refundTenantMessageQuota(tenantId) {
+  await pool.query(
+    `
+    UPDATE tenants
+    SET
+      messages_used_current_period = GREATEST(0, COALESCE(messages_used_current_period, 0) - 1),
+      updated_at = NOW()
+    WHERE id = $1::uuid;
+    `,
+    [tenantId]
+  );
+}
+
 export const updateTenant = async (id, data) => {
   const name = data?.name != null ? String(data.name).trim() : null;
   const slug = data?.slug != null ? String(data.slug).trim() : null;
@@ -54,6 +124,8 @@ export const updateTenant = async (id, data) => {
     active = s === 'ativo' || s === 'active' || s === '1' || s === 'true';
   }
   if (active === undefined) active = null;
+  const allowedProviders =
+    data?.allowed_providers !== undefined ? sanitizeAllowedProviders(data.allowed_providers) : undefined;
 
   const result = await pool.query(
     `
@@ -64,11 +136,21 @@ export const updateTenant = async (id, data) => {
       plan = COALESCE($3, plan),
       max_agents = COALESCE($4, max_agents),
       max_messages = COALESCE($5, max_messages),
-      active = COALESCE($6, active)
-    WHERE id = $7
+      active = COALESCE($6, active),
+      allowed_providers = COALESCE($7::jsonb, allowed_providers)
+    WHERE id = $8
     RETURNING *;
     `,
-    [name || null, slug ?? null, plan ?? null, max_agents ?? null, max_messages ?? null, active ?? null, id]
+    [
+      name || null,
+      slug ?? null,
+      plan ?? null,
+      max_agents ?? null,
+      max_messages ?? null,
+      active ?? null,
+      allowedProviders !== undefined ? JSON.stringify(allowedProviders) : null,
+      id,
+    ]
   );
 
   return result.rows[0] ?? null;

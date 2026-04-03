@@ -300,6 +300,13 @@ router.post('/send', async (req, res) => {
       },
     });
   } catch (err) {
+    if (err?.code === 'MESSAGE_LIMIT_EXCEEDED') {
+      return res.status(err.httpStatus || 429).json({
+        error: err.code,
+        message: err.message,
+        details: err.details || null,
+      });
+    }
     console.error('[messages] send:', err.message);
     return res.status(500).json({ error: 'Falha ao enviar mensagem.' });
   }

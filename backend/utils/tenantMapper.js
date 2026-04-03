@@ -15,6 +15,7 @@ export function toTenantApiRow(dbRow) {
     status: statusStr || (isActive ? 'ativo' : 'inativo'),
     name: nomeEmpresa,
     active: isActive,
+    allowed_providers: Array.isArray(dbRow.allowed_providers) ? dbRow.allowed_providers : [],
   };
 }
 

@@ -2,6 +2,7 @@ import * as wahaService from '../services/wahaService.js';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { BaseProvider } from './base.provider.js';
 import { checkProviderHealth } from '../services/providerHealth.service.js';
+import * as wahaProvision from '../services/wahaProvision.service.js';
 
 export class WahaProvider extends BaseProvider {
   constructor(config = {}) {
@@ -90,5 +91,24 @@ export class WahaProvider extends BaseProvider {
     const out = await wahaService.sendMessage(this.session, digits, text);
     if (!out.ok) throw new Error(out.error || 'WAHA sendMessage failed');
     return out.data;
+  }
+
+  async provisionInstance(channel = null) {
+    const channelId = channel?.id || this.channelId;
+    const tenantId = channel?.tenant_id || this.tenantId;
+    if (!channelId || !tenantId) throw new Error('WahaProvider.provisionInstance exige channelId e tenantId.');
+    return wahaProvision.provisionWhatsAppInstance(channelId, tenantId);
+  }
+
+  async disconnect() {
+    const out = await wahaService.logoutSession(this.session);
+    if (!out.ok) throw new Error(out.error || 'WAHA disconnect failed');
+    return out;
+  }
+
+  async removeInstance() {
+    const out = await wahaService.deleteSession(this.session);
+    if (!out.ok) throw new Error(out.error || 'WAHA removeSession failed');
+    return out;
   }
 }

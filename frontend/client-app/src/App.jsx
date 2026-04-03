@@ -6,6 +6,7 @@ import { Prompts } from './pages/Prompts';
 import { Agents } from './pages/Agents';
 import { Channels } from './pages/Channels';
 import { Inbox } from './pages/Inbox';
+import { MessageUsage } from './pages/MessageUsage';
 import { Login } from './pages/Login';
 import { useAgentAuth } from './context/AgentAuthContext';
 
@@ -32,6 +33,7 @@ function Layout({ children }) {
             <Link to="/agents" style={linkStyle}>Agents</Link>
             <Link to="/channels" style={linkStyle}>Channels</Link>
             <Link to="/inbox" style={linkStyle}>Inbox</Link>
+            <Link to="/uso-mensagens" style={linkStyle}>Uso de mensagens</Link>
           </nav>
         </aside>
         <main style={{ flex: 1, padding: '1.5rem 2rem', overflow: 'auto' }}>
@@ -77,6 +79,7 @@ export default function App() {
                 <Route path="/agents" element={<Agents />} />
                 <Route path="/channels" element={<Channels />} />
                 <Route path="/inbox" element={<Inbox />} />
+                <Route path="/uso-mensagens" element={<MessageUsage />} />
               </Routes>
             </Layout>
           </RequireAuth>

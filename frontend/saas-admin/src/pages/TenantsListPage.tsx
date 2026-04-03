@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Card, Table, TableHead, TableBody, TableRow, Badge, Button, Skeleton, Input } from "../components/ui";
 import { adminApi, type Tenant } from "../api/admin";
 import styles from "./TenantsListPage.module.css";
+import { getTenantProvidersDisplay } from "../utils/tenantProviders";
 
 export default function TenantsListPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -60,6 +61,7 @@ export default function TenantsListPage() {
                 <th>Slug</th>
                 <th>Plano</th>
                 <th>Status</th>
+                <th>Providers</th>
                 <th>Agentes</th>
                 <th>Mensagens</th>
                 <th>Ciclo</th>
@@ -78,6 +80,15 @@ export default function TenantsListPage() {
                   <td>{t.plan}</td>
                   <td>
                     <Badge variant={statusVariant(t.status)}>{t.status}</Badge>
+                  </td>
+                  <td className={styles.providersCell}>
+                    <div className={styles.providersWrap}>
+                      {getTenantProvidersDisplay(t.allowed_providers).map((item) => (
+                        <Badge key={`${t.id}-${item.type}`} variant={item.badgeVariant} className={styles.providerBadge}>
+                          {item.label}
+                        </Badge>
+                      ))}
+                    </div>
                   </td>
                   <td>
                     {t.agents_used_current_period ?? 0} / {t.max_agents ?? "-"}

@@ -1,7 +1,6 @@
 import express from 'express';
 import axios from 'axios';
 import { processIncomingMessage } from '../services/messagePipeline.js';
-import * as evolutionService from '../services/evolutionService.js';
 import * as channelsRepo from '../repositories/channelsRepository.js';
 import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service.js';
 import { resolveAgentForChannel } from '../services/agentRouter.js';
@@ -120,7 +119,9 @@ router.post('/agents/webhook', async (req, res) => {
               if (ch) {
                 await sendWhatsAppTextForChannel(ch, number, result.replyText);
               } else {
-                await evolutionService.sendText(instanceForSend, number, result.replyText);
+                console.warn('[WEBHOOK] canal não encontrado para instance; envio ignorado para manter abstraction', {
+                  instance: instanceForSend,
+                });
               }
               console.log('[WEBHOOK] Reply sent to', number);
             } catch (sendErr) {

@@ -12,6 +12,18 @@ export interface Tenant {
   messages_used_current_period?: number;
   billing_cycle_start?: string;
   created_at?: string;
+  allowed_providers?: string[];
+}
+
+export interface TenantUpsertPayload {
+  nome_empresa?: string;
+  name?: string;
+  slug?: string;
+  plan?: string;
+  status?: string;
+  max_agents?: number;
+  max_messages?: number;
+  allowed_providers?: string[];
 }
 
 export interface DashboardStats {
@@ -264,6 +276,20 @@ export const adminApi = {
       async () => request<Tenant>(`/api/global-admin/tenants/${id}`),
       MOCK_TENANTS.find((t) => t.id === id) ?? null
     );
+  },
+
+  createTenant(payload: TenantUpsertPayload): Promise<Tenant> {
+    return request<Tenant>("/api/platform/tenants", {
+      method: "POST",
+      body: payload,
+    });
+  },
+
+  updateTenant(tenantId: string, payload: TenantUpsertPayload): Promise<Tenant> {
+    return request<Tenant>(`/api/global-admin/tenants/${tenantId}`, {
+      method: "PATCH",
+      body: payload,
+    });
   },
 
   async getPlans(): Promise<Plan[]> {

@@ -12,21 +12,14 @@ import {
 import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service.js';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { deriveFlowPhase } from '../utils/whatsappChannelFlow.js';
-import * as whatsappEngine from '../services/whatsappEngine.js';
-import {
-  getProvider,
-  getProviderForChannel,
-  mergeProviderConfigForConnect,
-  resolveProvider,
-} from '../providers/provider.factory.js';
+import { resolveProvider } from '../providers/provider.factory.js';
 import {
   deriveHealth,
   emitChannelError,
   emitChannelUpdated,
   emitChannelSocketEvent,
 } from '../utils/channelRealtime.js';
-import { getResolvedWahaUrl, isWahaUnreachableError } from '../services/wahaService.js';
-import { getProvidersHealthSnapshot } from '../services/providerHealth.service.js';
+import { ProviderAccessError } from '../services/providerAccess.service.js';
 
 async function getChannelFromReq(req, res) {
   const tenantId = req.tenantId || req.user?.tenantId;
@@ -47,22 +40,6 @@ function isEvolutionOffline(err) {
   return c === 'ECONNREFUSED' || c === 'ENOTFOUND' || c === 'ETIMEDOUT';
 }
 
-function normalizeProviderCandidates(channel, preferred) {
-  const fallback = Array.isArray(channel?.fallback_providers) ? channel.fallback_providers : [];
-  const normalizedFallback = fallback.map((p) => String(p || '').toLowerCase().trim()).filter(Boolean);
-  const ordered = [preferred, ...normalizedFallback].filter(Boolean);
-  return [...new Set(ordered)];
-}
-
-function buildChannelForProvider(channel, providerName) {
-  const cfg = channel?.provider_config && typeof channel.provider_config === 'object' ? channel.provider_config : {};
-  return {
-    ...channel,
-    provider: providerName,
-    provider_config: { ...cfg, type: providerName },
-  };
-}
-
 export async function sendChannelMessage(req, res) {
   try {
     const channel = await getChannelFromReq(req, res);
@@ -79,6 +56,20 @@ export async function sendChannelMessage(req, res) {
     await sendWhatsAppTextForChannel(channel, String(number).trim(), String(text));
     return res.status(200).json({ success: true });
   } catch (err) {
+    if (
+      err instanceof ProviderAccessError ||
+      err?.code === 'NO_ALLOWED_PROVIDER_AVAILABLE' ||
+      err?.code === 'MESSAGE_LIMIT_EXCEEDED'
+    ) {
+      const status =
+        err.httpStatus || (err?.code === 'MESSAGE_LIMIT_EXCEEDED' ? 429 : 403);
+      return res.status(status).json({
+        success: false,
+        error: err.code || 'PROVIDER_NOT_ALLOWED',
+        message: err.message,
+        details: err.details || null,
+      });
+    }
     console.error('[channelConnection] sendChannelMessage:', err.message);
     return res.status(500).json({
       success: false,
@@ -95,144 +86,7 @@ export async function connectChannel(req, res) {
     if (!channel) return;
     channelRef = channel;
 
-    console.log('[CONNECT_CHANNEL] channelId:', channel.id, 'tenantId:', channel.tenant_id);
     const providerLc = resolveProvider(channel);
-    const isWhatsapp = String(channel.type || '').toLowerCase() === 'whatsapp';
-    const providerCfg = mergeProviderConfigForConnect(channel);
-    const instanceName =
-      providerCfg.instance || providerCfg.instanceName || channel.external_id || channel.instance || null;
-    console.log('CONNECT CHANNEL ID:', channel.id);
-    console.log('CHANNEL DATA:', {
-      id: channel.id,
-      provider: channel.provider,
-      type: channel.type,
-      external_id: channel.external_id,
-      instance: channel.instance,
-    });
-    console.log('INSTANCE:', instanceName);
-    console.log('PROVIDER:', providerLc);
-    if (providerLc === 'waha') {
-      try {
-        console.log('[WAHA] URL:', getResolvedWahaUrl());
-      } catch {
-        console.log('[WAHA] URL: (indisponível na config)');
-      }
-    }
-    if (isWhatsapp) {
-      console.log('[CONNECT]');
-      if (!providerLc) {
-        return res.status(400).json({
-          success: false,
-          error: 'Provider não definido no canal. Defina provider ou provider_config.type.',
-        });
-      }
-      const candidates = normalizeProviderCandidates(channel, providerLc);
-      const snapshot = await getProvidersHealthSnapshot();
-      const preferredState = snapshot[providerLc]?.status || null;
-      if (preferredState === 'degraded') {
-        console.log('[FAILOVER]', { from: providerLc, to: providerLc, reason: 'provider degraded' });
-      }
-      const ordered = candidates.filter((p) => snapshot[p]?.status !== 'down');
-
-      let qr = null;
-      let providerUsed = null;
-      let providerCfgUsed = null;
-      let lastErr = null;
-      const statusMap = Object.fromEntries(candidates.map((p) => [p, snapshot[p]?.status || 'unknown']));
-      const tried = [];
-
-      if (ordered.length === 0) {
-        const e = new Error('NO_PROVIDER_AVAILABLE');
-        e.code = 'NO_PROVIDER_AVAILABLE';
-        e.details = { tried, statuses: statusMap };
-        throw e;
-      }
-
-      let previousProvider = providerLc;
-      for (const providerName of ordered) {
-        tried.push(providerName);
-        if (providerName !== previousProvider) {
-          const reason = lastErr ? 'provider error' : 'provider down / degraded';
-          console.log('[FAILOVER]', { from: previousProvider, to: providerName, reason });
-        }
-        try {
-          const providerChannel = buildChannelForProvider(channel, providerName);
-          const providerCfg = mergeProviderConfigForConnect(providerChannel);
-          const providerInstance =
-            providerName === providerLc ? getProviderForChannel(channel) : getProvider(providerName, providerCfg);
-          await providerInstance.connect();
-          qr = await providerInstance.getQRCode();
-          providerUsed = providerName;
-          providerCfgUsed = providerCfg;
-          break;
-        } catch (e) {
-          lastErr = e;
-          previousProvider = providerName;
-          console.error('[FAILOVER] connect provider failed', {
-            provider: providerName,
-            message: e?.message || 'unknown_error',
-          });
-        }
-      }
-      if (!providerUsed) {
-        const e = lastErr || new Error('NO_PROVIDER_AVAILABLE');
-        if (!e.code) e.code = 'NO_PROVIDER_AVAILABLE';
-        if (!e.details) e.details = { tried, statuses: statusMap };
-        throw e;
-      }
-      console.log('[QR RECEIVED]', !!qr);
-      const patch = {
-        provider: providerUsed,
-        connection_status: qr ? 'connecting' : 'connected',
-        last_error: null,
-      };
-      if (providerUsed === 'waha' && providerCfgUsed?.session) {
-        patch.external_id = providerCfgUsed.session;
-        patch.instance = providerCfgUsed.session;
-      }
-      const updated = await channelRepo.updateConnection(channel.id, channel.tenant_id, patch);
-      const latencyMs = Date.now() - startedAt;
-      emitChannelUpdated(updated || channel, {
-        source: 'connect.provider_factory',
-        latencyMs,
-        health: deriveHealth(updated?.connection_status || (qr ? 'connecting' : 'connected'), latencyMs, false),
-      });
-      const refreshed = await channelRepo.findById(channel.id, channel.tenant_id);
-      return res.status(200).json({
-        success: true,
-        channelId: channel.id,
-        provider: providerUsed,
-        providerUsed,
-        qr: qr || null,
-        qrcode: qr || null,
-        channel: refreshed || channel,
-        status: qr ? 'connecting' : 'connected',
-        latencyMs,
-        health: deriveHealth(qr ? 'connecting' : 'connected', latencyMs, false),
-      });
-    }
-
-    // Fallback legado para canais não-WhatsApp ou fluxos antigos.
-    const shouldUseEngine =
-      providerLc && ['waha', 'evolution', 'zapi'].includes(providerLc);
-    if (shouldUseEngine) {
-      const out = await whatsappEngine.connectChannel(channel);
-      const refreshed = await channelRepo.findById(channel.id, channel.tenant_id);
-      const latencyMs = Date.now() - startedAt;
-      return res.status(200).json({
-        success: true,
-        channelId: channel.id,
-        provider: out.provider,
-        providerUsed: out.provider,
-        qr: out.qr || null,
-        qrcode: out.qr || null,
-        channel: refreshed || channel,
-        status: out.connected ? 'connected' : 'connecting',
-        latencyMs,
-        health: deriveHealth(out.connected ? 'connected' : 'connecting', latencyMs, false),
-      });
-    }
-
     const result = await channelConnectionService.connectWhatsAppChannel(channel);
 
     const { artifactType, artifact } = extractConnectArtifactFromPayload(result.connectResponse);
@@ -242,6 +96,7 @@ export async function connectChannel(req, res) {
     res.status(200).json({
       success: true,
       channelId: result.channel.id,
+      provider: resolveProvider(result.channel) || providerLc || null,
       providerUsed: resolveProvider(result.channel) || providerLc || null,
       instance: result.instanceName,
       status: flowPhase,
@@ -259,6 +114,14 @@ export async function connectChannel(req, res) {
         : {}),
     });
   } catch (err) {
+    if (err instanceof ProviderAccessError || err?.code === 'NO_ALLOWED_PROVIDER_AVAILABLE') {
+      return res.status(err.httpStatus || 403).json({
+        success: false,
+        error: err.code || 'PROVIDER_NOT_ALLOWED',
+        message: err.message,
+        details: err.details || null,
+      });
+    }
     console.error('[channelConnection] connectChannel:', err.message, err.response?.status || err.code || '');
     emitChannelError(channelRef, err, { operation: 'connectChannel' });
     if (err.code === 'INSTANCE_NOT_FOUND') {
@@ -285,34 +148,10 @@ export async function connectChannel(req, res) {
         error: err.message,
       });
     }
-    if (err.httpStatus === 401) {
-      return res.status(401).json({
-        success: false,
-        error: err.message || 'WAHA: API Key inválida ou ausente.',
-      });
-    }
-    if (channelRef && /WAHA_API_URL|WAHA_API_KEY/.test(err.message || '')) {
-      return res.status(500).json({
-        success: false,
-        error: err.message,
-        code: 'WAHA_CONFIG',
-      });
-    }
     if (isEvolutionOffline(err)) {
       return res.status(503).json({
         success: false,
         error: 'Evolution API está offline ou inacessível. Verifique o container/serviço e a variável EVOLUTION_API_URL.',
-      });
-    }
-    if (
-      channelRef &&
-      resolveProvider(channelRef) === 'waha' &&
-      (err.code === 'WAHA_UNREACHABLE' || isWahaUnreachableError(err))
-    ) {
-      return res.status(503).json({
-        success: false,
-        error:
-          'WAHA está offline ou inacessível. Verifique WAHA_API_URL e se o serviço está em execução.',
       });
     }
     res.status(500).json({
@@ -333,37 +172,6 @@ export async function getQrCode(req, res) {
     channel = await getChannelFromReq(req, res);
     if (!channel) return;
 
-    const isWhatsapp = String(channel.type || '').toLowerCase() === 'whatsapp';
-    const providerLc = resolveProvider(channel);
-    if (isWhatsapp && ['waha', 'evolution', 'zapi', 'official', 'whatsapp_oficial'].includes(providerLc)) {
-      let provider;
-      try {
-        provider = getProviderForChannel(channel);
-      } catch (e) {
-        return res.status(400).json({
-          success: false,
-          error: e.message || 'Provider inválido.',
-        });
-      }
-      const qr = await provider.getQRCode();
-      console.log('[PROVIDER]', providerLc);
-      console.log('[QR RECEIVED]', !!qr);
-      emitChannelSocketEvent('channel:qr', {
-        channelId: channel.id,
-        tenantId: channel.tenant_id,
-        status: 'PENDING',
-        qrCode: qr || null,
-        connected: false,
-      });
-      console.log('[CHANNEL SOCKET] QR emitted', { id: channel.id, tenantId: channel.tenant_id });
-      return res.status(200).json({
-        success: true,
-        qr,
-        qrcode: qr,
-      });
-    }
-
-    console.log('[GET_QRCODE] channelId:', channel.id);
     const qr = await channelConnectionService.getChannelQrCode(channel);
     const raw = extractQrPayload(qr);
     const dataUrl = toQrDataUrl(raw);
@@ -375,10 +183,14 @@ export async function getQrCode(req, res) {
       });
     }
 
+    const provider = resolveProvider(channel);
     res.status(200).json({
       success: true,
+      provider,
+      qrCode: dataUrl,
       qr: dataUrl,
       qrcode: dataUrl,
+      status: 'PENDING',
     });
     emitChannelSocketEvent('channel:qr', {
       channelId: channel.id,
@@ -389,6 +201,14 @@ export async function getQrCode(req, res) {
     });
     console.log('[CHANNEL SOCKET] QR emitted', { id: channel.id, tenantId: channel.tenant_id });
   } catch (err) {
+    if (err instanceof ProviderAccessError || err?.code === 'NO_ALLOWED_PROVIDER_AVAILABLE') {
+      return res.status(err.httpStatus || 403).json({
+        success: false,
+        error: err.code || 'PROVIDER_NOT_ALLOWED',
+        message: err.message,
+        details: err.details || null,
+      });
+    }
     console.error('[channelConnection] getQrCode:', err.message, err.response?.status || err.code || '');
     if (err.message && String(err.message).includes('Provider não suportado')) {
       return res.status(400).json({
@@ -396,29 +216,10 @@ export async function getQrCode(req, res) {
         error: err.message,
       });
     }
-    if (err.httpStatus === 401) {
-      return res.status(401).json({
-        success: false,
-        error: err.message || 'WAHA: API Key inválida ou ausente.',
-      });
-    }
-    if (channel && /WAHA_API_URL|WAHA_API_KEY/.test(err.message || '')) {
-      return res.status(500).json({
-        success: false,
-        error: err.message,
-        code: 'WAHA_CONFIG',
-      });
-    }
     if (isEvolutionOffline(err)) {
       return res.status(503).json({
         success: false,
         error: 'Evolution API está offline ou inacessível.',
-      });
-    }
-    if (channel && resolveProvider(channel) === 'waha' && (err.code === 'WAHA_UNREACHABLE' || isWahaUnreachableError(err))) {
-      return res.status(503).json({
-        success: false,
-        error: 'WAHA está offline ou inacessível.',
       });
     }
     res.status(500).json({
@@ -459,7 +260,7 @@ export async function getStatus(req, res) {
       });
     }
 
-    const rawState = result.state?.state ?? result.state?.instance?.state ?? null;
+    const rawState = result.state?.status ?? result.state?.state ?? result.state?.instance?.state ?? null;
     const publicStatus = result.publicStatus ?? result.normalizedStatus;
     const normalizedRealtimeStatus =
       String(publicStatus || '').toLowerCase() === 'connected'
@@ -513,6 +314,8 @@ export async function getStatus(req, res) {
 
     res.status(200).json({
       success: true,
+      provider: resolveProvider(result.channel || channel),
+      connected: normalizedRealtimeStatus === 'CONNECTED',
       status: result.normalizedStatus,
       connection_status: connectionStatus,
       normalizedStatus: result.normalizedStatus,
@@ -525,6 +328,14 @@ export async function getStatus(req, res) {
       health: derived,
     });
   } catch (err) {
+    if (err instanceof ProviderAccessError || err?.code === 'NO_ALLOWED_PROVIDER_AVAILABLE') {
+      return res.status(err.httpStatus || 403).json({
+        success: false,
+        error: err.code || 'PROVIDER_NOT_ALLOWED',
+        message: err.message,
+        details: err.details || null,
+      });
+    }
     console.error('[channelConnection] getStatus:', err.message, err.response?.status || err.code || '');
     emitChannelError(channelRef, err, { operation: 'getStatus' });
     return res.status(200).json({
@@ -576,6 +387,14 @@ export async function getConnectionArtifact(req, res) {
 
     res.status(200).json({ success: true, ...out });
   } catch (err) {
+    if (err instanceof ProviderAccessError || err?.code === 'NO_ALLOWED_PROVIDER_AVAILABLE') {
+      return res.status(err.httpStatus || 403).json({
+        success: false,
+        error: err.code || 'PROVIDER_NOT_ALLOWED',
+        message: err.message,
+        details: err.details || null,
+      });
+    }
     console.error('[channelConnection] getConnectionArtifact:', err.message);
     if (isEvolutionOffline(err)) {
       return res.status(503).json({
@@ -600,9 +419,19 @@ export async function disconnectChannel(req, res) {
 
     res.status(200).json({
       success: true,
+      provider: resolveProvider(channel),
+      disconnected: true,
       message: 'Canal desconectado.',
     });
   } catch (err) {
+    if (err instanceof ProviderAccessError || err?.code === 'NO_ALLOWED_PROVIDER_AVAILABLE') {
+      return res.status(err.httpStatus || 403).json({
+        success: false,
+        error: err.code || 'PROVIDER_NOT_ALLOWED',
+        message: err.message,
+        details: err.details || null,
+      });
+    }
     console.error('[channelConnection] disconnectChannel:', err.message);
     res.status(500).json({
       success: false,

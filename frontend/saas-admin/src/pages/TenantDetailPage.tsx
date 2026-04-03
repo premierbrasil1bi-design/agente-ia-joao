@@ -12,6 +12,7 @@ import {
   type TenantBilling,
 } from "../api/admin";
 import styles from "./TenantDetailPage.module.css";
+import { getTenantProvidersDisplay, providerOptions, sanitizeAllowedProviders } from "../utils/tenantProviders";
 
 const TABS = [
   { id: "overview", label: "Visão geral" },
@@ -40,11 +41,68 @@ export default function TenantDetailPage() {
   const [logsLoading, setLogsLoading] = useState(false);
   const [billing, setBilling] = useState<TenantBilling | null>(null);
   const [billingLoading, setBillingLoading] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [savingTenant, setSavingTenant] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [editForm, setEditForm] = useState({
+    nome_empresa: "",
+    slug: "",
+    plan: "free",
+    status: "ativo",
+    max_agents: 0,
+    max_messages: 0,
+    allowed_providers: [] as string[],
+  });
 
   useEffect(() => {
     if (!tenantId) return;
-    adminApi.getTenant(tenantId).then(setTenant);
+    adminApi.getTenant(tenantId).then((data) => {
+      setTenant(data);
+      if (data) {
+        setEditForm({
+          nome_empresa: data.nome_empresa || "",
+          slug: data.slug || "",
+          plan: data.plan || "free",
+          status: data.status || "ativo",
+          max_agents: Number(data.max_agents ?? 0),
+          max_messages: Number(data.max_messages ?? 0),
+          allowed_providers: sanitizeAllowedProviders(data.allowed_providers),
+        });
+      }
+    });
   }, [tenantId]);
+
+  function toggleProvider(provider: string) {
+    setEditForm((prev) => {
+      const current = new Set(prev.allowed_providers || []);
+      if (current.has(provider)) current.delete(provider);
+      else current.add(provider);
+      return { ...prev, allowed_providers: [...current] };
+    });
+  }
+
+  async function handleSaveTenant() {
+    if (!tenantId) return;
+    setSavingTenant(true);
+    setSaveError("");
+    try {
+      const updated = await adminApi.updateTenant(tenantId, {
+        name: editForm.nome_empresa,
+        slug: editForm.slug,
+        plan: editForm.plan,
+        status: editForm.status,
+        max_agents: Number(editForm.max_agents || 0),
+        max_messages: Number(editForm.max_messages || 0),
+        allowed_providers: sanitizeAllowedProviders(editForm.allowed_providers),
+      });
+      setTenant(updated);
+      setIsEditing(false);
+    } catch (err: any) {
+      setSaveError(err?.message || "Erro ao salvar tenant.");
+    } finally {
+      setSavingTenant(false);
+    }
+  }
 
   useEffect(() => {
     if (!tenantId) return;
@@ -149,7 +207,9 @@ export default function TenantDetailPage() {
           <Link to={`/tenants/${tenantId}/users`}>
             <Button variant="secondary">Usuários do tenant</Button>
           </Link>
-          <Button variant="secondary">Editar</Button>
+          <Button variant="secondary" onClick={() => setIsEditing((v) => !v)}>
+            {isEditing ? "Cancelar edição" : "Editar"}
+          </Button>
           {tenant.status === "ativo" ? (
             <Button variant="danger">Suspender</Button>
           ) : (
@@ -174,7 +234,101 @@ export default function TenantDetailPage() {
               <dd>{Number(tenant?.messages_used_current_period ?? 0).toLocaleString("pt-BR")}</dd>
               <dt>Início do ciclo</dt>
               <dd>{tenant.billing_cycle_start?.slice(0, 10) ?? "-"}</dd>
+              <dt>Providers liberados</dt>
+              <dd>
+                <div className={styles.providersWrap}>
+                  {getTenantProvidersDisplay(tenant.allowed_providers).map((item) => (
+                    <Badge key={item.type} variant={item.badgeVariant} className={styles.providerBadge}>
+                      {item.label}
+                    </Badge>
+                  ))}
+                </div>
+              </dd>
             </dl>
+            {isEditing ? (
+              <div style={{ marginTop: 20, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+                <h3 style={{ margin: "0 0 12px", fontSize: 16 }}>Editar tenant</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+                  <label>
+                    <div>Empresa</div>
+                    <input
+                      value={editForm.nome_empresa}
+                      onChange={(e) => setEditForm((p) => ({ ...p, nome_empresa: e.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    <div>Slug</div>
+                    <input
+                      value={editForm.slug}
+                      onChange={(e) => setEditForm((p) => ({ ...p, slug: e.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    <div>Plano</div>
+                    <select
+                      value={editForm.plan}
+                      onChange={(e) => setEditForm((p) => ({ ...p, plan: e.target.value }))}
+                    >
+                      <option value="free">Free</option>
+                      <option value="pro">Pro</option>
+                      <option value="enterprise">Enterprise</option>
+                    </select>
+                  </label>
+                  <label>
+                    <div>Status</div>
+                    <select
+                      value={editForm.status}
+                      onChange={(e) => setEditForm((p) => ({ ...p, status: e.target.value }))}
+                    >
+                      <option value="ativo">Ativo</option>
+                      <option value="inativo">Inativo</option>
+                      <option value="active">Ativo</option>
+                      <option value="inactive">Inativo</option>
+                    </select>
+                  </label>
+                  <label>
+                    <div>Max agentes</div>
+                    <input
+                      type="number"
+                      value={editForm.max_agents}
+                      onChange={(e) => setEditForm((p) => ({ ...p, max_agents: Number(e.target.value) }))}
+                    />
+                  </label>
+                  <label>
+                    <div>Max mensagens</div>
+                    <input
+                      type="number"
+                      value={editForm.max_messages}
+                      onChange={(e) => setEditForm((p) => ({ ...p, max_messages: Number(e.target.value) }))}
+                    />
+                  </label>
+                </div>
+                <div style={{ marginTop: 16 }}>
+                  <strong>Providers de WhatsApp liberados</strong>
+                  <div style={{ display: "flex", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
+                    {providerOptions().map((provider) => (
+                      <label key={provider.value} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <input
+                          type="checkbox"
+                          checked={editForm.allowed_providers.includes(provider.value)}
+                          onChange={() => toggleProvider(provider.value)}
+                        />
+                        <span>{provider.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <small style={{ display: "block", color: "var(--text-muted)", marginTop: 6 }}>
+                    Esses providers ficarão disponíveis para os usuários deste tenant conforme o pacote contratado.
+                  </small>
+                </div>
+                {saveError ? <p style={{ color: "var(--danger)", marginTop: 10 }}>{saveError}</p> : null}
+                <div style={{ marginTop: 12 }}>
+                  <Button onClick={handleSaveTenant} disabled={savingTenant}>
+                    {savingTenant ? "Salvando..." : "Salvar alterações"}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </Card>
         )}
         {tab === "agents" && (

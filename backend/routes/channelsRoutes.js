@@ -10,10 +10,8 @@ import { requireActiveTenant } from '../middleware/requireActiveTenant.js';
 import { sendBadRequest, sendNotFound } from '../utils/errorResponses.js';
 import { pool } from '../db/pool.js';
 import * as channelConnectionService from '../services/channelConnection.service.js';
-import * as evolutionService from '../services/evolutionService.js';
 import * as evolutionGateway from '../controllers/evolutionGateway.controller.js';
-import * as evolutionProvision from '../services/evolutionProvision.service.js';
-import * as wahaProvision from '../services/wahaProvision.service.js';
+import { getProviderForChannel } from '../providers/index.js';
 import {
   deriveFlowPhase,
   nextActionForChannel,
@@ -27,10 +25,24 @@ import {
   CONNECTION,
   transitionEvolutionChannelConnection,
 } from '../services/channelEvolutionState.service.js';
+import { ProviderAccessError, validateProviderAccessForTenant } from '../services/providerAccess.service.js';
 
 const router = Router();
 
 router.use(agentAuth);
+
+async function provisionInstanceWithProvider(channel) {
+  if (!channel) {
+    const err = new Error('Canal não encontrado.');
+    err.httpStatus = 404;
+    throw err;
+  }
+  await validateProviderAccessForTenant(channel.tenant_id, channel.provider);
+  const provider = getProviderForChannel(channel);
+  const result = await provider.provisionInstance(channel);
+  const providerName = String(channel.provider || '').toLowerCase().trim();
+  return { result, providerName };
+}
 
 /**
  * GET /api/channels/evolution-instances
@@ -130,30 +142,7 @@ router.post('/:id/create-instance', requireActiveTenant, async (req, res) => {
       return res.status(401).json({ error: 'Tenant não identificado.' });
     }
     const existing = await channelRepo.findById(req.params.id, tenantId);
-    if (existing && String(existing.provider || '').toLowerCase() === 'waha') {
-      const result = await wahaProvision.provisionWhatsAppInstance(req.params.id, tenantId);
-      if (!result.ok) {
-        return res.status(400).json({ success: false, error: true, message: result.error });
-      }
-      const ch = await channelRepo.findById(req.params.id, tenantId);
-      emitChannelSocketEvent('channel:status', {
-        channelId: req.params.id,
-        tenantId,
-        status: 'PENDING',
-        qrCode: null,
-        connected: false,
-      });
-      return res.status(200).json({
-        success: true,
-        channel: enrichChannelForApi(ch),
-        skipped: Boolean(result.skipped),
-        ...(result.reason ? { reason: result.reason } : {}),
-        nextAction: 'connect',
-        legacyAlias: true,
-        provider: 'waha',
-      });
-    }
-    const result = await evolutionProvision.provisionWhatsAppInstance(req.params.id, tenantId);
+    const { result, providerName } = await provisionInstanceWithProvider(existing);
     if (!result.ok) {
       return res.status(400).json({ success: false, error: true, message: result.error });
     }
@@ -172,8 +161,12 @@ router.post('/:id/create-instance', requireActiveTenant, async (req, res) => {
       ...(result.reason ? { reason: result.reason } : {}),
       nextAction: 'connect',
       legacyAlias: true,
+      provider: providerName || null,
     });
   } catch (err) {
+    if (err instanceof ProviderAccessError) {
+      return res.status(err.httpStatus || 403).json({ error: err.code, message: err.message, details: err.details });
+    }
     console.error('[channels] create-instance:', err.message);
     return res.status(500).json({ success: false, error: true, message: 'Erro ao provisionar.' });
   }
@@ -195,31 +188,12 @@ router.post('/:id/provision-instance', requireActiveTenant, async (req, res) => 
       tenantId,
       provider: existing?.provider || null,
     });
-    if (existing && String(existing.provider || '').toLowerCase() === 'waha') {
-      const result = await wahaProvision.provisionWhatsAppInstance(req.params.id, tenantId);
-      if (!result.ok) {
-        return res.status(400).json({
-          success: false,
-          error: true,
-          message: result.error || 'Não foi possível preparar o canal WAHA.',
-        });
-      }
-      const ch = await channelRepo.findById(req.params.id, tenantId);
-      return res.status(200).json({
-        success: true,
-        channel: enrichChannelForApi(ch),
-        skipped: Boolean(result.skipped),
-        ...(result.reason ? { reason: result.reason } : {}),
-        nextAction: 'connect',
-        provider: 'waha',
-      });
-    }
-    const result = await evolutionProvision.provisionWhatsAppInstance(req.params.id, tenantId);
+    const { result, providerName } = await provisionInstanceWithProvider(existing);
     if (!result.ok) {
       return res.status(400).json({
         success: false,
         error: true,
-        message: result.error || 'Não foi possível provisionar a instância do WhatsApp.',
+        message: result.error || `Não foi possível provisionar a instância do WhatsApp (${providerName || 'provider'}).`,
       });
     }
     const ch = await channelRepo.findById(req.params.id, tenantId);
@@ -229,8 +203,12 @@ router.post('/:id/provision-instance', requireActiveTenant, async (req, res) => 
       skipped: Boolean(result.skipped),
       ...(result.reason ? { reason: result.reason } : {}),
       nextAction: 'connect',
+      provider: providerName || null,
     });
   } catch (err) {
+    if (err instanceof ProviderAccessError) {
+      return res.status(err.httpStatus || 403).json({ error: err.code, message: err.message, details: err.details });
+    }
     console.error('[channels] provision-instance:', err.message);
     return res.status(500).json({
       success: false,
@@ -252,6 +230,14 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
       return res.status(404).json({ error: 'Channel not found' });
     }
 
+    try {
+      await validateProviderAccessForTenant(channel.tenant_id, channel.provider);
+    } catch (e) {
+      if (e instanceof ProviderAccessError) {
+        return res.status(e.httpStatus || 403).json({ error: e.code, message: e.message, details: e.details });
+      }
+      throw e;
+    }
     const qrData = await channelConnectionService.getChannelQrCode(channel).catch(() => null);
     const qrPayload =
       channel.qr_code ||
@@ -298,6 +284,14 @@ router.get('/:id/status', requireActiveTenant, async (req, res) => {
       return res.status(404).json({ error: 'Channel not found' });
     }
 
+    try {
+      await validateProviderAccessForTenant(channel.tenant_id, channel.provider);
+    } catch (e) {
+      if (e instanceof ProviderAccessError) {
+        return res.status(e.httpStatus || 403).json({ error: e.code, message: e.message, details: e.details });
+      }
+      throw e;
+    }
     const statusData = await channelConnectionService.getChannelStatus(channel).catch(() => null);
     const status =
       statusData?.normalizedStatus ||
@@ -389,6 +383,9 @@ router.post('/', requireActiveTenant, async (req, res) => {
 
     if (channelType === 'whatsapp' && !providerLc) {
       return sendBadRequest(res, 'provider é obrigatório para canais WhatsApp.');
+    }
+    if (channelType === 'whatsapp' && providerLc) {
+      await validateProviderAccessForTenant(tenantId, providerLc);
     }
 
     if (!['waha', 'evolution', 'zapi', 'official', 'whatsapp_oficial'].includes(providerLc) && channelType === 'whatsapp') {
@@ -558,6 +555,9 @@ router.post('/', requireActiveTenant, async (req, res) => {
       nextAction: 'provision_instance',
     });
   } catch (err) {
+    if (err instanceof ProviderAccessError) {
+      return res.status(err.httpStatus || 403).json({ error: err.code, message: err.message, details: err.details });
+    }
     console.error('[channels] POST /:', err.message);
     res.status(500).json({ error: 'Erro ao criar canal.' });
   }
@@ -636,33 +636,45 @@ router.delete('/:id', requireActiveTenant, async (req, res) => {
 
     const ext = existing.external_id != null ? String(existing.external_id).trim() : '';
     const prov = String(existing.provider || '').toLowerCase();
-    if (prov === 'waha') {
-      // WAHA Core (free): single-session "default" pode ser compartilhada.
-      // Ao remover um canal local, não encerrar/deletar a sessão remota (evita derrubar outros canais/agentes).
-      console.log('[channels] DELETE: WAHA channel removido (não encerra sessão remota)', {
-        channelId: existing.id,
-        external_id: ext || null,
-      });
-    } else if (prov === 'evolution' && ext) {
+    if (prov) {
+      await validateProviderAccessForTenant(existing.tenant_id, prov);
+    }
+    if (prov && ext) {
       try {
-        await evolutionService.deleteInstance(ext);
-        console.log('[channels] DELETE: deleteInstance Evolution OK:', ext);
-      } catch (e) {
-        console.warn('[channels] DELETE: deleteInstance falhou, tentando logout + delete:', e.message);
+        const provider = getProviderForChannel(existing);
         try {
-          await evolutionService.disconnectInstance(ext);
-          await evolutionService.deleteInstance(ext);
-          console.log('[channels] DELETE: Evolution removida após logout:', ext);
-        } catch (e2) {
-          console.warn('[channels] DELETE: Evolution (seguindo exclusão no banco):', e2.message);
+          await provider.disconnect(existing);
+        } catch (e) {
+          console.warn('[channels] DELETE: disconnect provider falhou (seguindo):', e.message);
         }
+        try {
+          const rm = await provider.removeInstance(existing);
+          if (rm?.skipped) {
+            console.warn('[channels] DELETE: removeInstance não suportado/ignorado', {
+              channelId: existing.id,
+              provider: prov,
+              reason: rm?.reason || null,
+            });
+          }
+        } catch (e) {
+          console.warn('[channels] DELETE: removeInstance provider falhou (seguindo):', e.message);
+        }
+      } catch (e) {
+        console.warn('[channels] DELETE: provider abstraction indisponível (seguindo exclusão local):', e.message);
       }
+    } else if (prov === 'waha') {
+      console.log('[channels] DELETE: WAHA sem external_id, removendo só vínculo local', {
+        channelId: existing.id,
+      });
     }
 
     await channelRepo.deleteById(req.params.id, tenantId);
     invalidateTenantChannels(tenantId);
     res.status(204).send();
   } catch (err) {
+    if (err instanceof ProviderAccessError) {
+      return res.status(err.httpStatus || 403).json({ error: err.code, message: err.message, details: err.details });
+    }
     console.error('[channels] DELETE /:id:', err.message);
     res.status(500).json({ error: 'Erro ao remover canal.' });
   }

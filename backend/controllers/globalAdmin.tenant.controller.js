@@ -28,6 +28,7 @@ export async function updateTenantHandler(req, res) {
       name: t.name,
       max_agents: t.max_agents,
       max_messages: t.max_messages,
+      allowed_providers: Array.isArray(t.allowed_providers) ? t.allowed_providers : [],
       created_at: t.created_at,
     });
   } catch (err) {
@@ -62,6 +63,7 @@ export async function suspendTenantHandler(req, res) {
       name: t.name,
       max_agents: t.max_agents,
       max_messages: t.max_messages,
+      allowed_providers: Array.isArray(t.allowed_providers) ? t.allowed_providers : [],
       created_at: t.created_at,
     });
   } catch (err) {

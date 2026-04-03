@@ -281,6 +281,8 @@ export function Channels() {
   const [name, setName] = useState('');
   const [agentId, setAgentId] = useState('');
   const [channelType, setChannelType] = useState('whatsapp');
+  const [whatsappProvider, setWhatsappProvider] = useState('evolution');
+  const [allowedProviders, setAllowedProviders] = useState(['evolution', 'waha', 'zapi']);
   const [evolutionInstanceNames, setEvolutionInstanceNames] = useState([]);
   const [whatsappInstanceSelect, setWhatsappInstanceSelect] = useState('');
   const [whatsappInstanceManual, setWhatsappInstanceManual] = useState('');
@@ -322,8 +324,35 @@ export function Channels() {
     setAgents(Array.isArray(data) ? data : []);
   }
 
+  async function loadAllowedProviders() {
+    try {
+      const data = await channelsService.getAllowedProviders();
+      const list = Array.isArray(data?.allowedProviders) ? data.allowedProviders : [];
+      if (list.length > 0) {
+        setAllowedProviders(list);
+        if (!list.includes(whatsappProvider)) {
+          setWhatsappProvider(list[0]);
+        }
+      }
+    } catch (e) {
+      console.warn('[channels] allowed providers:', e.message);
+    }
+  }
+
+  function resolveProviderErrorMessage(err) {
+    const code = err?.code || err?.error || '';
+    const msg = String(err?.message || '');
+    if (code === 'PROVIDER_NOT_ALLOWED' || msg.includes('PROVIDER_NOT_ALLOWED')) {
+      return 'Este provider não está liberado para o seu plano.';
+    }
+    if (code === 'NO_ALLOWED_PROVIDER_AVAILABLE' || msg.includes('NO_ALLOWED_PROVIDER_AVAILABLE')) {
+      return 'Nenhum provider permitido está disponível no momento.';
+    }
+    return err?.message || 'Operação não permitida para o provider selecionado.';
+  }
+
   useEffect(() => {
-    if (channelType !== 'whatsapp' || !whatsappAdvanced) {
+    if (channelType !== 'whatsapp' || !whatsappAdvanced || whatsappProvider !== 'evolution') {
       setEvolutionInstanceNames([]);
       return;
     }
@@ -342,7 +371,7 @@ export function Channels() {
     return () => {
       cancelled = true;
     };
-  }, [channelType, whatsappAdvanced]);
+  }, [channelType, whatsappAdvanced, whatsappProvider]);
 
   function stopArtifactPolling(channelId) {
     const id = channelId;
@@ -391,7 +420,7 @@ export function Channels() {
       await loadChannels();
     } catch (err) {
       console.error(err);
-      toast.error(err.message || 'Erro no fluxo do WhatsApp.');
+      toast.error(resolveProviderErrorMessage(err));
     } finally {
       setLoadingProvisionId(null);
       setConnectStepMessage('');
@@ -426,6 +455,10 @@ export function Channels() {
       return;
     }
     if (channelType === 'whatsapp') {
+      if (!allowedProviders.length) {
+        toast.error('Nenhum provider permitido está disponível no momento.');
+        return;
+      }
       if (!name.trim()) {
         toast.error('Informe o nome do canal');
         return;
@@ -433,7 +466,7 @@ export function Channels() {
       if (whatsappAdvanced) {
         const instRaw = (whatsappInstanceManual || whatsappInstanceSelect || '').trim();
         if (!instRaw) {
-          toast.error('No modo avançado, informe ou selecione a instância Evolution.');
+          toast.error('No modo avançado, informe ou selecione a instância do provider.');
           return;
         }
       }
@@ -450,7 +483,7 @@ export function Channels() {
         type: channelType,
       };
       if (channelType === 'whatsapp') {
-        payload.provider = 'evolution';
+        payload.provider = whatsappProvider || allowedProviders[0];
       }
       if (channelType === 'whatsapp' && whatsappAdvanced) {
         const inst = (whatsappInstanceManual || whatsappInstanceSelect || '').trim().replace(/\s+/g, '-');
@@ -465,6 +498,7 @@ export function Channels() {
       setName('');
       setAgentId('');
       setChannelType('whatsapp');
+      setWhatsappProvider('evolution');
       setWhatsappInstanceSelect('');
       setWhatsappInstanceManual('');
       setWhatsappAdvanced(false);
@@ -483,7 +517,7 @@ export function Channels() {
       }
     } catch (err) {
       console.error(err);
-      toast.error(err.message || 'Erro ao criar canal');
+      toast.error(resolveProviderErrorMessage(err));
     } finally {
       setLoadingCreate(false);
     }
@@ -527,11 +561,7 @@ export function Channels() {
       startPolling(channelId);
     } catch (err) {
       console.error(err);
-      toast.error(
-        err.message?.includes('503') || err.message?.includes('offline')
-          ? 'Evolution API indisponível. Verifique se o serviço está no ar.'
-          : err.message || 'Erro ao obter QR Code.',
-      );
+      toast.error(resolveProviderErrorMessage(err));
     } finally {
       setLoadingQr(null);
     }
@@ -545,11 +575,7 @@ export function Channels() {
       toast.success('Aguardando leitura...');
     } catch (err) {
       console.error(err);
-      toast.error(
-        err.message?.includes('503') || err.message?.includes('indisponível')
-          ? 'Evolution API indisponível. Confira o Docker e EVOLUTION_API_URL no backend.'
-          : err.message || 'Erro ao conectar WhatsApp.',
-      );
+      toast.error(resolveProviderErrorMessage(err));
     } finally {
       setLoadingConnectId(null);
     }
@@ -571,7 +597,7 @@ export function Channels() {
       startPolling(channelId);
     } catch (err) {
       console.error(err);
-      toast.error(err.message || 'Não foi possível obter o artefato de conexão.');
+      toast.error(resolveProviderErrorMessage(err));
     } finally {
       setLoadingQr(null);
     }
@@ -639,6 +665,7 @@ export function Channels() {
   useEffect(() => {
     loadChannels();
     loadAgents();
+    loadAllowedProviders();
 
     socket.on('channel_status_update', ({ channelId, status }) => {
       setChannels((prev) =>
@@ -1025,6 +1052,11 @@ export function Channels() {
             {connectionState !== CHANNEL_CONNECTION_STATE.IDLE ? (
               <ConnectionStateBanner state={connectionState} error={connectionError} />
             ) : null}
+            {channelType === 'whatsapp' && allowedProviders.length === 0 ? (
+              <p style={{ ...styles.subtitle, color: 'var(--warning)' }}>
+                Nenhum provider de WhatsApp está liberado para este tenant/plano.
+              </p>
+            ) : null}
           </div>
           <button
             type="button"
@@ -1185,6 +1217,7 @@ export function Channels() {
                     value={channelType}
                     onChange={(e) => {
                       setChannelType(e.target.value);
+                      if (e.target.value !== 'whatsapp') setWhatsappProvider('evolution');
                       setWhatsappInstanceSelect('');
                       setWhatsappInstanceManual('');
                       setWhatsappAdvanced(false);
@@ -1199,6 +1232,48 @@ export function Channels() {
                 </div>
                 {channelType === 'whatsapp' && (
                   <div style={styles.field}>
+                    <label style={styles.label}>Provider WhatsApp</label>
+                    <select
+                      style={styles.select}
+                      value={whatsappProvider}
+                      onChange={(e) => {
+                        setWhatsappProvider(e.target.value);
+                        setWhatsappInstanceSelect('');
+                        setWhatsappInstanceManual('');
+                        if (e.target.value !== 'evolution') setWhatsappAdvanced(false);
+                      }}
+                    >
+                      {allowedProviders.map((provider) => (
+                        <option key={provider} value={provider}>
+                          {provider === 'evolution' ? 'Evolution' : provider === 'waha' ? 'WAHA' : provider === 'zapi' ? 'Z-API' : provider}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {channelType === 'whatsapp' && (
+                  <div style={styles.field}>
+                    <label style={styles.label}>Provider WhatsApp</label>
+                    <select
+                      style={styles.select}
+                      value={whatsappProvider}
+                      onChange={(e) => {
+                        setWhatsappProvider(e.target.value);
+                        setWhatsappInstanceSelect('');
+                        setWhatsappInstanceManual('');
+                        if (e.target.value !== 'evolution') setWhatsappAdvanced(false);
+                      }}
+                    >
+                      {allowedProviders.map((provider) => (
+                        <option key={provider} value={provider}>
+                          {provider === 'evolution' ? 'Evolution' : provider === 'waha' ? 'WAHA' : provider === 'zapi' ? 'Z-API' : provider}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {channelType === 'whatsapp' && (
+                  <div style={styles.field}>
                     <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <input
                         type="checkbox"
@@ -1209,7 +1284,7 @@ export function Channels() {
                           setWhatsappInstanceManual('');
                         }}
                       />
-                      Modo avançado: vincular instância Evolution já existente
+                      Modo avançado: vincular instância manual ({whatsappProvider.toUpperCase()})
                     </label>
                     <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.35rem 0 0' }}>
                       Fluxo normal: criamos a instância automaticamente. Avançado só para integrações que exijam nome manual.
@@ -1218,21 +1293,23 @@ export function Channels() {
                 )}
                 {channelType === 'whatsapp' && whatsappAdvanced && (
                   <>
-                    <div style={styles.field}>
-                      <label style={styles.label}>Instância Evolution</label>
-                      <select
-                        style={styles.select}
-                        value={whatsappInstanceSelect}
-                        onChange={(e) => setWhatsappInstanceSelect(e.target.value)}
-                      >
-                        <option value="">Selecione uma instância existente</option>
-                        {evolutionInstanceNames.map((n) => (
-                          <option key={n} value={n}>
-                            {n}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                    {whatsappProvider === 'evolution' && (
+                      <div style={styles.field}>
+                        <label style={styles.label}>Instância Evolution</label>
+                        <select
+                          style={styles.select}
+                          value={whatsappInstanceSelect}
+                          onChange={(e) => setWhatsappInstanceSelect(e.target.value)}
+                        >
+                          <option value="">Selecione uma instância existente</option>
+                          {evolutionInstanceNames.map((n) => (
+                            <option key={n} value={n}>
+                              {n}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <div style={styles.field}>
                       <label style={styles.label}>Ou nome exato da instância</label>
                       <input
@@ -1268,6 +1345,7 @@ export function Channels() {
                   onClick={() => {
                     setName('');
                     setAgentId('');
+                    setWhatsappProvider('evolution');
                     setWhatsappInstanceSelect('');
                     setWhatsappInstanceManual('');
                     setWhatsappAdvanced(false);
@@ -1278,7 +1356,7 @@ export function Channels() {
                 <button
                   type="button"
                   style={styles.buttonPrimary}
-                  disabled={loadingCreate}
+                  disabled={loadingCreate || (channelType === 'whatsapp' && allowedProviders.length === 0)}
                   onClick={createChannel}
                 >
                   {loadingCreate ? 'Criando...' : 'Criar canal'}
@@ -1315,6 +1393,7 @@ export function Channels() {
                     value={channelType}
                     onChange={(e) => {
                       setChannelType(e.target.value);
+                      if (e.target.value !== 'whatsapp') setWhatsappProvider('evolution');
                       setWhatsappInstanceSelect('');
                       setWhatsappInstanceManual('');
                       setWhatsappAdvanced(false);
@@ -1339,27 +1418,29 @@ export function Channels() {
                           setWhatsappInstanceManual('');
                         }}
                       />
-                      Modo avançado: instância Evolution manual
+                      Modo avançado: instância manual ({whatsappProvider.toUpperCase()})
                     </label>
                   </div>
                 )}
                 {channelType === 'whatsapp' && whatsappAdvanced && (
                   <>
-                    <div style={styles.field}>
-                      <label style={styles.label}>Instância Evolution</label>
-                      <select
-                        style={styles.select}
-                        value={whatsappInstanceSelect}
-                        onChange={(e) => setWhatsappInstanceSelect(e.target.value)}
-                      >
-                        <option value="">Selecione uma instância existente</option>
-                        {evolutionInstanceNames.map((n) => (
-                          <option key={n} value={n}>
-                            {n}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                    {whatsappProvider === 'evolution' && (
+                      <div style={styles.field}>
+                        <label style={styles.label}>Instância Evolution</label>
+                        <select
+                          style={styles.select}
+                          value={whatsappInstanceSelect}
+                          onChange={(e) => setWhatsappInstanceSelect(e.target.value)}
+                        >
+                          <option value="">Selecione uma instância existente</option>
+                          {evolutionInstanceNames.map((n) => (
+                            <option key={n} value={n}>
+                              {n}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <div style={styles.field}>
                       <label style={styles.label}>Ou nome exato</label>
                       <input
@@ -1393,6 +1474,7 @@ export function Channels() {
                   style={styles.buttonSecondary}
                   onClick={() => {
                     setShowModal(false);
+                    setWhatsappProvider('evolution');
                     setWhatsappInstanceSelect('');
                     setWhatsappInstanceManual('');
                     setWhatsappAdvanced(false);
@@ -1403,7 +1485,7 @@ export function Channels() {
                 <button
                   type="button"
                   style={styles.buttonPrimary}
-                  disabled={loadingCreate}
+                  disabled={loadingCreate || (channelType === 'whatsapp' && allowedProviders.length === 0)}
                   onClick={createChannel}
                 >
                   {loadingCreate ? 'Criando...' : 'Criar canal'}

@@ -38,6 +38,7 @@ import evolutionIngressRoutes from './routes/evolutionIngress.routes.js';
 import wahaWebhookRoutes from './routes/wahaWebhook.routes.js';
 import messagesRoutes from './routes/messages.routes.js';
 import alertsRoutes from './routes/alerts.routes.js';
+import providersRoutes from './routes/providers.routes.js';
 import globalAdminAuth from './middlewares/globalAdminAuth.js';
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { startChannelMonitor } from './services/channelMonitor.service.js';
@@ -49,6 +50,9 @@ import * as evolutionService from './services/evolutionService.js';
 import { checkProviderHealth, getProvidersHealthSnapshot } from './services/providerHealth.service.js';
 import { invalidateProviderHealthCache } from './services/providerHealth.service.js';
 import { logAdminAction } from './services/adminActionsLog.service.js';
+import { getProviderHealthSnapshot } from './services/providerOrchestrator.service.js';
+import { getTenantById } from './repositories/tenant.repository.js';
+import { filterAllowedProvidersForTenant, getAllowedProviders } from './utils/tenantAllowedProviders.js';
 
 dotenv.config();
 
@@ -227,6 +231,32 @@ app.post('/api/health/providers/:provider/reconnect', globalAdminAuth, async (re
   }
 });
 
+app.get('/api/providers/health', globalAdminAuth, async (req, res) => {
+  try {
+    const tenantId = String(req.query?.tenantId || '').trim() || null;
+    const health = getProviderHealthSnapshot();
+    const base = {
+      providerHealthStore: health,
+      computedAt: new Date().toISOString(),
+    };
+    if (!tenantId) return res.status(200).json(base);
+    const tenant = await getTenantById(tenantId);
+    if (!tenant) return res.status(404).json({ error: 'Tenant não encontrado.' });
+    const trackedProviders = Object.keys(health);
+    const allowedProviders = getAllowedProviders(tenant);
+    const availableProviders = filterAllowedProvidersForTenant(tenant, trackedProviders);
+    return res.status(200).json({
+      ...base,
+      tenantId,
+      allowedProviders,
+      availableProviders,
+    });
+  } catch (err) {
+    console.error('[providers] health:', err.message);
+    return res.status(500).json({ error: 'Erro ao obter health de providers.' });
+  }
+});
+
 /* =========================================================
    GLOBAL ADMIN (NÃO USA TENANT, NÃO USA CANAL)
 ========================================================= */
@@ -272,6 +302,7 @@ agentRouter.use('/channels', channelConnectionRoutes);
 agentRouter.use('/channels', channelsRoutes);
 agentRouter.use('/messages', messagesRoutes);
 agentRouter.use('/alerts', alertsRoutes);
+agentRouter.use('/providers', providersRoutes);
 agentRouter.use('/agents', agentsRoutes);
 agentRouter.use(contextRoutes);
 agentRouter.use(inboundRoutes);
@@ -285,6 +316,7 @@ apiRouter.use('/channels', agentAuth, requireTenant, channelConnectionRoutes);
 apiRouter.use('/channels', agentAuth, requireTenant, channelsRoutes);
 apiRouter.use('/messages', agentAuth, requireTenant, messagesRoutes);
 apiRouter.use('/alerts', agentAuth, requireTenant, alertsRoutes);
+apiRouter.use('/providers', agentAuth, requireTenant, providersRoutes);
 apiRouter.use('/evolution', evolutionIngressRoutes);
 apiRouter.use('/evolution', evolutionGatewayRoutes);
 apiRouter.use('/context', agentAuth, requireTenant, agentContextRoutes);

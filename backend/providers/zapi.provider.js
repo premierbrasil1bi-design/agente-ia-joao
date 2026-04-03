@@ -27,4 +27,12 @@ export class ZapiProvider extends BaseProvider {
       payload,
     };
   }
+
+  async disconnect() {
+    return { provider: 'zapi', skipped: true, reason: 'not_implemented' };
+  }
+
+  async removeInstance() {
+    return { provider: 'zapi', skipped: true, reason: 'not_implemented' };
+  }
 }

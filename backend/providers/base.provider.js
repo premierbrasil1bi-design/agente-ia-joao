@@ -19,4 +19,17 @@ export class BaseProvider {
     void payload;
     throw new Error('Método sendMessage() não implementado.');
   }
+
+  async provisionInstance() {
+    throw new Error('Método provisionInstance() não implementado.');
+  }
+
+  async disconnect() {
+    throw new Error('Método disconnect() não implementado.');
+  }
+
+  async removeInstance() {
+    // opcional por provider
+    return { skipped: true, reason: 'not_supported' };
+  }
 }
