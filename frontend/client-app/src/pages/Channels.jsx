@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { socket } from '../lib/socket.js';
+import { getApiBaseUrl } from '../config/env.js';
 import { agentApi } from '../services/agentApi.js';
 import { channelsService } from '../services/channels.service.js';
 import StatusBadge from '../components/StatusBadge.jsx';
@@ -550,54 +551,116 @@ export function Channels() {
     if (p) setPairingModal({ code: p, channelId });
   }
 
-  /** @returns {boolean} */
-  function applyQrFromResponse(channelId, data) {
-    const src = data?.qr || data?.qrcode || data?.qrCode;
-    if (!src || (typeof src === 'string' && !src.trim())) {
+  /** Provider WhatsApp no objeto do canal (coluna `provider` ou fallback em config / provider_config). */
+  function resolveWhatsappProvider(ch) {
+    const direct = String(ch?.provider ?? '').trim().toLowerCase();
+    if (direct) return direct;
+    const pc = ch?.provider_config && typeof ch.provider_config === 'object' ? ch.provider_config : {};
+    const fromPc = String(pc.provider ?? pc.primary ?? '').trim().toLowerCase();
+    if (fromPc) return fromPc;
+    const cfg = ch?.config && typeof ch.config === 'object' ? ch.config : {};
+    return String(cfg.provider ?? cfg.whatsappProvider ?? '').trim().toLowerCase();
+  }
+
+  /**
+   * Normaliza payload da API para data URL exibível em <img src>.
+   * @returns {boolean}
+   */
+  function applyQrFromResponse(data, channelId) {
+    if (!data) return false;
+
+    let qr = data.qr ?? data.qrCode ?? data.qrcode ?? data.data;
+
+    if (qr != null && typeof qr === 'object' && !Array.isArray(qr)) {
+      qr = qr.base64 ?? qr.qr ?? qr.code ?? qr.data;
+    }
+
+    if (qr == null || (typeof qr === 'string' && !String(qr).trim())) {
       return false;
     }
-    const raw = typeof src === 'string' ? src : src?.base64 ?? src?.code ?? '';
-    if (!raw || (typeof raw === 'string' && !raw.trim())) {
-      return false;
+
+    let s = String(qr).trim();
+    if (!s.startsWith('data:image') && !/^https?:\/\//i.test(s)) {
+      const stripped = s.replace(/^data:image\/\w+;base64,/i, '');
+      s = `data:image/png;base64,${stripped}`;
     }
-    const qr = raw.startsWith('data:image') || /^https?:\/\//i.test(raw)
-      ? raw
-      : `data:image/png;base64,${raw.replace(/^data:image\/\w+;base64,/, '')}`;
-    sessionStorage.setItem(`qr_${channelId}`, qr);
-    setQrCode(qr);
+
+    if (channelId) {
+      sessionStorage.setItem(`qr_${channelId}`, s);
+    }
+    setQrCode(s);
     return true;
   }
 
-  /** Só busca QR (instância já criada / já em pairing). */
-  async function getQr(channelId) {
+  /**
+   * GET /api/channels/:id/qrcode — requisição explícita (Network) para WAHA e compatível com resposta 200 + success:false.
+   */
+  async function handleGetQr(channelId) {
     setLoadingQr(channelId);
     setQrLoadError(null);
     setQrModalChannelId(channelId);
     setQrModalOpen(true);
     try {
-      const data = await channelsService.getQrCode(channelId);
-      const hasQr = Boolean(data?.qr || data?.qrCode || data?.qrcode);
-      if (!hasQr) {
-        const msg = data?.message || 'QR ainda não disponível. Aguarde ou use “Conectar WhatsApp”.';
+      console.log('[Channels] Buscando QR para canal:', channelId);
+
+      const token = agentApi.getToken();
+      const base = (getApiBaseUrl() || '').replace(/\/$/, '');
+      const path = `/api/channels/${encodeURIComponent(channelId)}/qrcode`;
+      const url = base ? `${base}${path}` : path;
+
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          'x-channel': 'whatsapp',
+        },
+      });
+
+      const data = await res.json().catch(() => ({}));
+      console.log('[Channels] QR RESPONSE:', res.status, data);
+
+      if (res.status === 401) {
+        const msg = data?.error || 'Sessão inválida. Faça login novamente.';
         setQrLoadError(msg);
         toast.error(msg);
+        try {
+          localStorage.removeItem('agent_token');
+          localStorage.removeItem('agent_user');
+        } catch {
+          /* ignore */
+        }
+        if (typeof window !== 'undefined') {
+          window.location.href = `${window.location.origin}/login`;
+        }
         return;
       }
-      if (!applyQrFromResponse(channelId, data)) {
-        const msg = data?.message || 'QR em formato inesperado.';
-        setQrLoadError(msg);
-        toast.error(msg);
+
+      if (applyQrFromResponse(data, channelId)) {
+        setQrLoadError(null);
+        startPolling(channelId);
         return;
       }
-      startPolling(channelId);
+
+      const msg =
+        data?.message ||
+        data?.error ||
+        'QR ainda não disponível. Aguarde ou use “Conectar WhatsApp”.';
+      setQrLoadError(msg);
+      toast.error(msg);
     } catch (err) {
-      console.error(err);
-      const msg = resolveProviderErrorMessage(err);
+      console.error('[Channels] Erro ao buscar QR:', err);
+      const msg = err?.message || 'Falha ao buscar QR code.';
       setQrLoadError(msg);
       toast.error(msg);
     } finally {
       setLoadingQr(null);
     }
+  }
+
+  /** Alias usado por polling/socket — mesmo fluxo que handleGetQr. */
+  async function getQr(channelId) {
+    await handleGetQr(channelId);
   }
 
   /** Conecta (sem recriar instância) e obtém QR ou código de pareamento. */
@@ -714,13 +777,13 @@ export function Channels() {
   useEffect(() => {
     if (!qrModalOpen || !qrModalChannelId) return;
     const ch = channels.find((c) => c.id === qrModalChannelId);
-    if (String(ch?.provider || '').toLowerCase() !== 'waha') return;
+    if (resolveWhatsappProvider(ch) !== 'waha') return;
     const tick = async () => {
       try {
         const data = await channelsService.getQrCode(qrModalChannelId);
         const hasQr = data?.qr || data?.qrCode || data?.qrcode;
         if (hasQr) {
-          applyQrFromResponse(qrModalChannelId, data);
+          applyQrFromResponse(data, qrModalChannelId);
           setQrLoadError(null);
         }
       } catch {
@@ -735,7 +798,7 @@ export function Channels() {
   useEffect(() => {
     if (!qrModalOpen || !qrModalChannelId) return;
     const ch = channels.find((c) => c.id === qrModalChannelId);
-    if (String(ch?.provider || '').toLowerCase() !== 'waha') return;
+    if (resolveWhatsappProvider(ch) !== 'waha') return;
     const onWahaQr = (payload) => {
       if (typeof payload === 'string' && (payload.startsWith('data:image') || /^https?:\/\//i.test(payload))) {
         sessionStorage.setItem(`qr_${qrModalChannelId}`, payload);
@@ -867,7 +930,7 @@ export function Channels() {
           ['created', 'connecting', 'disconnected', 'close', 'unknown', ''].includes(st) ||
           !ch.status);
 
-      const prov = String(ch.provider || '').toLowerCase();
+      const prov = resolveWhatsappProvider(ch);
       const showArtifactBtn =
         !isConnected &&
         (st === 'connecting' ||
@@ -903,7 +966,7 @@ export function Channels() {
               onClick={() => {
                 restorePairingOrQr(ch.id);
                 if (prov === 'waha') {
-                  void getQr(ch.id);
+                  void handleGetQr(ch.id);
                 } else {
                   refreshArtifact(ch.id);
                 }
