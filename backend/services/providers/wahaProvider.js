@@ -1,4 +1,5 @@
 import * as wahaService from '../wahaService.js';
+import { ensureWahaQrSession } from '../waha.service.js';
 import {
   resolveWahaSessionName,
   WAHA_CORE_DEFAULT_SESSION,
@@ -25,25 +26,25 @@ export async function connect(config = {}, channel = null) {
     throw new Error(created.error || 'Falha ao conectar WhatsApp (WAHA)');
   }
 
-  const qrOut = await wahaService.getQrCode(session, ctx);
-  if (!qrOut.ok) {
-    throw new Error(qrOut.error || 'Falha ao conectar WhatsApp (WAHA)');
-  }
-  if (qrOut.alreadyConnected) {
-    return {
-      provider: 'waha',
-      qr: null,
-      raw: null,
-      session,
-      config,
-      alreadyConnected: true,
-    };
+  const qrRes = await ensureWahaQrSession(session);
+  if (!qrRes.success) {
+    if (qrRes.code === 'CONNECTED' || qrRes.error === 'already_connected') {
+      return {
+        provider: 'waha',
+        qr: null,
+        raw: null,
+        session,
+        config,
+        alreadyConnected: true,
+      };
+    }
+    throw new Error(qrRes.error || 'Falha ao conectar WhatsApp (WAHA)');
   }
 
   return {
     provider: 'waha',
-    qr: qrOut.data,
-    raw: qrOut.raw,
+    qr: qrRes.qr,
+    raw: null,
     session,
     config,
   };

@@ -2,8 +2,8 @@ export { wahaProvider, wahaRequest, validateWahaEnv } from '../services/wahaHttp
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
 import * as wahaService from '../services/wahaService.js';
+import { ensureWahaQrSession } from '../services/waha.service.js';
 import { resolveWahaSessionName } from '../utils/wahaSession.util.js';
-import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { BaseProvider } from './base.provider.js';
 import { checkProviderHealth } from '../services/providerHealth.service.js';
 import * as wahaProvision from '../services/wahaProvision.service.js';
@@ -67,27 +67,22 @@ export class WahaProvider extends BaseProvider {
 
   async getQRCode() {
     try {
-      const qrOut = await wahaService.getQrCode(this.session, this._ctx());
-      if (wahaService.isWahaUnauthorizedResult(qrOut)) {
-        const e = new Error(qrOut.error || 'WAHA não autorizado');
-        e.httpStatus = 401;
+      const r = await ensureWahaQrSession(this.session);
+      if (!r.success) {
+        if (r.code === 'CONNECTED' || r.error === 'already_connected') {
+          console.log('[WAHA] Session already connected');
+          return null;
+        }
+        const e = new Error(r.error || 'QR não disponível');
+        if (
+          String(r.error || '').includes('autorizado') ||
+          String(r.error || '').includes('401')
+        ) {
+          e.httpStatus = 401;
+        }
         throw e;
       }
-      if (!qrOut.ok) {
-        const e = new Error(qrOut.error || 'QR não disponível');
-        if (qrOut.httpStatus) e.httpStatus = qrOut.httpStatus;
-        throw e;
-      }
-      if (qrOut.alreadyConnected) {
-        console.log('[WAHA] Session already connected');
-        return null;
-      }
-      const payload =
-        extractQrPayload(qrOut.raw) ||
-        extractQrPayload(qrOut.data) ||
-        (typeof qrOut.data === 'string' ? qrOut.data : null);
-      const qr = toQrDataUrl(payload) || payload || qrOut.data;
-      return qr;
+      return r.qr;
     } catch (err) {
       if (err.httpStatus === 401) throw err;
       if (err.message === 'QR não disponível') throw err;
