@@ -4,6 +4,7 @@
  */
 
 import axios from 'axios';
+import { getCurrentQr } from './wahaQrCapture.js';
 
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
@@ -93,7 +94,8 @@ export const wahaProvider = {
   },
 
   getQrCode: (sessionName) => {
-    console.log('[WAHA] Session:', sessionName);
-    return wahaRequest('GET', `/api/sessions/${encodeURIComponent(sessionName)}/qr`);
+    console.log('[WAHA] QR (captura de logs):', sessionName);
+    const qr = getCurrentQr();
+    return Promise.resolve(qr ?? null);
   },
 };

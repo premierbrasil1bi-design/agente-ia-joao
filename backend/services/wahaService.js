@@ -5,6 +5,7 @@
 import { config } from '../config/env.js';
 import { checkProviderHealth } from './providerHealth.service.js';
 import { wahaRequest, validateWahaEnv } from './wahaHttp.js';
+import { getCurrentQr } from './wahaQrCapture.js';
 import { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
 export { resolveSessionName } from '../utils/resolveSessionName.js';
@@ -298,56 +299,20 @@ export async function getQrCode(name, ctx = {}) {
   skipQr = await returnIfAlreadyConnected();
   if (skipQr) return skipQr;
 
-  const paths = [
-    `/api/${encodeURIComponent(sessionName)}/auth/qr`,
-    `/api/sessions/${encodeURIComponent(sessionName)}/qr`,
-    `/api/sessions/${encodeURIComponent(sessionName)}/qrcode`,
-    `/api/sessions/${encodeURIComponent(sessionName)}/qr-code`,
-  ];
-  const maxQrAttempts = 5;
-  let lastErr;
-
-  for (const path of paths) {
-    for (let attempt = 0; attempt < maxQrAttempts; attempt++) {
-      try {
-        console.log('[WAHA] Fetching QR...');
-        const data = await wahaRequest('GET', path);
-        const raw = data?.qr ?? data?.base64 ?? data?.qrcode ?? data;
-
-        if (isValidQrPayload(data) || isValidQrPayload(raw)) {
-          console.log('[WAHA] QR ready');
-          return { ok: true, data: raw, raw: data };
-        }
-
-        console.log('[WAHA] QR not ready yet...');
-        console.log('[WAHA] QR not ready yet, retrying...');
-      } catch (err) {
-        lastErr = err;
-        const st = err.httpStatus ?? err.response?.status;
-        if (st === 401) {
-          return { ...wahaErr(err), raw: null };
-        }
-        if (st === 404) {
-          break;
-        }
-        if (st === 422) {
-          console.log('[WAHA] QR not ready yet...');
-          console.log('[WAHA] QR not ready yet, retrying...');
-        } else if (st) {
-          return { ...wahaErr(err), raw: null };
-        } else {
-          console.log('[WAHA] QR not ready yet...');
-          console.log('[WAHA] QR not ready yet, retrying...');
-        }
-      }
-
-      if (attempt < maxQrAttempts - 1) {
-        await sleepMs(1000);
-      }
+  const maxQrAttempts = 30;
+  for (let attempt = 0; attempt < maxQrAttempts; attempt++) {
+    const qr = getCurrentQr();
+    if (qr && isValidQrPayload(qr)) {
+      console.log('[WAHA] QR pronto (captura de logs)');
+      return { ok: true, data: qr, raw: qr };
+    }
+    console.log('[WAHA] Aguardando QR nos logs do container…');
+    if (attempt < maxQrAttempts - 1) {
+      await sleepMs(1000);
     }
   }
 
-  console.error('[WAHA ERROR]', 'QR não disponível', lastErr?.message || '');
+  console.error('[WAHA ERROR]', 'QR não disponível (nada capturado dos logs ainda)');
   throw new Error('QR não disponível');
 }
 

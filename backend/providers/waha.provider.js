@@ -2,7 +2,7 @@ export { wahaProvider, wahaRequest, validateWahaEnv } from '../services/wahaHttp
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
 import * as wahaService from '../services/wahaService.js';
-import { ensureWahaQrSession } from '../services/waha.service.js';
+import { getCurrentQr } from '../services/wahaQrCapture.js';
 import { resolveWahaSessionName } from '../utils/wahaSession.util.js';
 import { BaseProvider } from './base.provider.js';
 import { checkProviderHealth } from '../services/providerHealth.service.js';
@@ -66,29 +66,11 @@ export class WahaProvider extends BaseProvider {
   }
 
   async getQRCode() {
-    try {
-      const r = await ensureWahaQrSession(this.session);
-      if (!r.success) {
-        if (r.code === 'CONNECTED' || r.error === 'already_connected') {
-          console.log('[WAHA] Session already connected');
-          return null;
-        }
-        const e = new Error(r.error || 'QR não disponível');
-        if (
-          String(r.error || '').includes('autorizado') ||
-          String(r.error || '').includes('401')
-        ) {
-          e.httpStatus = 401;
-        }
-        throw e;
-      }
-      return r.qr;
-    } catch (err) {
-      if (err.httpStatus === 401) throw err;
-      if (err.message === 'QR não disponível') throw err;
-      console.error('[WAHA ERROR]:', err.response?.data || err.message);
-      throw err;
+    const qr = getCurrentQr();
+    if (qr) {
+      return qr;
     }
+    return null;
   }
 
   async getStatus() {

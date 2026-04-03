@@ -4,11 +4,12 @@
  */
 
 import { wahaRequest, validateWahaEnv } from './wahaHttp.js';
-import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
+import { getCurrentQr } from './wahaQrCapture.js';
 
 const POLL_TIMEOUT_MS = 20_000;
 const POLL_INTERVAL_MS = 1000;
-const QR_FETCH_ATTEMPTS = 5;
+/** Aguarda QR aparecer no stdout do container (captura em memória). */
+const QR_FETCH_ATTEMPTS = 30;
 const QR_FETCH_DELAY_MS = 1000;
 
 function sleepMs(ms) {
@@ -181,35 +182,10 @@ export async function ensureWahaQrSession(sessionName = 'default') {
   }
 
   for (let i = 0; i < QR_FETCH_ATTEMPTS; i++) {
-    try {
-      const paths = [
-        `/api/sessions/${encodeURIComponent(name)}/qrcode`,
-        `/api/sessions/${encodeURIComponent(name)}/qr`,
-      ];
-      for (const path of paths) {
-        try {
-          const data = await wahaRequest('GET', path);
-          const raw = data?.qr ?? data?.base64 ?? data?.qrcode ?? data;
-          if (isValidQrPayload(data) || isValidQrPayload(raw)) {
-            const payload =
-              extractQrPayload(data) ||
-              extractQrPayload(raw) ||
-              (typeof raw === 'string' ? raw : null);
-            const qr = toQrDataUrl(payload) || payload || (typeof raw === 'string' ? raw : null);
-            if (qr) {
-              console.log('[WAHA] QR ready');
-              return { success: true, qr };
-            }
-          }
-        } catch (e) {
-          const st = e.httpStatus ?? e.response?.status;
-          if (st === 401) return { success: false, error: e.message || 'WAHA não autorizado' };
-          if (st === 404) continue;
-        }
-      }
-    } catch (err) {
-      const st = err.httpStatus ?? err.response?.status;
-      if (st === 401) return { success: false, error: err.message || 'WAHA não autorizado' };
+    const qr = getCurrentQr();
+    if (qr && isValidQrPayload(qr)) {
+      console.log('[WAHA] QR pronto (captura de logs)');
+      return { success: true, qr };
     }
     if (i < QR_FETCH_ATTEMPTS - 1) {
       await sleepMs(QR_FETCH_DELAY_MS);
