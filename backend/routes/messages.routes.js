@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { pool } from '../db/pool.js';
 import * as channelRepo from '../repositories/channel.repository.js';
 import * as inboxRepo from '../repositories/inboxMessages.repository.js';
 import * as messageStatusEventsRepo from '../repositories/messageStatusEvents.repository.js';
@@ -105,6 +106,31 @@ function evaluateMetrics(metrics, { tenantId, channelId = null, channelLabel = n
   }
 
   return alerts;
+}
+
+/** Resposta segura para o dashboard (sempre JSON válido, nunca quebra o cliente). */
+function buildEmptyMetricsPayload() {
+  return {
+    totalMessages: 0,
+    sent: 0,
+    received: 0,
+    deliveredRate: 0,
+    readRate: 0,
+    failedRate: 0,
+    avgDeliveryTime: null,
+    avgReadTime: null,
+    deliveryPercentiles: { p50: null, p95: null, p99: null },
+    readPercentiles: { p50: null, p95: null, p99: null },
+    deliverySampleSize: 0,
+    readSampleSize: 0,
+    deliveryCoverage: 0,
+    readCoverage: 0,
+    dataQuality: { delivery: 'LOW', read: 'LOW' },
+    deliveryOutliersIgnored: 0,
+    readOutliersIgnored: 0,
+    deliveryOutlierRate: 0,
+    readOutlierRate: 0,
+  };
 }
 
 function upsertAlerts(tenantId, alerts) {
@@ -313,64 +339,121 @@ router.post('/send', async (req, res) => {
 });
 
 router.get('/metrics', async (req, res) => {
+  const fallback = buildEmptyMetricsPayload();
   try {
-    const tenantId = req.tenantId || req.user?.tenantId;
-    if (!tenantId) return res.status(401).json({ error: 'Tenant não identificado.' });
-    const channelId = req.query.channelId ? String(req.query.channelId) : null;
     const from = req.query.from ? String(req.query.from) : null;
     const to = req.query.to ? String(req.query.to) : null;
 
-    const metrics = await inboxRepo.getMessagesMetrics({
-      tenantId,
-      channelId,
-      from,
-      to,
-    });
+    if (!from || !to) {
+      return res.status(200).json(fallback);
+    }
 
-    const safeTotal = Number(metrics.totalMessages || 0);
-    const ratio = (value) => (safeTotal > 0 ? Number((value / safeTotal).toFixed(4)) : 0);
-    const MAX_REASONABLE_MS = 24 * 60 * 60 * 1000;
-    const originalDeliveryTimes = metrics.deliveryTimesMs || [];
-    const originalReadTimes = metrics.readTimesMs || [];
-    const deliveryTimes = originalDeliveryTimes.filter((v) => v <= MAX_REASONABLE_MS);
-    const readTimes = originalReadTimes.filter((v) => v <= MAX_REASONABLE_MS);
-    const deliverySampleSize = deliveryTimes.length;
-    const readSampleSize = readTimes.length;
-    const coverage = (sampleSize) => (safeTotal > 0 ? Number((sampleSize / safeTotal).toFixed(4)) : 0);
-    const deliveryOutliersIgnored = Math.max(0, originalDeliveryTimes.length - deliverySampleSize);
-    const readOutliersIgnored = Math.max(0, originalReadTimes.length - readSampleSize);
-    const outlierRate = (ignored, totalOriginal) =>
-      totalOriginal > 0 ? Number((ignored / totalOriginal).toFixed(4)) : 0;
+    let tenantId = req.tenantId || req.user?.tenantId || null;
+    const hdrTenant = req.headers['x-tenant-id'] ?? req.headers['X-Tenant-Id'];
+    if (!tenantId && hdrTenant) {
+      tenantId = String(hdrTenant).trim();
+    }
+    if (!tenantId) {
+      return res.status(200).json(fallback);
+    }
 
-    const payload = {
-      totalMessages: safeTotal,
-      deliveredRate: ratio(Number(metrics.deliveredCount || 0)),
-      readRate: ratio(Number(metrics.readCount || 0)),
-      failedRate: ratio(Number(metrics.failedCount || 0)),
-      avgDeliveryTime: metrics.avgDeliveryTimeMs != null ? Number(metrics.avgDeliveryTimeMs) : null,
-      avgReadTime: metrics.avgReadTimeMs != null ? Number(metrics.avgReadTimeMs) : null,
-      deliveryPercentiles: calculatePercentiles(deliveryTimes),
-      readPercentiles: calculatePercentiles(readTimes),
-      deliverySampleSize,
-      readSampleSize,
-      deliveryCoverage: coverage(deliverySampleSize),
-      readCoverage: coverage(readSampleSize),
-      dataQuality: {
-        delivery: classifyDataQuality(deliverySampleSize),
-        read: classifyDataQuality(readSampleSize),
-      },
-      deliveryOutliersIgnored,
-      readOutliersIgnored,
-      deliveryOutlierRate: outlierRate(deliveryOutliersIgnored, originalDeliveryTimes.length),
-      readOutlierRate: outlierRate(readOutliersIgnored, originalReadTimes.length),
-    };
-    const channelLabel = channelId ? (await channelRepo.findById(channelId, tenantId))?.name || null : null;
-    const evaluated = evaluateMetrics(payload, { tenantId, channelId, channelLabel });
-    upsertAlerts(tenantId, evaluated);
-    return res.status(200).json(payload);
+    const channelId = req.query.channelId ? String(req.query.channelId) : null;
+
+    try {
+      const metrics = await inboxRepo.getMessagesMetrics({
+        tenantId,
+        channelId,
+        from,
+        to,
+      });
+
+      let sent = 0;
+      let received = 0;
+      try {
+        const params = [tenantId, from, to];
+        let dirSql = `
+          SELECT
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE LOWER(COALESCE(role::text, '')) = 'user')::int AS received,
+            COUNT(*) FILTER (WHERE LOWER(COALESCE(role::text, '')) = 'assistant')::int AS sent
+          FROM messages
+          WHERE tenant_id = $1::uuid
+            AND created_at >= $2::timestamptz
+            AND created_at <= $3::timestamptz`;
+        if (channelId) {
+          params.push(channelId);
+          dirSql += ` AND channel_id = $4::uuid`;
+        }
+        const { rows: dirRows } = await pool.query(dirSql, params);
+        sent = Number(dirRows[0]?.sent || 0);
+        received = Number(dirRows[0]?.received || 0);
+      } catch (dirErr) {
+        console.error('[messages] metrics direction counts:', dirErr?.message || dirErr);
+      }
+
+      const safeTotal = Number(metrics.totalMessages || 0);
+      const ratio = (value) => (safeTotal > 0 ? Number((value / safeTotal).toFixed(4)) : 0);
+      const MAX_REASONABLE_MS = 24 * 60 * 60 * 1000;
+      const originalDeliveryTimes = metrics.deliveryTimesMs || [];
+      const originalReadTimes = metrics.readTimesMs || [];
+      const deliveryTimes = originalDeliveryTimes.filter((v) => v <= MAX_REASONABLE_MS);
+      const readTimes = originalReadTimes.filter((v) => v <= MAX_REASONABLE_MS);
+      const deliverySampleSize = deliveryTimes.length;
+      const readSampleSize = readTimes.length;
+      const coverage = (sampleSize) => (safeTotal > 0 ? Number((sampleSize / safeTotal).toFixed(4)) : 0);
+      const deliveryOutliersIgnored = Math.max(0, originalDeliveryTimes.length - deliverySampleSize);
+      const readOutliersIgnored = Math.max(0, originalReadTimes.length - readSampleSize);
+      const outlierRate = (ignored, totalOriginal) =>
+        totalOriginal > 0 ? Number((ignored / totalOriginal).toFixed(4)) : 0;
+
+      const payload = {
+        totalMessages: safeTotal,
+        sent,
+        received,
+        deliveredRate: ratio(Number(metrics.deliveredCount || 0)),
+        readRate: ratio(Number(metrics.readCount || 0)),
+        failedRate: ratio(Number(metrics.failedCount || 0)),
+        avgDeliveryTime: metrics.avgDeliveryTimeMs != null ? Number(metrics.avgDeliveryTimeMs) : null,
+        avgReadTime: metrics.avgReadTimeMs != null ? Number(metrics.avgReadTimeMs) : null,
+        deliveryPercentiles: calculatePercentiles(deliveryTimes),
+        readPercentiles: calculatePercentiles(readTimes),
+        deliverySampleSize,
+        readSampleSize,
+        deliveryCoverage: coverage(deliverySampleSize),
+        readCoverage: coverage(readSampleSize),
+        dataQuality: {
+          delivery: classifyDataQuality(deliverySampleSize),
+          read: classifyDataQuality(readSampleSize),
+        },
+        deliveryOutliersIgnored,
+        readOutliersIgnored,
+        deliveryOutlierRate: outlierRate(deliveryOutliersIgnored, originalDeliveryTimes.length),
+        readOutlierRate: outlierRate(readOutliersIgnored, originalReadTimes.length),
+      };
+
+      let channelLabel = null;
+      if (channelId) {
+        try {
+          channelLabel = (await channelRepo.findById(channelId, tenantId))?.name || null;
+        } catch {
+          channelLabel = null;
+        }
+      }
+      try {
+        const evaluated = evaluateMetrics(payload, { tenantId, channelId, channelLabel });
+        upsertAlerts(tenantId, evaluated);
+      } catch (alertErr) {
+        console.error('[messages] metrics alerts:', alertErr?.message || alertErr);
+      }
+
+      return res.status(200).json(payload);
+    } catch (dbErr) {
+      console.error('[messages] metrics DB:', dbErr?.message || dbErr);
+      return res.status(200).json(fallback);
+    }
   } catch (err) {
-    console.error('[messages] metrics:', err.message);
-    return res.status(500).json({ error: 'Falha ao calcular métricas.' });
+    console.error('[messages] metrics:', err?.message || err);
+    return res.status(200).json(fallback);
   }
 });
 
