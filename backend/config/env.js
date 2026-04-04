@@ -34,7 +34,12 @@ if (isProd) {
   if (!raw.JWT_SECRET) warn('JWT_SECRET', 'não definida – usando fallback interno (apenas desenvolvimento)');
 }
 
-const wahaUrlRaw = (process.env.WAHA_API_URL || process.env.WAHA_URL || '').trim();
+const wahaUrlRaw = (
+  process.env.WAHA_API_URL ||
+  process.env.WAHA_URL ||
+  process.env.WAHA_BASE_URL ||
+  ''
+).trim();
 const wahaKeyRaw = (process.env.WAHA_API_KEY || '').trim();
 const wahaTimeoutRaw = parseInt(process.env.WAHA_REQUEST_TIMEOUT_MS || '15000', 10);
 const evoUrlRaw = (process.env.EVOLUTION_API_URL || process.env.EVOLUTION_URL || '').trim();

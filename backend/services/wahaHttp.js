@@ -1,15 +1,21 @@
 /**
- * Cliente HTTP único para WAHA — WAHA_API_URL e WAHA_API_KEY via process.env.
- * Autenticação: header x-api-key (esperado pelo WAHA em Docker, ex.: http://saas_waha:3000).
+ * Cliente HTTP único para WAHA — WAHA_API_URL / WAHA_URL / WAHA_BASE_URL e WAHA_API_KEY.
+ * Headers de auth: {@link ./providerAuthResolver.js} (x-api-key, apikey SIMPLE ou key CORE).
  */
 
 import axios from 'axios';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { getCurrentQr } from './wahaQrCapture.js';
+import { resolveProviderAuth } from './providerAuthResolver.js';
 
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
-const WAHA_API_URL = (process.env.WAHA_API_URL || process.env.WAHA_URL || '').trim();
+const WAHA_API_URL = (
+  process.env.WAHA_API_URL ||
+  process.env.WAHA_URL ||
+  process.env.WAHA_BASE_URL ||
+  ''
+).trim();
 const WAHA_API_KEY = (process.env.WAHA_API_KEY || '').trim();
 
 function timeoutMs() {
@@ -40,11 +46,12 @@ export async function wahaRequest(method, path, data = null) {
   console.log('[WAHA] Request:', methodUpper, url);
 
   try {
+    const { headers: authHeaders } = await resolveProviderAuth('waha');
     const cfg = {
       method: methodUpper,
       url,
       headers: {
-        'x-api-key': WAHA_API_KEY,
+        ...authHeaders,
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },

@@ -1,3 +1,4 @@
+// HTTP Evolution: evolutionHttp.client → providerAuthResolver.
 import { BaseProvider } from './base.provider.js';
 import * as evolutionService from '../services/evolutionService.js';
 import * as evolutionProvision from '../services/evolutionProvision.service.js';

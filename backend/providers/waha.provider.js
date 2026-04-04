@@ -5,6 +5,7 @@ import * as wahaService from '../services/wahaService.js';
 import { fetchWahaSessionQrcodeRest } from '../services/wahaHttp.js';
 import { getCurrentQr, getQrSnapshotFromDockerLogs } from '../services/wahaQrCapture.js';
 import { resolveWahaSessionName } from '../utils/wahaSession.util.js';
+// HTTP WAHA: wahaHttp → providerAuthResolver (auth dinâmica).
 import { BaseWhatsAppProvider } from './base/BaseWhatsAppProvider.js';
 import { checkProviderHealth } from '../services/providerHealth.service.js';
 import * as wahaProvision from '../services/wahaProvision.service.js';

@@ -237,7 +237,13 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
     const channelNormStatus = () => normalizeChannelStatus(channel.connection_status || channel.status);
 
     if (providerLc === 'waha') {
-      if (!process.env.WAHA_API_URL?.trim() || !process.env.WAHA_API_KEY?.trim()) {
+      const wahaUrlEnv = (
+        process.env.WAHA_API_URL ||
+        process.env.WAHA_URL ||
+        process.env.WAHA_BASE_URL ||
+        ''
+      ).trim();
+      if (!wahaUrlEnv || !process.env.WAHA_API_KEY?.trim()) {
         return wahaSoft({
           success: false,
           qr: null,

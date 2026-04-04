@@ -5,6 +5,7 @@
 
 import axios from 'axios';
 import { evolutionLog } from '../utils/evolutionLog.js';
+import { getProviderAuthHeadersSync } from './providerAuthResolver.js';
 
 const EXP_MAX = 5;
 const BASE_DELAY_MS = 1000;
@@ -39,6 +40,7 @@ export const getEvolutionApiKey = () => {
 const getApiKey = () => getEvolutionApiKey();
 
 const getHeaders = () => ({
+  ...getProviderAuthHeadersSync('evolution'),
   apikey: getApiKey(),
   'Content-Type': 'application/json',
 });

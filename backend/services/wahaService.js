@@ -11,7 +11,12 @@ import { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/waha
 export { resolveSessionName } from '../utils/resolveSessionName.js';
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
-const WAHA_URL_RESOLVED = (process.env.WAHA_API_URL || process.env.WAHA_URL || '').trim();
+const WAHA_URL_RESOLVED = (
+  process.env.WAHA_API_URL ||
+  process.env.WAHA_URL ||
+  process.env.WAHA_BASE_URL ||
+  ''
+).trim();
 
 function assertWahaConfig() {
   try {

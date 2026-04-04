@@ -1,3 +1,4 @@
+// Z-API: cliente HTTP futuro pode usar providerAuthResolver ('zapi' → headers vazios por ora).
 import { BaseProvider } from './base.provider.js';
 
 export class ZapiProvider extends BaseProvider {
