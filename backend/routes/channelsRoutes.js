@@ -27,6 +27,7 @@ import {
 } from '../services/channelEvolutionState.service.js';
 import { ProviderAccessError, validateProviderAccessForTenant } from '../services/providerAccess.service.js';
 import { normalizeQrResult } from '../utils/normalizeQrResult.js';
+import { pickUnifiedQrTransportFields, buildUnifiedQrResponse } from '../utils/whatsappQrContract.js';
 
 const router = Router();
 
@@ -222,6 +223,28 @@ router.post('/:id/provision-instance', requireActiveTenant, async (req, res) => 
 router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
   const wahaSoft = (payload) => res.status(200).json(payload);
 
+  const wahaQrFailUnified = (message, channel) => {
+    let session = null;
+    try {
+      session = resolveSessionName(channel);
+    } catch {
+      session = null;
+    }
+    return pickUnifiedQrTransportFields(
+      buildUnifiedQrResponse({
+        success: false,
+        format: null,
+        qr: null,
+        session,
+        provider: 'waha',
+        state: null,
+        source: null,
+        error: message,
+        meta: { path: 'channelsRoutes_qrcode' },
+      }),
+    );
+  };
+
   try {
     const tenantId = req.tenantId || req.user?.tenantId;
     if (!tenantId) {
@@ -251,6 +274,7 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
           qrcode: null,
           message: 'WAHA não configurado no servidor',
           status: channelNormStatus(),
+          ...wahaQrFailUnified('WAHA não configurado no servidor', channel),
         });
       }
     }
@@ -267,6 +291,7 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
             qrcode: null,
             message: e.message || 'Provider não permitido',
             status: channelNormStatus(),
+            ...wahaQrFailUnified(e.message || 'Provider não permitido', channel),
           });
         }
         return res.status(e.httpStatus || 403).json({ error: e.code, message: e.message, details: e.details });
@@ -276,7 +301,9 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
 
     let qrData = null;
     try {
-      qrData = await channelConnectionService.getChannelQrCode(channel);
+      qrData = await channelConnectionService.getChannelQrCode(channel, {
+        correlationId: req.correlationId ?? null,
+      });
     } catch (qrErr) {
       console.error('[channels] qrcode:', qrErr.message);
       if (providerLc === 'waha') {
@@ -300,6 +327,7 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
           qrcode: null,
           message,
           status: channelNormStatus(),
+          ...wahaQrFailUnified(message, channel),
         });
       }
       if (qrErr.httpStatus === 401 || String(qrErr.message || '').includes('WAHA authentication failed')) {
@@ -355,6 +383,20 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
           qrcode: null,
           format: null,
           status: normalizedStatus,
+          ...pickUnifiedQrTransportFields(
+            buildUnifiedQrResponse({
+              success: false,
+              format: null,
+              qr: null,
+              session: resolveSessionName(channel),
+              provider: 'waha',
+              state: result.state ?? null,
+              source: result.source ?? null,
+              error: result.message || 'QR ainda não disponível, aguardando geração',
+              correlationId: req.correlationId ?? null,
+              meta: { path: 'channelsRoutes_qr_not_ready' },
+            }),
+          ),
         });
       }
       return res.json({
@@ -380,6 +422,8 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
         qrCode: result.format === 'image' ? result.qr : null,
         qrAscii: result.format === 'ascii' ? result.qr : null,
         connected: false,
+        correlationId: result.correlationId ?? req.correlationId ?? null,
+        ...pickUnifiedQrTransportFields(result),
       });
       return wahaSoft({
         success: true,
@@ -389,6 +433,8 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
         format: result.format,
         status: normalizedStatus,
         message: result.message ?? null,
+        correlationId: result.correlationId ?? req.correlationId ?? null,
+        ...pickUnifiedQrTransportFields(result),
       });
     }
 
@@ -438,7 +484,9 @@ router.get('/:id/status', requireActiveTenant, async (req, res) => {
       }
       throw e;
     }
-    const statusData = await channelConnectionService.getChannelStatus(channel).catch(() => null);
+    const statusData = await channelConnectionService
+      .getChannelStatus(channel, { correlationId: req.correlationId ?? null })
+      .catch(() => null);
     const status =
       statusData?.normalizedStatus ||
       statusData?.publicStatus ||
@@ -456,6 +504,8 @@ router.get('/:id/status', requireActiveTenant, async (req, res) => {
       status: normalizedStatus,
       connected,
       channel: statusData?.channel || channel,
+      correlationId: statusData?.sessionStatusCanonical?.correlationId ?? req.correlationId ?? null,
+      sessionStatus: statusData?.sessionStatusCanonical ?? null,
     });
   } catch (err) {
     console.error('[channels] status:', err.message);

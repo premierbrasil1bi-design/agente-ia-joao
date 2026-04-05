@@ -11,6 +11,8 @@ import {
 } from '../services/channelConnection.service.js';
 import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service.js';
 import { normalizeQrResult } from '../utils/normalizeQrResult.js';
+import { pickUnifiedQrTransportFields, buildUnifiedQrResponse } from '../utils/whatsappQrContract.js';
+import { resolveSessionName } from '../utils/resolveSessionName.js';
 import { deriveFlowPhase } from '../utils/whatsappChannelFlow.js';
 import { resolveProvider } from '../providers/provider.factory.js';
 import {
@@ -99,7 +101,9 @@ export async function connectChannel(req, res) {
     channelRef = channel;
 
     const providerLc = resolveProvider(channel);
-    const result = await channelConnectionService.connectWhatsAppChannel(channel);
+    const result = await channelConnectionService.connectWhatsAppChannel(channel, {
+      correlationId: req.correlationId ?? null,
+    });
 
     const { artifactType, artifact } = extractConnectArtifactFromPayload(result.connectResponse);
     const flowPhase = deriveFlowPhase(result.channel);
@@ -115,6 +119,8 @@ export async function connectChannel(req, res) {
       artifactType,
       artifact,
       channel: result.channel,
+      correlationId: result.connectResponse?.correlationId ?? req.correlationId ?? null,
+      connectCanonical: result.connectResponse?.canonical ?? null,
       skippedDueToCooldown: Boolean(result.connectResponse?.skippedDueToCooldown),
       latencyMs,
       health: deriveHealth(result.channel?.connection_status || flowPhase, latencyMs, false),
@@ -187,7 +193,8 @@ export async function getQrCode(req, res) {
     const provider = resolveProvider(channel);
     const providerLc = String(provider || '').toLowerCase();
 
-    const qr = await channelConnectionService.getChannelQrCode(channel);
+    const cid = req.correlationId ?? null;
+    const qr = await channelConnectionService.getChannelQrCode(channel, { correlationId: cid });
     const result = normalizeQrResult(qr);
 
     const socketPayload = {
@@ -199,9 +206,31 @@ export async function getQrCode(req, res) {
       qrCode: result.format === 'image' ? result.qr : null,
       qrAscii: result.format === 'ascii' ? result.qr : null,
       connected: false,
+      correlationId: result.correlationId ?? cid,
+      ...pickUnifiedQrTransportFields(result),
     };
 
     if (providerLc === 'waha') {
+      let wahaSession = null;
+      try {
+        wahaSession = resolveSessionName(channel);
+      } catch {
+        wahaSession = null;
+      }
+      const wahaFailExtras = pickUnifiedQrTransportFields(
+        buildUnifiedQrResponse({
+          success: false,
+          format: null,
+          qr: null,
+          session: wahaSession,
+          provider: 'waha',
+          state: result.state ?? null,
+          source: result.source ?? null,
+          error: result.message || 'QR ainda não disponível, aguardando geração',
+          correlationId: cid,
+          meta: { path: 'channelConnection_getQrCode_waha_pending' },
+        }),
+      );
       if (result.success && result.format === 'ascii' && result.qr) {
         emitChannelSocketEvent('channel:qr', socketPayload);
         return res.status(200).json({
@@ -211,6 +240,7 @@ export async function getQrCode(req, res) {
           qrCode: null,
           qrcode: null,
           message: result.message ?? null,
+          ...pickUnifiedQrTransportFields(result),
         });
       }
       if (result.success && result.format === 'image' && result.qr) {
@@ -223,6 +253,7 @@ export async function getQrCode(req, res) {
           qrCode: result.qr,
           qrcode: result.qr,
           message: result.message ?? null,
+          ...pickUnifiedQrTransportFields(result),
         });
       }
       return res.status(200).json({
@@ -232,6 +263,7 @@ export async function getQrCode(req, res) {
         qrCode: null,
         qrcode: null,
         message: result.message || 'QR ainda não disponível, aguardando geração',
+        ...wahaFailExtras,
       });
     }
 
@@ -324,7 +356,9 @@ export async function getStatus(req, res) {
     channelRef = channel;
 
     console.log('[WHATSAPP_STATUS] check', { channelId: channel.id, tenantId: channel.tenant_id });
-    const result = await channelConnectionService.getChannelStatus(channel);
+    const result = await channelConnectionService.getChannelStatus(channel, {
+      correlationId: req.correlationId ?? null,
+    });
 
     if (result.instanceNotFound) {
       return res.status(200).json({
@@ -375,12 +409,21 @@ export async function getStatus(req, res) {
       health: derived,
     });
 
-    emitChannelSocketEvent('channel:status', {
+    const correlationId =
+      result.sessionStatusCanonical?.correlationId ?? req.correlationId ?? null;
+    const sessionStatus = result.sessionStatusCanonical ?? null;
+    const legacyPayload = {
       channelId: channel.id,
       tenantId: channel.tenant_id,
       status: normalizedRealtimeStatus,
       qrCode: null,
       connected: normalizedRealtimeStatus === 'CONNECTED',
+    };
+    emitChannelSocketEvent('channel:status', {
+      ...legacyPayload,
+      sessionStatus,
+      correlationId,
+      version: 'v2',
     });
     console.log('[CHANNEL SOCKET] STATUS emitted', {
       id: channel.id,
@@ -412,6 +455,8 @@ export async function getStatus(req, res) {
       recreated: Boolean(result.recreated),
       latencyMs,
       health: derived,
+      correlationId: result.sessionStatusCanonical?.correlationId ?? req.correlationId ?? null,
+      sessionStatus: result.sessionStatusCanonical ?? null,
     });
   } catch (err) {
     if (err instanceof ProviderAccessError || err?.code === 'NO_ALLOWED_PROVIDER_AVAILABLE') {

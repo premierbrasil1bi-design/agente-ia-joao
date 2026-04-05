@@ -269,11 +269,12 @@ function normalizeProviderStatus(providerName, rawStatus, channel) {
 /**
  * POST connect: exige external_id já persistido (instância criada manualmente / fluxo explícito).
  * Não cria instância automaticamente.
+ * @param {{ correlationId?: string|null }} [ctx]
  */
-export async function connectWhatsAppChannel(channel) {
+export async function connectWhatsAppChannel(channel, ctx = {}) {
   const providerName = resolveProvider(channel);
   await validateProviderAccessForTenant(channel.tenant_id, providerName);
-  const provider = getProviderForChannel(channel);
+  const provider = getProviderForChannel(channel, { correlationId: ctx.correlationId ?? null });
   const tenantId = channel.tenant_id;
   const ext =
     channel.external_id != null && String(channel.external_id).trim() !== ''
@@ -373,11 +374,12 @@ export async function connectWhatsAppChannel(channel) {
 
 /**
  * Obtém QR Code para o canal (instância já provisionada). Sem connect prévio — recovery fica no cliente HTTP.
+ * @param {{ correlationId?: string|null }} [ctx]
  */
-export async function getChannelQrCode(channel) {
+export async function getChannelQrCode(channel, ctx = {}) {
   const providerName = resolveProvider(channel);
   await validateProviderAccessForTenant(channel.tenant_id, providerName);
-  const provider = getProviderForChannel(channel);
+  const provider = getProviderForChannel(channel, { correlationId: ctx.correlationId ?? null });
   const instanceName = isWahaChannel(channel) ? resolveSessionName(channel) : getEvolutionInstanceName(channel);
   if (!instanceName) {
     const err = new Error('Instance not created');
@@ -660,10 +662,13 @@ function mapPublicWhatsappStatus(rawState, channel) {
   return hasExt ? 'awaiting_connection' : 'inactive';
 }
 
-export async function getChannelStatus(channel) {
+/**
+ * @param {{ correlationId?: string|null }} [ctx]
+ */
+export async function getChannelStatus(channel, ctx = {}) {
   const providerName = resolveProvider(channel);
   await validateProviderAccessForTenant(channel.tenant_id, providerName);
-  const provider = getProviderForChannel(channel);
+  const provider = getProviderForChannel(channel, { correlationId: ctx.correlationId ?? null });
   const instanceName = isWahaChannel(channel) ? resolveSessionName(channel) : getEvolutionInstanceName(channel);
   const tenantId = channel.tenant_id;
 
@@ -678,6 +683,7 @@ export async function getChannelStatus(channel) {
       publicStatus: 'inactive',
       state: null,
       channel,
+      sessionStatusCanonical: null,
     };
   }
 
@@ -688,6 +694,10 @@ export async function getChannelStatus(channel) {
       tenantId,
     });
     const state = await provider.getStatus(channel);
+    const sessionStatusCanonical =
+      state && typeof state === 'object' && state.sessionStatusCanonical
+        ? state.sessionStatusCanonical
+        : null;
     const rawState = state?.status ?? state?.state ?? state?.instance?.state ?? null;
     const rawLower = rawState != null ? String(rawState).trim().toLowerCase() : '';
     const mapped = normalizeProviderStatus(providerName, rawState, channel);
@@ -740,10 +750,11 @@ export async function getChannelStatus(channel) {
       publicStatus,
       state,
       channel: rowForPublic,
+      sessionStatusCanonical,
     };
   } catch (err) {
     const code = err.code;
-    const axStatus = err.response?.status;
+    const axStatus = err.response?.status ?? err.httpStatus;
     const phaseBefore = deriveFlowPhase(channel);
     console.error('[WHATSAPP_STATUS] erro', {
       channelId: channel.id,
