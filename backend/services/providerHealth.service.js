@@ -6,10 +6,15 @@ import { config } from '../config/env.js';
 import * as evolutionService from './evolutionService.js';
 import { wahaRequest, validateWahaEnv } from './wahaHttp.js';
 import { logAdminAction } from './adminActionsLog.service.js';
+import { withTimeout } from '../utils/withTimeout.js';
+import { SessionOpErrorCode } from './whatsapp/whatsappSessionErrors.js';
+import { ensureCorrelationId } from '../utils/correlationId.js';
+import { whatsappLogger } from './whatsapp/whatsappSessionLogger.js';
 
 const CACHE_TTL_MS = 10_000;
 const CIRCUIT_OPEN_MS = 30_000;
 const AUTO_RECONNECT_COOLDOWN_MS = 60_000;
+const HEALTHCHECK_TIMEOUT_MS = parseInt(process.env.WHATSAPP_HEALTHCHECK_TIMEOUT_MS || '20000', 10) || 20000;
 
 /** @type {Map<string, { at: number, error: Error | null }>} */
 const healthCache = new Map();
@@ -377,4 +382,61 @@ export function invalidateProviderHealthCache(provider) {
   if (!p) return;
   healthCache.delete(p);
   providerState.delete(p);
+}
+
+/**
+ * Resultado canônico de healthcheck (painéis / observabilidade). Mantém `checkProviderHealth` para fluxos existentes.
+ *
+ * @param {string} provider
+ * @param {{ correlationId?: string|null }} [ctx]
+ * @returns {Promise<{
+ *   success: boolean,
+ *   provider: string,
+ *   status: 'healthy'|'degraded'|'unhealthy',
+ *   latencyMs: number,
+ *   correlationId: string,
+ *   error: string|null,
+ *   meta: object|null
+ * }>}
+ */
+export async function checkProviderHealthCanonical(provider, ctx = {}) {
+  const correlationId = ensureCorrelationId(ctx.correlationId);
+  const p = String(provider || '').toLowerCase().trim();
+  const t0 = Date.now();
+  try {
+    await withTimeout(checkProviderHealth(p), HEALTHCHECK_TIMEOUT_MS, {
+      code: SessionOpErrorCode.HEALTHCHECK_TIMEOUT,
+      message: `Healthcheck excedeu ${HEALTHCHECK_TIMEOUT_MS}ms`,
+      correlationId,
+      operation: 'checkProviderHealthCanonical',
+    });
+    const st = ensureProviderState(p);
+    const cat = st.status === 'ok' ? 'healthy' : st.status === 'degraded' ? 'degraded' : 'unhealthy';
+    whatsappLogger.info('provider_health_canonical', {
+      provider: p,
+      status: cat,
+      correlationId,
+      latencyMs: Date.now() - t0,
+    });
+    return {
+      success: true,
+      provider: p,
+      status: cat,
+      latencyMs: Date.now() - t0,
+      correlationId,
+      error: null,
+      meta: { lastCheckAt: st.lastCheckAt, internalStatus: st.status },
+    };
+  } catch (err) {
+    const st = ensureProviderState(p);
+    return {
+      success: false,
+      provider: p,
+      status: 'unhealthy',
+      latencyMs: Date.now() - t0,
+      correlationId,
+      error: err?.message || 'healthcheck_failed',
+      meta: { code: err?.code, internalStatus: st.status },
+    };
+  }
 }
