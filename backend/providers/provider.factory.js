@@ -32,12 +32,13 @@ export function getProvider(provider, config = {}) {
 /**
  * Resolve provider + config a partir do canal (fluxo principal connect / QR / status).
  * @param {object} channel
+ * @param {{ correlationId?: string|null }} [opts]
  */
-export function getProviderForChannel(channel) {
+export function getProviderForChannel(channel, opts = {}) {
   const key = resolveProvider(channel);
   if (key == null || key === '') {
     throw new Error('Provider não definido no canal. Defina provider ou provider_config.type.');
   }
-  const merged = mergeProviderConfigForConnect(channel);
+  const merged = mergeProviderConfigForConnect(channel, opts);
   return getProvider(key, merged);
 }

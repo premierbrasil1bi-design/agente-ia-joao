@@ -5,13 +5,13 @@ export function getProvider(providerName, config = {}) {
   return getProviderByName(providerName, config);
 }
 
-export function getProviderForChannel(channel) {
-  return getProviderFromChannel(channel);
+export function getProviderForChannel(channel, opts = {}) {
+  return getProviderFromChannel(channel, opts);
 }
 
-export function buildProviderContext(channel) {
+export function buildProviderContext(channel, opts = {}) {
   const providerName = resolveProvider(channel);
-  const config = mergeProviderConfigForConnect(channel);
+  const config = mergeProviderConfigForConnect(channel, opts);
   return { providerName, config };
 }
 

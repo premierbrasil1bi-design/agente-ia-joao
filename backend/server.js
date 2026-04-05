@@ -41,6 +41,7 @@ import alertsRoutes from './routes/alerts.routes.js';
 import providersRoutes from './routes/providers.routes.js';
 import globalAdminAuth from './middlewares/globalAdminAuth.js';
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
+import { correlationIdMiddleware } from './middleware/correlationId.middleware.js';
 import { startChannelMonitor } from './services/channelMonitor.service.js';
 import { agentAuth } from './middleware/agentAuth.js';
 import { getRedisConnection, getRedisUrl, initEvolutionQueueInfra } from './queues/evolution.queue.js';
@@ -105,6 +106,9 @@ const corsOptions = {
     'Authorization',
     'apikey',
     'x-channel',
+    'x-correlation-id',
+    'x-request-id',
+    'x-trace-id',
   ],
 };
 
@@ -120,6 +124,7 @@ app.use((req, res, next) => {
 
 // 3) Body parser (antes das rotas)
 app.use(express.json());
+app.use(correlationIdMiddleware);
 
 // 4) Fallback de headers CORS (apenas se algo acima não aplicar)
 app.use((req, res, next) => {
@@ -129,7 +134,7 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header(
     'Access-Control-Allow-Headers',
-    'Origin, X-Requested-With, Content-Type, Accept, Authorization, apikey, x-channel'
+    'Origin, X-Requested-With, Content-Type, Accept, Authorization, apikey, x-channel, x-correlation-id, x-request-id, x-trace-id'
   );
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   next();

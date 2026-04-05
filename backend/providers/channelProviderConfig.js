@@ -4,12 +4,21 @@
 import { resolveProvider } from './resolveProvider.js';
 import { resolveSessionName } from '../utils/resolveSessionName.js';
 
-export function mergeProviderConfigForConnect(channel) {
+/**
+ * @param {object} channel
+ * @param {{ correlationId?: string|null }} [extra]
+ */
+export function mergeProviderConfigForConnect(channel, extra = {}) {
   const pc =
     channel?.provider_config && typeof channel.provider_config === 'object'
       ? { ...channel.provider_config }
       : {};
   const prov = resolveProvider(channel);
+
+  const corr =
+    extra.correlationId != null && String(extra.correlationId).trim() !== ''
+      ? String(extra.correlationId).trim().slice(0, 128)
+      : undefined;
 
   if (prov === 'waha') {
     const stable = resolveSessionName(channel);
@@ -20,6 +29,7 @@ export function mergeProviderConfigForConnect(channel) {
       session: stable,
       channelId: channel?.id ?? null,
       tenantId: channel?.tenant_id ?? null,
+      ...(corr ? { correlationId: corr } : {}),
     };
   }
 
@@ -39,5 +49,6 @@ export function mergeProviderConfigForConnect(channel) {
     session: name,
     channelId: channel?.id ?? null,
     tenantId: channel?.tenant_id ?? null,
+    ...(corr ? { correlationId: corr } : {}),
   };
 }
