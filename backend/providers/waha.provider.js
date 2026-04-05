@@ -2,19 +2,23 @@ export { wahaProvider, wahaRequest, validateWahaEnv, fetchWahaSessionQrcodeRest 
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
 import * as wahaService from '../services/wahaService.js';
+import * as whatsappSessionFacade from '../services/whatsappSessionProvider.facade.js';
 import { fetchWahaSessionQrcodeRest } from '../services/wahaHttp.js';
 import { getCurrentQr, getQrSnapshotFromDockerLogs } from '../services/wahaQrCapture.js';
 import { resolveWahaSessionName } from '../utils/wahaSession.util.js';
 // HTTP WAHA: wahaHttp → providerAuthResolver (auth dinâmica).
 import { BaseWhatsAppProvider } from './base/BaseWhatsAppProvider.js';
-import { checkProviderHealth } from '../services/providerHealth.service.js';
 import * as wahaProvision from '../services/wahaProvision.service.js';
+import { SessionState } from '../services/whatsapp/whatsappSessionState.js';
+import { buildUnifiedQrResponse } from '../utils/whatsappQrContract.js';
+import { whatsappLogger } from '../services/whatsapp/whatsappSessionLogger.js';
 
 export class WahaProvider extends BaseWhatsAppProvider {
   constructor(config = {}) {
     super(config);
     this.channelId = config.channelId ?? null;
     this.tenantId = config.tenantId ?? null;
+    this.correlationId = config.correlationId != null ? String(config.correlationId).slice(0, 128) : null;
     let s;
     if (this.tenantId != null && this.channelId != null) {
       s = resolveWahaSessionName({
@@ -32,9 +36,20 @@ export class WahaProvider extends BaseWhatsAppProvider {
   }
 
   _ctx() {
-    return { channelId: this.channelId, tenantId: this.tenantId };
+    return { channelId: this.channelId, tenantId: this.tenantId, correlationId: this.correlationId };
   }
 
+  /**
+   * Prepara sessão WAHA (health + ensure). Reflete estado real após prepare — não força `connected: true`.
+   *
+   * @returns {Promise<{
+   *   connected: boolean,
+   *   session: string,
+   *   state: string,
+   *   prepare: object,
+   *   correlationId: string
+   * }>}
+   */
   async connect() {
     console.log('[PROVIDER] connect', {
       provider: 'waha',
@@ -43,19 +58,25 @@ export class WahaProvider extends BaseWhatsAppProvider {
       tenantId: this.tenantId,
     });
     try {
-      await checkProviderHealth('waha');
-      const created = await wahaService.createSession(this.session, this._ctx());
-      if (wahaService.isWahaUnauthorizedResult(created)) {
-        const e = new Error(created.error || 'WAHA não autorizado');
-        e.httpStatus = 401;
+      const out = await whatsappSessionFacade.connectProviderSession('waha', {
+        sessionName: this.session,
+        tenantId: this.tenantId,
+        channelId: this.channelId,
+        correlationId: this.correlationId,
+      });
+      if (!out.ok) {
+        const e = new Error('Falha ao conectar WhatsApp (WAHA)');
+        e.code = 'CONNECT_FAILED';
         throw e;
       }
-      if (!created.ok) {
-        const e = new Error(created.error || 'Falha ao conectar WhatsApp (WAHA)');
-        if (created.httpStatus) e.httpStatus = created.httpStatus;
-        throw e;
-      }
-      return { connected: false, session: this.session };
+      return {
+        connected: out.connected,
+        session: this.session,
+        state: out.state,
+        prepare: out.prepare,
+        correlationId: out.correlationId,
+        canonical: out.canonical,
+      };
     } catch (err) {
       const msg = err?.message || '';
       if (err.httpStatus === 401) throw err;
@@ -69,19 +90,72 @@ export class WahaProvider extends BaseWhatsAppProvider {
 
   async getQRCode(_channel) {
     void _channel;
+    const prep = await wahaService.ensureSessionReady(this.session, this._ctx());
+    const prepState = prep?.state ?? SessionState.UNKNOWN;
+    const baseMeta = { prepare: prep };
+
+    if (prepState === SessionState.CONNECTED) {
+      return buildUnifiedQrResponse({
+        success: true,
+        format: null,
+        qr: null,
+        session: this.session,
+        provider: 'waha',
+        state: prepState,
+        source: null,
+        error: null,
+        correlationId: this.correlationId,
+        meta: { ...baseMeta, path: 'waha_provider_already_connected' },
+      });
+    }
+
     try {
-      const fromRest = await fetchWahaSessionQrcodeRest(this.session);
+      const fromRest = await fetchWahaSessionQrcodeRest(this.session, { correlationId: this.correlationId });
       if (fromRest) {
-        return this.success(fromRest);
+        const n = this.normalize(fromRest);
+        return buildUnifiedQrResponse({
+          success: n.success,
+          format: n.format,
+          qr: n.qr,
+          message: n.message,
+          session: this.session,
+          provider: 'waha',
+          state: n.success
+            ? prepState !== SessionState.UNKNOWN
+              ? prepState
+              : SessionState.QR_AVAILABLE
+            : prepState,
+          source: 'rest',
+          error: n.success ? null : n.message ?? 'QR REST inválido',
+          correlationId: this.correlationId,
+          meta: baseMeta,
+        });
       }
     } catch (err) {
-      console.warn('[WAHA] REST QR falhou', err?.message || err);
+      whatsappLogger.warn('waha_rest_qr_failed', {
+        session: this.session,
+        correlationId: this.correlationId,
+        errorMessage: err?.message || String(err),
+      });
     }
 
     try {
       const fromStream = getCurrentQr();
       if (fromStream) {
-        return this.success(fromStream);
+        const n = this.normalize(fromStream);
+        return buildUnifiedQrResponse({
+          success: n.success,
+          format: n.format,
+          qr: n.qr,
+          message: n.message,
+          session: this.session,
+          provider: 'waha',
+          state: SessionState.QR_AVAILABLE,
+          source: 'stream',
+          error: n.success ? null : n.message ?? 'QR stream inválido',
+          correlationId: this.correlationId,
+          meta: baseMeta,
+        });
       }
     } catch {
       /* stream opcional */
@@ -90,22 +164,79 @@ export class WahaProvider extends BaseWhatsAppProvider {
     try {
       const snap = await getQrSnapshotFromDockerLogs();
       if (snap?.imageDataUrl) {
-        return this.success(snap.imageDataUrl);
+        const n = this.normalize(snap.imageDataUrl);
+        return buildUnifiedQrResponse({
+          success: n.success,
+          format: n.format,
+          qr: n.qr,
+          message: n.message,
+          session: this.session,
+          provider: 'waha',
+          state: SessionState.QR_AVAILABLE,
+          source: 'logs',
+          error: n.success ? null : n.message ?? null,
+          correlationId: this.correlationId,
+          meta: { ...baseMeta, dockerSnapshot: true },
+        });
       }
       if (snap?.ascii) {
-        return this.success({ format: 'ascii', qr: snap.ascii });
+        const n = this.normalize({ format: 'ascii', qr: snap.ascii });
+        return buildUnifiedQrResponse({
+          success: n.success,
+          format: n.format,
+          qr: n.qr,
+          message: n.message,
+          session: this.session,
+          provider: 'waha',
+          state: SessionState.QR_AVAILABLE,
+          source: 'logs',
+          error: n.success ? null : n.message ?? null,
+          correlationId: this.correlationId,
+          meta: { ...baseMeta, dockerSnapshot: true, ascii: true },
+        });
       }
     } catch {
       /* snapshot Docker opcional */
     }
 
-    return this.fail('QR ainda não disponível, aguardando geração');
+    const msg = 'QR ainda não disponível, aguardando geração';
+    return buildUnifiedQrResponse({
+      success: false,
+      format: null,
+      qr: null,
+      message: msg,
+      session: this.session,
+      provider: 'waha',
+      state: prepState,
+      source: null,
+      error: msg,
+      correlationId: this.correlationId,
+      meta: baseMeta,
+    });
   }
 
-  async getStatus() {
-    const st = await wahaService.getSessionStatus(this.session, this._ctx());
-    if (!st.ok) throw new Error(st.error || 'WAHA status failed');
-    return st.data;
+  /**
+   * Retorno legado (payload WAHA) + `sessionStatusCanonical` para HTTP/socket.
+   * @param {object} [_channel]
+   */
+  async getStatus(_channel) {
+    void _channel;
+    const canonical = await whatsappSessionFacade.getProviderSessionStatus('waha', this.session, this._ctx());
+    if (!canonical.success) {
+      const e = new Error(canonical.error || 'WAHA status failed');
+      e.httpStatus = canonical.meta?.httpStatus;
+      e.code = canonical.meta?.code || 'WAHA_STATUS_FAILED';
+      throw e;
+    }
+    const legacy = canonical.meta?.legacyPayload;
+    const base =
+      legacy && typeof legacy === 'object' && !Array.isArray(legacy)
+        ? { ...legacy }
+        : {};
+    return {
+      ...base,
+      sessionStatusCanonical: canonical,
+    };
   }
 
   async sendMessage(payload) {

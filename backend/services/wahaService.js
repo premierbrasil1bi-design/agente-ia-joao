@@ -1,5 +1,11 @@
 /**
  * Cliente WAHA — HTTP via wahaHttp (x-api-key, WAHA_API_URL / WAHA_API_KEY).
+ *
+ * Fluxo de sessão (produção):
+ * - Preparação idempotente: whatsappSessionOrchestrator.ensureWahaSessionPrepared (via ensureSessionReady).
+ * - Connect do provider: whatsappSessionOrchestrator.connectWahaChannel (health + FREE reset opcional + ensure).
+ * - createSession: apenas FREE reset + ensure (compat legado; não duplicar após connect do provider).
+ * - Estados normalizados: whatsapp/whatsappSessionState (agnóstico); WAHA mapeado em normalizeProviderSessionStatus.
  */
 
 import { config } from '../config/env.js';
@@ -7,6 +13,12 @@ import { checkProviderHealth } from './providerHealth.service.js';
 import { wahaRequest, validateWahaEnv } from './wahaHttp.js';
 import { getCurrentQr } from './wahaQrCapture.js';
 import { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
+import { applyWahaFreeSessionResetIfNeeded } from './whatsappSessionOrchestrator.service.js';
+import { ensureProviderSessionPrepared } from './whatsappSessionProvider.facade.js';
+import { whatsappLogger } from './whatsapp/whatsappSessionLogger.js';
+import { SessionState } from './whatsapp/whatsappSessionState.js';
+import { buildUnifiedQrResponse } from '../utils/whatsappQrContract.js';
+import { normalizeQrResult } from '../utils/normalizeQrResult.js';
 
 export { resolveSessionName } from '../utils/resolveSessionName.js';
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
@@ -69,115 +81,39 @@ function logWahaContext(sessionName, channelId, tenantId) {
   if (tenantId != null) console.log('[WAHA] tenantId:', tenantId);
 }
 
-function extractSessionsArray(raw) {
-  if (Array.isArray(raw)) return raw;
-  if (raw && Array.isArray(raw.sessions)) return raw.sessions;
-  if (raw && Array.isArray(raw.data)) return raw.data;
-  if (raw && Array.isArray(raw.items)) return raw.items;
-  return [];
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function sessionNameMatches(entry, sessionName) {
-  const want = String(sessionName).trim();
-  if (entry == null) return false;
-  if (typeof entry === 'string') return entry.trim() === want;
-  if (typeof entry === 'object') {
-    const n = entry.name ?? entry.session ?? entry.id;
-    return n != null && String(n).trim() === want;
-  }
-  return false;
+function isWahaQrPollDebug() {
+  const v = String(process.env.WAHA_SESSION_DEBUG_POLL || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
-function normalizeWahaStatus(status) {
+/**
+ * Orquestrador central de preparação de sessão WAHA (locks provider+tenant+sessão, estados normalizados).
+ * @param {string} name
+ * @param {{ channelId?: string; tenantId?: string; correlationId?: string }} [ctx]
+ */
+export async function ensureSessionReady(name, ctx = {}) {
+  const sessionName = resolveWahaRequestSession(name, ctx);
+  assertWahaConfig();
+  return ensureProviderSessionPrepared('waha', {
+    sessionName,
+    tenantId: ctx.tenantId ?? null,
+    channelId: ctx.channelId ?? null,
+    correlationId: ctx.correlationId ?? null,
+  });
+}
+
+/**
+ * @deprecated Uso interno / diagnóstico. Preferir normalizeProviderSessionStatus('waha', raw).
+ */
+export function normalizeWahaStatus(status) {
   return String(status ?? '')
     .trim()
     .toUpperCase()
     .replace(/-/g, '_');
-}
-
-/** Estados em que o endpoint de QR costuma responder com payload válido (≠ conectado). */
-function isSessionReadyForQr(status) {
-  const normalized = normalizeWahaStatus(status);
-  return normalized === 'SCAN_QR_CODE' || normalized === 'STARTED';
-}
-
-function isSessionConnected(status) {
-  return normalizeWahaStatus(status) === 'CONNECTED';
-}
-
-function extractStatusFromSessionEntry(entry) {
-  if (entry == null || typeof entry !== 'object') return null;
-  return (
-    entry.status ??
-    entry.state ??
-    entry.session?.status ??
-    entry.connectionStatus ??
-    entry.me?.status ??
-    null
-  );
-}
-
-/**
- * Snapshot da sessão na API (lista global ou GET por nome), com status para decisão de QR.
- */
-async function getSessionSnapshot(sessionName) {
-  try {
-    const raw = await wahaRequest('GET', '/api/sessions');
-    const list = extractSessionsArray(raw);
-    const session = list.find((s) => sessionNameMatches(s, sessionName));
-    if (session && typeof session === 'object') {
-      const status = extractStatusFromSessionEntry(session);
-      return { found: true, session, status };
-    }
-  } catch {
-    /* tenta GET direto */
-  }
-  try {
-    const data = await wahaRequest('GET', `/api/sessions/${encodeURIComponent(sessionName)}`);
-    const session = typeof data === 'object' && data != null ? data : null;
-    const status = extractStatusFromSessionEntry(session);
-    return { found: true, session, status };
-  } catch (err) {
-    const st = err.httpStatus ?? err.response?.status;
-    if (st === 404) return { found: false, session: null, status: null };
-    throw err;
-  }
-}
-
-/**
- * Aguarda sessão existir e estar pronta para QR ou já conectada (FREE após create/reset).
- */
-async function waitForSessionReady(sessionName) {
-  const maxAttempts = 10;
-  const delayMs = 1000;
-
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      const { found, session, status } = await getSessionSnapshot(sessionName);
-      if (session && typeof session === 'object') {
-        console.log('[WAHA] Session status:', session.status ?? status);
-      }
-
-      const effectiveStatus = extractStatusFromSessionEntry(session) ?? status;
-      const readyForQr = found && isSessionReadyForQr(effectiveStatus);
-      const connected = found && isSessionConnected(effectiveStatus);
-      if (readyForQr || connected) {
-        console.log('[WAHA] Session ready:', sessionName, 'status:', effectiveStatus);
-        return true;
-      }
-    } catch {
-      console.log('[WAHA] Waiting session...');
-    }
-
-    console.log('[WAHA] Waiting for session...');
-    await new Promise((r) => setTimeout(r, delayMs));
-  }
-
-  throw new Error('WAHA session not ready in time');
-}
-
-function sleepMs(ms) {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 /**
@@ -214,56 +150,34 @@ export async function testWahaConnection() {
 }
 
 /**
+ * @deprecated LEGADO — não usar em fluxos novos de conexão WhatsApp.
+ * O caminho suportado é: `WahaProvider.connect` → `connectWahaChannel` (orquestrador) ou `ensureSessionReady`.
+ * Mantido para compatibilidade (`services/providers/wahaProvider.js`, integrações antigas).
+ * Remover após migrar todos os consumidores.
+ *
  * @param {string} name
- * @param {{ channelId?: string; tenantId?: string }} [ctx]
+ * @param {{ channelId?: string; tenantId?: string; correlationId?: string }} [ctx]
  */
 export async function createSession(name, ctx = {}) {
   const sessionName = resolveWahaRequestSession(name, ctx);
+  whatsappLogger.warn('waha_legacy_createSession', {
+    event: 'deprecated_api',
+    session: sessionName,
+    correlationId: ctx.correlationId ?? null,
+    trace: new Error('legacy_createSession').stack?.split('\n').slice(1, 5).join(' | '),
+  });
   logWahaContext(sessionName, ctx.channelId, ctx.tenantId);
   assertWahaConfig();
 
-  if (process.env.WAHA_MULTI_SESSION !== 'true') {
-    try {
-      console.log('[WAHA] Resetting default session (FREE mode)');
-      await wahaRequest(
-        'DELETE',
-        `/api/sessions/${encodeURIComponent(WAHA_CORE_DEFAULT_SESSION)}`,
-      );
-    } catch {
-      console.log('[WAHA] No previous session to delete or already clean');
-    }
-  }
-
-  console.log('[WAHA] Creating session:', sessionName);
+  await applyWahaFreeSessionResetIfNeeded({ correlationId: ctx.correlationId ?? null });
 
   try {
-    const data = await wahaRequest('POST', '/api/sessions', {
-      name: sessionName,
-      start: true,
-    });
-    return { ok: true, data };
+    await ensureSessionReady(sessionName, ctx);
+    return { ok: true, data: { name: sessionName } };
   } catch (err) {
     const st = err.httpStatus ?? err.response?.status;
     if (st === 401) {
       return { ...wahaErr(err), httpStatus: 401 };
-    }
-    if (st === 409 || st === 400) {
-      try {
-        await wahaRequest('POST', `/api/sessions/${encodeURIComponent(sessionName)}/start`, {});
-        return { ok: true, data: { name: sessionName, reused: true } };
-      } catch (e2) {
-        try {
-          await wahaRequest('POST', '/api/sessions/start', { name: sessionName });
-          return { ok: true, data: { name: sessionName, reused: true } };
-        } catch (e3) {
-          try {
-            await wahaRequest('POST', '/api/sessions/start', { session: sessionName });
-            return { ok: true, data: { name: sessionName, reused: true } };
-          } catch (e4) {
-            return wahaErr(e4);
-          }
-        }
-      }
     }
     return wahaErr(err);
   }
@@ -271,54 +185,107 @@ export async function createSession(name, ctx = {}) {
 
 /**
  * @param {string} name
- * @param {{ channelId?: string; tenantId?: string }} [ctx]
+ * @param {{ channelId?: string; tenantId?: string; correlationId?: string }} [ctx]
  */
 export async function getQrCode(name, ctx = {}) {
   const sessionName = resolveWahaRequestSession(name, ctx);
   logWahaContext(sessionName, ctx.channelId, ctx.tenantId);
   assertWahaConfig();
 
-  const returnIfAlreadyConnected = async () => {
-    try {
-      const { found, session, status } = await getSessionSnapshot(sessionName);
-      if (!found) return null;
-      const st = extractStatusFromSessionEntry(session) ?? status;
-      if (isSessionConnected(st)) {
-        console.log('[WAHA] Session already connected, skipping QR');
-        console.log('[WAHA] Session already connected');
-        return { ok: true, alreadyConnected: true };
-      }
-    } catch {
-      /* segue fluxo normal */
-    }
-    return null;
-  };
+  const prep = await ensureSessionReady(sessionName, ctx);
 
-  let skipQr = await returnIfAlreadyConnected();
-  if (skipQr) return skipQr;
-
-  if (process.env.WAHA_MULTI_SESSION !== 'true') {
-    await waitForSessionReady(sessionName);
+  if (prep.state === SessionState.CONNECTED) {
+    console.log('[WAHA] Sessão já conectada após ensure — QR omitido');
+    const unified = buildUnifiedQrResponse({
+      success: true,
+      format: null,
+      qr: null,
+      session: sessionName,
+      provider: 'waha',
+      state: prep.state,
+      source: null,
+      error: null,
+      correlationId: ctx.correlationId ?? null,
+      meta: { path: 'wahaService_after_ensure_connected', prepare: prep },
+    });
+    return {
+      ok: true,
+      alreadyConnected: true,
+      data: unified,
+      raw: unified,
+      ...unified,
+    };
   }
-
-  skipQr = await returnIfAlreadyConnected();
-  if (skipQr) return skipQr;
 
   const maxQrAttempts = 30;
   for (let attempt = 0; attempt < maxQrAttempts; attempt++) {
     const qr = getCurrentQr();
     if (qr && isValidQrPayload(qr)) {
-      console.log('[WAHA] QR pronto (captura de logs)');
-      return { ok: true, data: qr, raw: qr };
+      const n = normalizeQrResult(qr);
+      const unified = buildUnifiedQrResponse({
+        success: n.success,
+        format: n.format,
+        qr: n.qr,
+        message: n.message,
+        session: sessionName,
+        provider: 'waha',
+        state: SessionState.QR_AVAILABLE,
+        source: 'logs',
+        error: n.success ? null : n.message ?? 'QR inválido',
+        correlationId: ctx.correlationId ?? null,
+        meta: { path: 'wahaService_log_capture', prepare: prep, attempts: attempt + 1 },
+      });
+      whatsappLogger.info('waha_qr_log_capture', {
+        session: sessionName,
+        attempts: attempt + 1,
+        correlationId: ctx.correlationId ?? null,
+      });
+      return {
+        ok: true,
+        data: qr,
+        raw: qr,
+        ...unified,
+      };
     }
-    console.log('[WAHA] Aguardando QR nos logs do container…');
+    if (isWahaQrPollDebug()) {
+      console.log('[WAHA] Aguardando QR nos logs do container…', {
+        attempt: attempt + 1,
+        max: maxQrAttempts,
+        session: sessionName,
+      });
+    }
     if (attempt < maxQrAttempts - 1) {
-      await sleepMs(1000);
+      await sleep(1000);
     }
   }
 
-  console.error('[WAHA ERROR]', 'QR não disponível (nada capturado dos logs ainda)');
+  whatsappLogger.error('waha_qr_poll_exhausted', {
+    session: sessionName,
+    attempts: maxQrAttempts,
+    correlationId: ctx.correlationId ?? null,
+  });
   throw new Error('QR não disponível');
+}
+
+/**
+ * Camada interna com retorno estruturado (sem throw) — preferir em fluxos novos; {@link getQrCode} mantém throw por compat.
+ *
+ * @param {string} name
+ * @param {{ channelId?: string; tenantId?: string; correlationId?: string }} [ctx]
+ * @returns {Promise<{ ok: true, data: object } | { ok: false, error: string, code?: string, correlationId?: string|null }>}
+ */
+export async function getQrCodeOperationResult(name, ctx = {}) {
+  try {
+    const data = await getQrCode(name, ctx);
+    return { ok: true, data };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e?.message || 'QR não disponível',
+      code: e?.code,
+      correlationId: ctx.correlationId ?? null,
+    };
+  }
 }
 
 export async function getSessionStatus(name, ctx = {}) {

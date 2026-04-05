@@ -7,6 +7,8 @@ import axios from 'axios';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { getCurrentQr } from './wahaQrCapture.js';
 import { resolveProviderAuth } from './providerAuthResolver.js';
+import { withTimeout } from '../utils/withTimeout.js';
+import { SessionOpErrorCode } from './whatsapp/whatsappSessionErrors.js';
 
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
@@ -83,6 +85,9 @@ export async function wahaRequest(method, path, data = null) {
     console.error('[WAHA ERROR]', msg);
     const err = new Error(msg);
     err.code = error.code;
+    if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+      err.code = SessionOpErrorCode.PROVIDER_TIMEOUT;
+    }
     throw err;
   }
 }
@@ -93,7 +98,11 @@ export async function wahaRequest(method, path, data = null) {
  * @param {string} sessionName
  * @returns {Promise<string|null>} data URL ou null se indisponível / rota inexistente
  */
-export async function fetchWahaSessionQrcodeRest(sessionName) {
+/**
+ * @param {string} sessionName
+ * @param {{ correlationId?: string|null }} [opts]
+ */
+export async function fetchWahaSessionQrcodeRest(sessionName, opts = {}) {
   try {
     validateWahaEnv();
   } catch {
@@ -102,31 +111,47 @@ export async function fetchWahaSessionQrcodeRest(sessionName) {
   const name = String(sessionName ?? 'default').trim() || 'default';
   const enc = encodeURIComponent(name);
   const paths = [`/api/sessions/${enc}/qrcode`, `/api/sessions/${enc}/qr`];
-  for (const path of paths) {
-    try {
-      const data = await wahaRequest('GET', path);
-      const raw = data?.qr ?? data?.data ?? data?.base64 ?? data?.qrcode ?? data;
-      const payload =
-        extractQrPayload(data) ||
-        extractQrPayload(raw) ||
-        (typeof raw === 'string' && raw.trim() ? raw.trim() : null);
-      const url = toQrDataUrl(payload);
-      if (url) {
-        console.log('[WAHA] QR obtido via REST', path);
-        return url;
-      }
-    } catch (e) {
-      const st = e.httpStatus ?? e.response?.status;
-      if (st === 401) {
-        console.warn('[WAHA] QR REST não autorizado');
+  const qrRestMs = parseInt(process.env.WHATSAPP_QR_REST_TIMEOUT_MS || '12000', 10) || 12000;
+  const correlationId = opts.correlationId ?? null;
+
+  try {
+    return await withTimeout(
+      (async () => {
+        for (const path of paths) {
+          try {
+            const data = await wahaRequest('GET', path);
+            const raw = data?.qr ?? data?.data ?? data?.base64 ?? data?.qrcode ?? data;
+            const payload =
+              extractQrPayload(data) ||
+              extractQrPayload(raw) ||
+              (typeof raw === 'string' && raw.trim() ? raw.trim() : null);
+            const url = toQrDataUrl(payload);
+            if (url) {
+              return url;
+            }
+          } catch (e) {
+            const st = e.httpStatus ?? e.response?.status;
+            if (st === 401) {
+              return null;
+            }
+            if (st === 404) {
+              continue;
+            }
+          }
+        }
         return null;
-      }
-      if (st === 404) {
-        continue;
-      }
-    }
+      })(),
+      qrRestMs,
+      {
+        code: SessionOpErrorCode.QR_TIMEOUT,
+        message: `Obtenção de QR REST excedeu ${qrRestMs}ms`,
+        correlationId,
+        operation: 'fetch_waha_qr_rest',
+      },
+    );
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export const wahaProvider = {
