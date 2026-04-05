@@ -80,36 +80,42 @@ process.on('uncaughtException', console.error);
 const app = express();
 const PORT = config.port || 3000;
 
-const allowedOrigins = [
-  'https://admin.omnia1biai.com.br',
+const corsProductionOrigins = [
   'https://app.omnia1biai.com.br',
-  'http://localhost:5173',
-  'http://localhost:3000',
+  'https://admin.omnia1biai.com.br',
+];
+
+const corsAllowedOrigins = [
+  ...corsProductionOrigins,
+  ...(process.env.NODE_ENV !== 'production'
+    ? ['http://localhost:5173', 'http://localhost:3000']
+    : []),
 ];
 
 const corsOptions = {
-  origin: (origin, callback) => {
-    console.log('[CORS] Origin:', origin);
-    // Permite requests sem Origin (ex.: health checks, curl, server-to-server)
+  origin(origin, callback) {
+    if (process.env.NODE_ENV !== 'production' && origin) {
+      console.log('[CORS] Origin:', origin);
+    }
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    console.error('CORS bloqueado:', origin);
+    if (corsAllowedOrigins.includes(origin)) return callback(null, true);
+    console.error('[CORS] bloqueado:', origin);
     return callback(new Error('CORS bloqueado'), false);
   },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
+    'Content-Type',
+    'Authorization',
     'Origin',
     'X-Requested-With',
-    'Content-Type',
     'Accept',
-    'Authorization',
     'apikey',
     'x-channel',
     'x-correlation-id',
     'x-request-id',
     'x-trace-id',
   ],
+  credentials: true,
 };
 
 // 1) CORS (antes de body parser e rotas)
@@ -125,20 +131,6 @@ app.use((req, res, next) => {
 // 3) Body parser (antes das rotas)
 app.use(express.json());
 app.use(correlationIdMiddleware);
-
-// 4) Fallback de headers CORS (apenas se algo acima não aplicar)
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  const allowOrigin = allowedOrigins.includes(origin) ? origin : 'https://app.omnia1biai.com.br';
-  res.header('Access-Control-Allow-Origin', allowOrigin);
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header(
-    'Access-Control-Allow-Headers',
-    'Origin, X-Requested-With, Content-Type, Accept, Authorization, apikey, x-channel, x-correlation-id, x-request-id, x-trace-id'
-  );
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  next();
-});
 
 /* =========================================================
    GLOBAL MIDDLEWARES
@@ -373,14 +365,10 @@ const server = createServer(app);
 
 const io = new SocketIOServer(server, {
   cors: {
-    origin: [
-      'https://app.omnia1biai.com.br',
-      'https://admin.omnia1biai.com.br',
-      'http://localhost:5173',
-      'http://localhost:3000',
-    ],
-    methods: ['GET', 'POST'],
-    credentials: true
+    origin: corsAllowedOrigins,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
   },
 });
 
