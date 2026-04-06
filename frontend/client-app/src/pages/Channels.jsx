@@ -9,11 +9,9 @@ import useAutoReconnect from '../hooks/useAutoReconnect.js';
 import { useChannel } from '../context/ChannelContext.jsx';
 import { useChannelConnection } from '../hooks/useChannelConnection.js';
 import { ConnectionStateBanner } from '../components/ConnectionStateBanner.jsx';
-import { CHANNEL_CONNECTION_STATE } from '../utils/channelCore.js';
+import { CHANNEL_CONNECTION_STATE, normalizeChannelStatus } from '../utils/channelCore.js';
 import { CreateChannelCard } from '../components/CreateChannelCard.jsx';
 import chLayout from './Channels.module.css';
-
-const ONLINE_STATES = ['SCAN_QR_CODE', 'STARTING', 'WORKING'];
 
 const styles = {
   page: {
@@ -875,17 +873,17 @@ export function Channels() {
   const getChannelContextText = (ch) => {
     const t = (ch.type || '').toLowerCase();
     const s = (ch.status || '').toLowerCase();
-    const state = String(ch?.status || '').trim().toUpperCase();
+    const normalized = normalizeChannelStatus(ch.status);
 
     if (t === 'whatsapp') {
-      if (state === 'SCAN_QR_CODE') {
+      if (normalized === 'CONNECTED') {
+        return 'Canal WhatsApp conectado. Mensagens serão roteadas automaticamente para o agente vinculado.';
+      }
+      if (normalized === 'PENDING') {
         return 'Aguardando leitura do QR.';
       }
-      if (state === 'STARTING') {
-        return 'Inicializando conexão.';
-      }
-      if (state === 'WORKING') {
-        return 'Conectado.';
+      if (normalized === 'DISCONNECTED') {
+        return 'Canal desconectado. Use “Conectar WhatsApp” para iniciar de novo.';
       }
       const fp = ch.flowPhase;
       if (fp === 'draft') {
@@ -934,6 +932,7 @@ export function Channels() {
     if (t === 'whatsapp') {
       const phase = ch.flowPhase;
       const st = (ch.status || '').toLowerCase();
+      const norm = normalizeChannelStatus(ch.status);
       const busy =
         loadingConnectId === ch.id ||
         loadingQr === ch.id ||
@@ -941,6 +940,7 @@ export function Channels() {
         loadingProvisionId === ch.id ||
         (connectionState === CHANNEL_CONNECTION_STATE.GENERATING_QR && loadingConnectId === ch.id);
       const isConnected =
+        norm === 'CONNECTED' ||
         st === 'connected' ||
         st === 'open' ||
         phase === 'connected' ||
@@ -1151,12 +1151,10 @@ export function Channels() {
 
   const statusSummary = channels.reduce(
     (acc, ch) => {
-      const state = String(ch.status || '').trim().toUpperCase();
-      const status = state.toLowerCase();
-      const isOnline = ONLINE_STATES.includes(state) || status === 'connected' || status === 'open';
-      if (isOnline) {
+      const u = normalizeChannelStatus(ch.status);
+      if (u === 'CONNECTED') {
         acc.online += 1;
-      } else if (status === 'connecting' || status === 'created') {
+      } else if (u === 'PENDING') {
         acc.unstable += 1;
       } else {
         acc.offline += 1;

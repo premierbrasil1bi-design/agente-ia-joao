@@ -2,7 +2,6 @@ import { useCallback, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { channelsService } from '../services/channels.service.js';
 import { agentApi } from '../services/agentApi.js';
-import { wahaApi } from '../services/wahaApi.js';
 import { normalizeChannelStatus, mapChannelToConnectionState } from '../utils/channelCore.js';
 
 function toQrDataUrl(raw) {
@@ -11,46 +10,42 @@ function toQrDataUrl(raw) {
   return `data:image/png;base64,${raw.replace(/^data:image\/\w+;base64,/, '')}`;
 }
 
-/** Estados explícitos do fluxo WAHA (backend / socket). */
-const WAHA_QR_STATES = new Set([
-  'SCAN_QR_CODE',
-  'QR_AVAILABLE',
-  'PENDING',
-  'OFFLINE',
-  'UNSTABLE',
-  'UNAVAILABLE',
-  'CANCELLED',
-  'CONNECTED',
-]);
-const QR_STATES = new Set(['SCAN_QR_CODE', 'QR_AVAILABLE']);
-
 function extractQrValue(payload) {
-  return payload?.qr || payload?.qrCode || payload?.qrcode || payload?.qrAscii || null;
+  return payload?.qr ?? payload?.qrCode ?? payload?.qrcode ?? payload?.qrAscii ?? null;
 }
 
-function extractWahaSessionState(data) {
-  if (!data) return null;
-  if (typeof data === 'object' && !Array.isArray(data)) {
-    const direct = data.state ?? data.status ?? data.session?.state ?? data.session?.status ?? null;
-    if (direct) return String(direct).toUpperCase();
+function pickChannelSnapshot(statusData, qrData) {
+  const ch =
+    statusData?.channel && typeof statusData.channel === 'object' ? statusData.channel : {};
+  const qr =
+    extractQrValue(qrData) ||
+    extractQrValue(ch) ||
+    extractQrValue(statusData) ||
+    null;
+  const rawStatus =
+    statusData?.normalizedStatus ??
+    statusData?.status ??
+    ch?.status ??
+    qrData?.state ??
+    null;
+  return { qr, rawStatus, channel: ch };
+}
+
+function resolveStatusFromChannel({ rawStatus, qr }) {
+  const hasQr = qr != null && String(qr).trim() !== '';
+  if (hasQr) {
+    return 'PENDING';
   }
-  if (Array.isArray(data)) {
-    const item = data.find((s) => String(s?.name ?? s?.session ?? s?.id ?? '').trim() === 'default') || data[0];
-    const state = item?.state ?? item?.status ?? null;
-    if (state) return String(state).toUpperCase();
-  }
-  return null;
+  return normalizeChannelStatus(rawStatus);
 }
 
 export function useChannelConnection() {
   const [qrCode, setQrCode] = useState('');
-  /** 'image' = data URL / URL para <img>; 'ascii' = texto para <pre> */
   const [qrFormat, setQrFormat] = useState('image');
   const [status, setStatus] = useState('UNKNOWN');
   const [loading, setLoading] = useState(false);
   const [timeout, setTimeoutState] = useState(false);
   const [error, setError] = useState(null);
-  /** Mensagem opcional de etapa (ex.: provisionamento SaaS) — consumida pela UI de Canais */
   const [connectStepMessage, setConnectStepMessage] = useState('');
 
   const channelIdRef = useRef(null);
@@ -61,35 +56,6 @@ export function useChannelConnection() {
   const runningRef = useRef(false);
 
   const clearTimers = useCallback(() => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-  }, []);
-
-  const wahaGet = useCallback(async (path, retries = 1) => {
-    let lastErr = null;
-    for (let i = 0; i <= retries; i += 1) {
-      try {
-        const res = await wahaApi.get(path);
-        return res.data;
-      } catch (err) {
-        lastErr = err;
-        if (err?.response?.status === 401) {
-          console.error('[WAHA] Unauthorized - missing API key');
-          break;
-        }
-      }
-    }
-    throw lastErr;
-  }, []);
-
-  /** Para OFFLINE / UNSTABLE / UNAVAILABLE / CANCELLED: interrompe polling e timeout global sem derrubar o socket. */
-  const stopPollingAndChannelTimeout = useCallback(() => {
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
@@ -114,98 +80,73 @@ export function useChannelConnection() {
     setConnectStepMessage('');
   }, [clearTimers]);
 
-  const applyExplicitQrState = useCallback(
-    (rawState, payload) => {
-      const state = String(rawState || '').toUpperCase();
-      if (!WAHA_QR_STATES.has(state)) return false;
+  const applyQrFromPayload = useCallback((qrValue, payload) => {
+    if (qrValue == null || qrValue === '') return false;
+    const s = typeof qrValue === 'string' ? qrValue : String(qrValue);
+    if (!s.trim()) return false;
+    if (payload?.format === 'ascii' && (payload?.qrAscii ?? payload?.qr)) {
+      setQrCode(String(payload.qrAscii ?? payload.qr));
+      setQrFormat('ascii');
+    } else if (s.length <= 100 && !s.startsWith('data:image') && !/^https?:\/\//i.test(s)) {
+      setQrCode(s);
+      setQrFormat('ascii');
+    } else {
+      const formatted = toQrDataUrl(s);
+      if (formatted) {
+        setQrCode(formatted);
+        setQrFormat('image');
+      } else {
+        setQrCode(s);
+        setQrFormat('ascii');
+      }
+    }
+    setError(null);
+    setLoading(false);
+    setStatus('PENDING');
+    return true;
+  }, []);
 
-      console.log(`[CHANNEL] state: ${state}`);
+  const applyBackendSnapshot = useCallback(
+    (statusData, qrData) => {
+      const { qr, rawStatus } = pickChannelSnapshot(statusData, qrData);
+      const resolved = resolveStatusFromChannel({ rawStatus, qr });
 
-      const qrValue = extractQrValue(payload);
-      if (QR_STATES.has(state) && qrValue) {
+      if (qr != null && String(qr).trim() !== '') {
+        applyQrFromPayload(typeof qr === 'string' ? qr : String(qr), qrData ?? statusData);
+        return { done: true, resolved: 'PENDING' };
+      }
+
+      setQrCode('');
+      setQrFormat('image');
+
+      if (resolved === 'CONNECTED') {
         setError(null);
         setLoading(false);
-        if (state === 'SCAN_QR_CODE' && payload?.qrAscii && !payload?.qr && !payload?.qrCode && !payload?.qrcode) {
-          setQrCode(String(payload.qrAscii));
-          setQrFormat('ascii');
-        } else {
-          const formatted = toQrDataUrl(typeof qrValue === 'string' ? qrValue : '');
-          if (formatted) {
-            setQrCode(formatted);
-            setQrFormat('image');
-          } else {
-            setQrCode(String(qrValue));
-            setQrFormat('ascii');
-          }
-        }
-        setStatus('PENDING');
-        return true;
+        setStatus('CONNECTED');
+        stopConnection();
+        return { done: true, resolved: 'CONNECTED' };
       }
 
-      switch (state) {
-        case 'QR_AVAILABLE': {
-          setError(null);
-          setLoading(false);
-          const fmt = payload?.format;
-          if (fmt === 'ascii' && (payload?.qrAscii ?? payload?.qr)) {
-            setQrCode(String(payload.qrAscii ?? payload.qr));
-            setQrFormat('ascii');
-          } else {
-            const raw =
-              payload?.qrCode || payload?.qr || payload?.qrcode || '';
-            const formatted = toQrDataUrl(typeof raw === 'string' ? raw : '');
-            if (formatted) {
-              setQrCode(formatted);
-              setQrFormat('image');
-            }
-          }
-          setStatus('PENDING');
-          return true;
-        }
-        case 'PENDING':
-          setError(null);
-          setLoading(true);
-          setStatus('PENDING');
-          return true;
-        case 'OFFLINE':
-          stopPollingAndChannelTimeout();
-          runningRef.current = false;
-          setLoading(false);
-          setError('Servidor desconectado');
-          setStatus('DISCONNECTED');
-          return true;
-        case 'UNSTABLE':
-          stopPollingAndChannelTimeout();
-          runningRef.current = false;
-          setLoading(false);
-          setError('Instabilidade no WhatsApp, tente novamente');
-          setStatus('DISCONNECTED');
-          return true;
-        case 'UNAVAILABLE':
-          stopPollingAndChannelTimeout();
-          runningRef.current = false;
-          setLoading(false);
-          setError('Serviço temporariamente indisponível. Tente novamente em instantes.');
-          setStatus('DISCONNECTED');
-          return true;
-        case 'CANCELLED':
-          stopPollingAndChannelTimeout();
-          runningRef.current = false;
-          setLoading(false);
-          setError(null);
-          setStatus('UNKNOWN');
-          return true;
-        case 'CONNECTED':
-          setError(null);
-          setLoading(false);
-          setStatus('CONNECTED');
-          stopConnection();
-          return true;
-        default:
-          return false;
+      if (resolved === 'PENDING') {
+        setError(null);
+        setLoading(true);
+        setStatus('PENDING');
+        return { done: false, resolved: 'PENDING' };
       }
+
+      if (resolved === 'DISCONNECTED') {
+        setLoading(false);
+        setError(null);
+        setStatus('DISCONNECTED');
+        return { done: false, resolved: 'DISCONNECTED' };
+      }
+
+      setLoading(false);
+      setError(null);
+      setStatus(resolved);
+      return { done: false, resolved };
     },
-    [stopConnection, stopPollingAndChannelTimeout],
+    [applyQrFromPayload, stopConnection],
   );
 
   const pollOnce = useCallback(async () => {
@@ -213,64 +154,16 @@ export function useChannelConnection() {
     if (!channelId || !runningRef.current || realtimeActiveRef.current) return;
 
     try {
-      const statusData = await channelsService.getStatus(channelId);
-      const normalized = normalizeChannelStatus(statusData?.status || statusData?.normalizedStatus);
-      setStatus(normalized);
+      const [statusData, qrData] = await Promise.all([
+        channelsService.getStatus(channelId),
+        channelsService.getQrCode(channelId),
+      ]);
 
-      if (normalized === 'CONNECTED') {
-        stopConnection();
-        return;
-      }
-
-      const qrData = await channelsService.getQrCode(channelId);
-      const explicit = qrData?.state != null ? String(qrData.state).toUpperCase() : '';
-      if (explicit && applyExplicitQrState(explicit, qrData)) {
-        return;
-      }
-
-      try {
-        let sessionData = null;
-        try {
-          sessionData = await wahaGet('/api/sessions/default');
-        } catch {
-          sessionData = await wahaGet('/api/sessions');
-        }
-        const sessionState = extractWahaSessionState(sessionData);
-        if (sessionState) {
-          const normalizedSession = normalizeChannelStatus(sessionState);
-          setStatus(normalizedSession);
-          if (normalizedSession === 'CONNECTED') {
-            stopConnection();
-            return;
-          }
-        }
-      } catch (err) {
-        if (err?.response?.status === 401) {
-          console.error('[WAHA] Unauthorized - missing API key');
-        }
-      }
-
-      try {
-        const sessionName = encodeURIComponent('default');
-        const wahaQrData = await wahaGet(`/api/${sessionName}/auth/qr`);
-        const explicitWaha = wahaQrData?.state != null ? String(wahaQrData.state).toUpperCase() : 'SCAN_QR_CODE';
-        if (applyExplicitQrState(explicitWaha, wahaQrData)) return;
-      } catch (err) {
-        if (err?.response?.status === 401) {
-          console.error('[WAHA] Unauthorized - missing API key');
-        }
-      }
-
-      const raw = qrData?.qrCode || qrData?.qr || qrData?.qrcode || '';
-      const formatted = toQrDataUrl(typeof raw === 'string' ? raw : raw?.base64 ?? raw?.code ?? '');
-      if (formatted) {
-        setQrCode(formatted);
-        setQrFormat('image');
-      }
+      applyBackendSnapshot(statusData, qrData);
     } catch (err) {
-      console.warn('[CHANNEL HOOK] fallback polling active', err?.message || err);
+      console.warn('[CHANNEL HOOK] polling', err?.message || err);
     }
-  }, [applyExplicitQrState, stopConnection, wahaGet]);
+  }, [applyBackendSnapshot]);
 
   const startPolling = useCallback(() => {
     clearTimers();
@@ -310,9 +203,14 @@ export function useChannelConnection() {
       socket.on('channel:qr', (evt) => {
         if (!evt || String(evt.channelId) !== String(channelIdRef.current)) return;
         realtimeActiveRef.current = true;
-        const explicit = evt.state != null ? String(evt.state).toUpperCase() : '';
-        if (explicit && applyExplicitQrState(explicit, evt)) {
+        const qr = extractQrValue(evt);
+        if (qr != null && String(qr).trim() !== '') {
+          applyQrFromPayload(typeof qr === 'string' ? qr : String(qr), evt);
           clearTimers();
+          return;
+        }
+        const st = String(evt.state ?? evt.status ?? '').toUpperCase();
+        if (st === 'OFFLINE' || st === 'DISCONNECTED') {
           return;
         }
         clearTimers();
@@ -367,7 +265,7 @@ export function useChannelConnection() {
         }
       });
     },
-    [applyExplicitQrState, clearTimers, startPolling, stopConnection],
+    [applyQrFromPayload, clearTimers, startPolling, stopConnection],
   );
 
   const startConnection = useCallback(

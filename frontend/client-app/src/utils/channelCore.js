@@ -14,14 +14,14 @@ export const CHANNEL_CONNECTION_STATE = {
 
 export function normalizeChannelStatus(status) {
   if (!status) return 'UNKNOWN';
-  const raw = String(status).trim();
-  const upper = raw.toUpperCase();
-  const s = raw.toLowerCase();
-  if (upper === 'WORKING') return 'CONNECTED';
-  if (upper === 'SCAN_QR_CODE' || upper === 'STARTING') return 'PENDING';
-  if (['connected', 'online', 'open'].includes(s)) return 'CONNECTED';
-  if (['connecting', 'pending', 'qr', 'created', 'awaiting_connection'].includes(s)) return 'PENDING';
-  if (['disconnected', 'closed', 'close', 'inactive', 'offline', 'error'].includes(s)) return 'DISCONNECTED';
+  const u = String(status).trim().toUpperCase();
+  if (u === 'CONNECTED' || u === 'PENDING' || u === 'DISCONNECTED') return u;
+  const s = String(status).trim().toLowerCase();
+  if (['connected', 'online', 'open', 'working'].includes(s)) return 'CONNECTED';
+  if (['connecting', 'pending', 'qr', 'created', 'awaiting_connection', 'starting'].includes(s)) return 'PENDING';
+  if (['disconnected', 'closed', 'close', 'inactive', 'offline', 'error', 'unstable', 'unavailable'].includes(s)) {
+    return 'DISCONNECTED';
+  }
   return 'UNKNOWN';
 }
 
