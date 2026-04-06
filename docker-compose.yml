@@ -49,13 +49,11 @@ services:
   #   docker compose down -v
   #   docker compose up -d
   #
-  # Não usar WAHA_API_KEY nesta imagem: versões atuais do devlikeapro/waha podem bloquear a API com 401
-  # se a chave não for a esperada pelo motor interno. Segurança na rede Docker + backend OMNIA.
   saas_waha:
     image: devlikeapro/waha:latest
     container_name: saas_waha
     environment:
-      - WAHA_AUTHENTICATION=false
+      - WAHA_API_KEY=OMNIA_SECURE_9X7A_2026_JOAO
     ports:
       - "3099:3000"
     volumes:

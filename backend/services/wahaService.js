@@ -1,5 +1,5 @@
 /**
- * Cliente WAHA — HTTP via wahaHttp (WAHA_API_URL; sem API key no container WAHA).
+ * Cliente WAHA — HTTP via wahaHttp (WAHA_API_URL; com API key fixa no WAHA).
  *
  * Fluxo de sessão (produção):
  * - Preparação idempotente: whatsappSessionOrchestrator.ensureWahaSessionPrepared (via ensureSessionReady).
@@ -74,7 +74,7 @@ function wahaErr(err) {
   const st = err.response?.status ?? err.httpStatus;
   const msg =
     st === 401
-      ? 'WAHA: não autorizado (remova WAHA_API_KEY do WAHA/Docker se a imagem não usar essa variável).'
+      ? 'WAHA: não autorizado (valide WAHA_API_KEY no backend e no container WAHA).'
       : err.message || 'Erro na API WAHA.';
   return {
     ok: false,

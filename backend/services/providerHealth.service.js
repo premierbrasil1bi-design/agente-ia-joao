@@ -71,7 +71,7 @@ async function checkWaha() {
   } catch (error) {
     if (error.httpStatus === 401) {
       const e = new Error(
-        'WAHA: 401 — remova WAHA_API_KEY do container WAHA se a imagem não suportar essa variável.',
+        'WAHA: 401 — valide WAHA_API_KEY no backend e no container WAHA.',
       );
       e.httpStatus = 401;
       throw e;

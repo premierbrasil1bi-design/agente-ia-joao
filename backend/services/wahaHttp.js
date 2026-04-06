@@ -1,6 +1,6 @@
 /**
  * Cliente HTTP único para WAHA — WAHA_API_URL / WAHA_URL / WAHA_BASE_URL.
- * Sem autenticação na API WAHA (rede interna Docker; controle no backend OMNIA).
+ * Autenticação obrigatória via header `apikey` em todas as requisições.
  */
 
 import axios from 'axios';
@@ -12,12 +12,14 @@ import { withWahaTimeout, WAHA_GLOBAL_TIMEOUT_MS } from './whatsapp/wahaHardenin
 
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
-const WAHA_API_URL = (
+const WAHA_BASE_URL = (
   process.env.WAHA_API_URL ||
   process.env.WAHA_URL ||
   process.env.WAHA_BASE_URL ||
   ''
 ).trim();
+
+console.log('[WAHA] API KEY definida:', !!process.env.WAHA_API_KEY);
 
 function timeoutMs() {
   const n = parseInt(process.env.WAHA_REQUEST_TIMEOUT_MS || '15000', 10);
@@ -25,22 +27,37 @@ function timeoutMs() {
 }
 
 export function validateWahaEnv() {
-  if (!WAHA_API_URL) {
+  if (!WAHA_BASE_URL) {
     throw new Error('WAHA não configurado no ambiente (defina WAHA_API_URL)');
   }
 }
+
+const wahaClient = axios.create({
+  baseURL: WAHA_BASE_URL,
+  timeout: 10000,
+  headers: {
+    apikey: process.env.WAHA_API_KEY,
+  },
+});
+
+wahaClient.interceptors.request.use((cfg) => {
+  cfg.headers = {
+    ...(cfg.headers || {}),
+    apikey: process.env.WAHA_API_KEY,
+  };
+  return cfg;
+});
 
 /**
  * Health rápido: GET /api/sessions (sem auth; usa WAHA_API_URL).
  * @returns {Promise<boolean>}
  */
 export async function isWahaAlive() {
-  if (!WAHA_API_URL) return false;
-  const url = `${WAHA_API_URL.replace(/\/$/, '')}/api/sessions`;
+  if (!WAHA_BASE_URL) return false;
   const healthMs = Math.min(5000, WAHA_GLOBAL_TIMEOUT_MS);
   try {
     const r = await withWahaTimeout(
-      axios.get(url, {
+      wahaClient.get('/api/sessions', {
         headers: { Accept: 'application/json' },
         timeout: healthMs,
         validateStatus: (s) => s >= 200 && s < 500,
@@ -169,34 +186,34 @@ export async function getWahaQr(session = 'default', opts = {}) {
 export async function wahaRequest(method, path, data = null) {
   validateWahaEnv();
 
-  const base = WAHA_API_URL.replace(/\/$/, '');
   const pathStr = String(path || '').startsWith('/') ? path : `/${path}`;
-  const url = `${base}${pathStr}`;
   const methodUpper = String(method || 'GET').toUpperCase();
+  const base = WAHA_BASE_URL.replace(/\/$/, '');
+  const url = `${base}${pathStr}`;
 
   console.log('[WAHA] Request:', methodUpper, url);
 
   try {
     const cfg = {
       method: methodUpper,
-      url,
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
       timeout: timeoutMs(),
     };
+    cfg.url = pathStr;
     if (data != null && methodUpper !== 'GET' && methodUpper !== 'HEAD') {
       cfg.data = data;
     }
-    const response = await withWahaTimeout(axios(cfg), WAHA_GLOBAL_TIMEOUT_MS);
+    const response = await withWahaTimeout(wahaClient.request(cfg), WAHA_GLOBAL_TIMEOUT_MS);
     return response.data;
   } catch (error) {
     if (error.response) {
       const status = error.response.status;
       let msg;
       if (status === 401) {
-        msg = 'WAHA ERROR 401: não autorizado (remova WAHA_API_KEY do WAHA se não for suportado pela imagem)';
+        msg = 'WAHA ERROR 401: não autorizado (valide WAHA_API_KEY no backend e no container WAHA)';
       } else {
         const body = error.response.data;
         const detail = typeof body === 'string' ? body : JSON.stringify(body ?? {});

@@ -1,6 +1,6 @@
 /**
  * Fluxo dedicado WAHA: start → aguardar SCAN_QR_CODE → obter QR (sem POST /api/sessions).
- * URL via wahaHttp (WAHA_API_URL; sem API key no WAHA).
+ * URL via wahaHttp (WAHA_API_URL; com API key fixa no WAHA).
  */
 
 import { wahaRequest, validateWahaEnv } from './wahaHttp.js';
