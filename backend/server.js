@@ -86,8 +86,7 @@ const corsAllowedOrigins = [
 ];
 
 if (process.env.NODE_ENV !== 'production') {
-  corsAllowedOrigins.push('http://localhost:5173');
-  corsAllowedOrigins.push('http://localhost:3000');
+  corsAllowedOrigins.push('http://localhost:5173', 'http://localhost:3000');
 }
 
 const corsAllowedHeaders = [
@@ -102,16 +101,7 @@ const corsAllowedHeaders = [
 ];
 
 const corsOptions = {
-  origin(origin, callback) {
-    if (!origin) return callback(null, true);
-
-    if (corsAllowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-
-    console.error('[CORS] Not allowed:', origin);
-    return callback(new Error('Not allowed by CORS'));
-  },
+  origin: corsAllowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: corsAllowedHeaders,
   credentials: true,
@@ -121,19 +111,22 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// 2) Debug CORS / preflight (temporário — remover ou reduzir em produção se muito barulho)
+// Fallback explícito para preflight (garante x-channel e demais no Allow-Headers)
 app.use((req, res, next) => {
-  console.log('[CORS]', req.method, req.path, req.headers.origin);
+  res.header(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization, apikey, x-channel, x-correlation-id, x-tenant-id, x-request-id, x-trace-id',
+  );
   next();
 });
 
-// 3) Log de requisições (antes das rotas)
+// 2) Log de requisições (antes das rotas)
 app.use((req, res, next) => {
   console.log(`[REQ] ${req.method} ${req.url}`);
   next();
 });
 
-// 4) Body parser (antes das rotas)
+// 3) Body parser (antes das rotas)
 app.use(express.json());
 app.use(correlationIdMiddleware);
 
