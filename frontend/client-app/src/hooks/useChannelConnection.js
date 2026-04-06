@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { channelsService } from '../services/channels.service.js';
 import { agentApi } from '../services/agentApi.js';
+import { wahaApi } from '../services/wahaApi.js';
 import { normalizeChannelStatus, mapChannelToConnectionState } from '../utils/channelCore.js';
 
 function toQrDataUrl(raw) {
@@ -25,6 +26,20 @@ const QR_STATES = new Set(['SCAN_QR_CODE', 'QR_AVAILABLE']);
 
 function extractQrValue(payload) {
   return payload?.qr || payload?.qrCode || payload?.qrcode || payload?.qrAscii || null;
+}
+
+function extractWahaSessionState(data) {
+  if (!data) return null;
+  if (typeof data === 'object' && !Array.isArray(data)) {
+    const direct = data.state ?? data.status ?? data.session?.state ?? data.session?.status ?? null;
+    if (direct) return String(direct).toUpperCase();
+  }
+  if (Array.isArray(data)) {
+    const item = data.find((s) => String(s?.name ?? s?.session ?? s?.id ?? '').trim() === 'default') || data[0];
+    const state = item?.state ?? item?.status ?? null;
+    if (state) return String(state).toUpperCase();
+  }
+  return null;
 }
 
 export function useChannelConnection() {
@@ -54,6 +69,23 @@ export function useChannelConnection() {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
+  }, []);
+
+  const wahaGet = useCallback(async (path, retries = 1) => {
+    let lastErr = null;
+    for (let i = 0; i <= retries; i += 1) {
+      try {
+        const res = await wahaApi.get(path);
+        return res.data;
+      } catch (err) {
+        lastErr = err;
+        if (err?.response?.status === 401) {
+          console.error('[WAHA] Unauthorized - missing API key');
+          break;
+        }
+      }
+    }
+    throw lastErr;
   }, []);
 
   /** Para OFFLINE / UNSTABLE / UNAVAILABLE / CANCELLED: interrompe polling e timeout global sem derrubar o socket. */
@@ -196,6 +228,39 @@ export function useChannelConnection() {
         return;
       }
 
+      try {
+        let sessionData = null;
+        try {
+          sessionData = await wahaGet('/api/sessions/default');
+        } catch {
+          sessionData = await wahaGet('/api/sessions');
+        }
+        const sessionState = extractWahaSessionState(sessionData);
+        if (sessionState) {
+          const normalizedSession = normalizeChannelStatus(sessionState);
+          setStatus(normalizedSession);
+          if (normalizedSession === 'CONNECTED') {
+            stopConnection();
+            return;
+          }
+        }
+      } catch (err) {
+        if (err?.response?.status === 401) {
+          console.error('[WAHA] Unauthorized - missing API key');
+        }
+      }
+
+      try {
+        const sessionName = encodeURIComponent('default');
+        const wahaQrData = await wahaGet(`/api/${sessionName}/auth/qr`);
+        const explicitWaha = wahaQrData?.state != null ? String(wahaQrData.state).toUpperCase() : 'SCAN_QR_CODE';
+        if (applyExplicitQrState(explicitWaha, wahaQrData)) return;
+      } catch (err) {
+        if (err?.response?.status === 401) {
+          console.error('[WAHA] Unauthorized - missing API key');
+        }
+      }
+
       const raw = qrData?.qrCode || qrData?.qr || qrData?.qrcode || '';
       const formatted = toQrDataUrl(typeof raw === 'string' ? raw : raw?.base64 ?? raw?.code ?? '');
       if (formatted) {
@@ -205,7 +270,7 @@ export function useChannelConnection() {
     } catch (err) {
       console.warn('[CHANNEL HOOK] fallback polling active', err?.message || err);
     }
-  }, [applyExplicitQrState, stopConnection]);
+  }, [applyExplicitQrState, stopConnection, wahaGet]);
 
   const startPolling = useCallback(() => {
     clearTimers();
