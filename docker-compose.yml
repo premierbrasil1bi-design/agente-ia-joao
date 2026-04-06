@@ -54,6 +54,8 @@ services:
   saas_waha:
     image: devlikeapro/waha:latest
     container_name: saas_waha
+    environment:
+      - WAHA_AUTHENTICATION=false
     ports:
       - "3099:3000"
     volumes:
