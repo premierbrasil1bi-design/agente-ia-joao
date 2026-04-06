@@ -1,6 +1,6 @@
 /**
  * Cliente HTTP único para WAHA — WAHA_API_URL / WAHA_URL / WAHA_BASE_URL.
- * Autenticação obrigatória via header `apikey` em todas as requisições.
+ * Autenticação obrigatória via header `X-Api-Key` em todas as requisições.
  */
 
 import axios from 'axios';
@@ -13,13 +13,16 @@ import { withWahaTimeout, WAHA_GLOBAL_TIMEOUT_MS } from './whatsapp/wahaHardenin
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
 const WAHA_BASE_URL = (
+  process.env.WAHA_BASE_URL ||
   process.env.WAHA_API_URL ||
   process.env.WAHA_URL ||
-  process.env.WAHA_BASE_URL ||
   ''
 ).trim();
+const WAHA_API_KEY = (process.env.WAHA_API_KEY || '').trim();
 
-console.log('[WAHA] API KEY definida:', !!process.env.WAHA_API_KEY);
+if (!WAHA_API_KEY) {
+  console.error('[WAHA] API KEY NÃO DEFINIDA');
+}
 
 function timeoutMs() {
   const n = parseInt(process.env.WAHA_REQUEST_TIMEOUT_MS || '15000', 10);
@@ -32,21 +35,39 @@ export function validateWahaEnv() {
   }
 }
 
-const wahaClient = axios.create({
+export const wahaClient = axios.create({
   baseURL: WAHA_BASE_URL,
-  timeout: 10000,
+  timeout: 15000,
   headers: {
-    apikey: process.env.WAHA_API_KEY,
+    'Content-Type': 'application/json',
+    'X-Api-Key': WAHA_API_KEY,
   },
 });
 
 wahaClient.interceptors.request.use((cfg) => {
   cfg.headers = {
     ...(cfg.headers || {}),
-    apikey: process.env.WAHA_API_KEY,
+    'X-Api-Key': WAHA_API_KEY,
   };
+  console.log('[WAHA][REQUEST]', {
+    url: cfg.url,
+    method: cfg.method,
+    hasApiKey: !!WAHA_API_KEY,
+  });
   return cfg;
 });
+
+wahaClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error('[WAHA][ERROR]', {
+      message: error?.message,
+      code: error?.code,
+      url: error?.config?.url,
+    });
+    return Promise.reject(error);
+  },
+);
 
 /**
  * Health rápido: GET /api/sessions (sem auth; usa WAHA_API_URL).
@@ -233,6 +254,17 @@ export async function wahaRequest(method, path, data = null) {
       err.code = SessionOpErrorCode.PROVIDER_TIMEOUT;
     }
     throw err;
+  }
+}
+
+export async function testWahaConnection() {
+  try {
+    const res = await wahaClient.get('/api/sessions');
+    console.log('[WAHA][HEALTH] OK', res.status);
+    return true;
+  } catch (err) {
+    console.error('[WAHA][HEALTH] FAIL', err?.message || err);
+    return false;
   }
 }
 

@@ -51,6 +51,7 @@ import { runChannelsSchemaGuard } from './services/channelsSchemaGuard.service.j
 import * as evolutionService from './services/evolutionService.js';
 import { checkProviderHealth, getProvidersHealthSnapshot } from './services/providerHealth.service.js';
 import { invalidateProviderHealthCache } from './services/providerHealth.service.js';
+import { testWahaConnection } from './services/wahaHttp.js';
 import { logAdminAction } from './services/adminActionsLog.service.js';
 import { getProviderHealthSnapshot } from './services/providerOrchestrator.service.js';
 import { getTenantById } from './repositories/tenant.repository.js';
@@ -506,6 +507,7 @@ server.listen(PORT, '0.0.0.0', () => {
     try {
       await checkProviderHealth('waha');
       console.log('[PROVIDER HEALTH] WAHA ok');
+      await testWahaConnection();
     } catch (e) {
       console.error('[PROVIDER HEALTH] WAHA error:', e?.message || e);
     }
