@@ -51,7 +51,7 @@ import { runChannelsSchemaGuard } from './services/channelsSchemaGuard.service.j
 import * as evolutionService from './services/evolutionService.js';
 import { checkProviderHealth, getProvidersHealthSnapshot } from './services/providerHealth.service.js';
 import { invalidateProviderHealthCache } from './services/providerHealth.service.js';
-import { testWahaConnection } from './services/wahaHttp.js';
+import { logWahaStartupConfig, testWahaConnection } from './services/wahaHttp.js';
 import { logAdminAction } from './services/adminActionsLog.service.js';
 import { getProviderHealthSnapshot } from './services/providerOrchestrator.service.js';
 import { getTenantById } from './repositories/tenant.repository.js';
@@ -67,6 +67,7 @@ if (!WAHA_API_URL) {
 }
 
 console.log('[BOOT] WAHA:', WAHA_API_URL || 'NOT CONFIGURED');
+logWahaStartupConfig();
 console.log('[BOOT] REDIS:', process.env.REDIS_HOST || 'MISSING');
 console.log('[BOOT] DATABASE:', process.env.DATABASE_URL ? 'OK' : 'MISSING');
 console.log('[REDIS CONFIG]', {

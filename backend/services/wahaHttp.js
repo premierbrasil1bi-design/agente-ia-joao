@@ -12,16 +12,37 @@ import { withWahaTimeout, WAHA_GLOBAL_TIMEOUT_MS } from './whatsapp/wahaHardenin
 
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
-const WAHA_BASE_URL = (
-  process.env.WAHA_BASE_URL ||
-  process.env.WAHA_API_URL ||
-  process.env.WAHA_URL ||
-  ''
-).trim();
-const WAHA_API_KEY = (process.env.WAHA_API_KEY || '').trim();
+function resolveWahaBaseUrl() {
+  return (
+    process.env.WAHA_BASE_URL ||
+    process.env.WAHA_API_URL ||
+    process.env.WAHA_URL ||
+    ''
+  ).trim();
+}
+
+function resolveWahaApiKey() {
+  return (process.env.WAHA_API_KEY || '').trim();
+}
+
+const WAHA_BASE_URL = resolveWahaBaseUrl();
+const WAHA_API_KEY = resolveWahaApiKey();
 
 if (!WAHA_API_KEY) {
-  console.error('[WAHA] API KEY NÃO DEFINIDA');
+  console.error('[WAHA] API KEY NÃO DEFINIDA (defina WAHA_API_KEY no container ou .env)');
+}
+
+/**
+ * Log único no boot — chamar de server.js após carregar env.
+ * Usa process.env atual (Docker injeta antes do start).
+ */
+export function logWahaStartupConfig() {
+  const baseURL = resolveWahaBaseUrl();
+  const hasApiKey = Boolean(resolveWahaApiKey());
+  console.log('[WAHA][CONFIG]', {
+    baseURL: baseURL || null,
+    hasApiKey,
+  });
 }
 
 function timeoutMs() {
@@ -45,14 +66,17 @@ export const wahaClient = axios.create({
 });
 
 wahaClient.interceptors.request.use((cfg) => {
+  const key = resolveWahaApiKey();
   cfg.headers = {
     ...(cfg.headers || {}),
-    'X-Api-Key': WAHA_API_KEY,
+    'X-Api-Key': key,
+    'Content-Type': (cfg.headers && cfg.headers['Content-Type']) || 'application/json',
   };
+  const endpoint = cfg.url != null ? String(cfg.url) : '';
   console.log('[WAHA][REQUEST]', {
-    url: cfg.url,
+    endpoint,
     method: cfg.method,
-    hasApiKey: !!WAHA_API_KEY,
+    hasApiKey: Boolean(key),
   });
   return cfg;
 });
@@ -70,7 +94,7 @@ wahaClient.interceptors.response.use(
 );
 
 /**
- * Health rápido: GET /api/sessions (sem auth; usa WAHA_API_URL).
+ * Health rápido: GET /api/sessions (com X-Api-Key via wahaClient).
  * @returns {Promise<boolean>}
  */
 export async function isWahaAlive() {
@@ -209,25 +233,55 @@ export async function wahaRequest(method, path, data = null) {
 
   const pathStr = String(path || '').startsWith('/') ? path : `/${path}`;
   const methodUpper = String(method || 'GET').toUpperCase();
-  const base = WAHA_BASE_URL.replace(/\/$/, '');
-  const url = `${base}${pathStr}`;
-
-  console.log('[WAHA] Request:', methodUpper, url);
+  const tm = timeoutMs();
+  const headers = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
 
   try {
-    const cfg = {
-      method: methodUpper,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      timeout: timeoutMs(),
-    };
-    cfg.url = pathStr;
-    if (data != null && methodUpper !== 'GET' && methodUpper !== 'HEAD') {
-      cfg.data = data;
+    let response;
+    if (methodUpper === 'GET') {
+      response = await withWahaTimeout(
+        wahaClient.get(pathStr, { timeout: tm, headers }),
+        WAHA_GLOBAL_TIMEOUT_MS,
+      );
+    } else if (methodUpper === 'HEAD') {
+      response = await withWahaTimeout(
+        wahaClient.head(pathStr, { timeout: tm, headers }),
+        WAHA_GLOBAL_TIMEOUT_MS,
+      );
+    } else if (methodUpper === 'POST') {
+      response = await withWahaTimeout(
+        wahaClient.post(pathStr, data ?? {}, { timeout: tm, headers }),
+        WAHA_GLOBAL_TIMEOUT_MS,
+      );
+    } else if (methodUpper === 'PUT') {
+      response = await withWahaTimeout(
+        wahaClient.put(pathStr, data ?? {}, { timeout: tm, headers }),
+        WAHA_GLOBAL_TIMEOUT_MS,
+      );
+    } else if (methodUpper === 'PATCH') {
+      response = await withWahaTimeout(
+        wahaClient.patch(pathStr, data ?? {}, { timeout: tm, headers }),
+        WAHA_GLOBAL_TIMEOUT_MS,
+      );
+    } else if (methodUpper === 'DELETE') {
+      const delCfg = { timeout: tm, headers };
+      if (data != null) Object.assign(delCfg, { data });
+      response = await withWahaTimeout(wahaClient.delete(pathStr, delCfg), WAHA_GLOBAL_TIMEOUT_MS);
+    } else {
+      response = await withWahaTimeout(
+        wahaClient.request({
+          method: methodUpper,
+          url: pathStr,
+          data: data ?? undefined,
+          timeout: tm,
+          headers,
+        }),
+        WAHA_GLOBAL_TIMEOUT_MS,
+      );
     }
-    const response = await withWahaTimeout(wahaClient.request(cfg), WAHA_GLOBAL_TIMEOUT_MS);
     return response.data;
   } catch (error) {
     if (error.response) {
