@@ -86,8 +86,11 @@ export async function acquireDistributedLock(compositeKey, ttlMs) {
  */
 export async function withDistributedLock(compositeKey, ttlMs, fn, opts = {}) {
   const maxWaitMs =
-    opts.maxWaitMs ?? parseInt(process.env.WHATSAPP_DISTRIBUTED_LOCK_MAX_WAIT_MS || '60000', 10) || 60000;
-  const pollMs = opts.pollMs ?? parseInt(process.env.WHATSAPP_DISTRIBUTED_LOCK_POLL_MS || '250', 10) || 250;
+    opts.maxWaitMs ??
+    (parseInt(process.env.WHATSAPP_DISTRIBUTED_LOCK_MAX_WAIT_MS || '60000', 10) || 60000);
+  const pollMs =
+    opts.pollMs ??
+    (parseInt(process.env.WHATSAPP_DISTRIBUTED_LOCK_POLL_MS || '250', 10) || 250);
   const correlationId = opts.correlationId ?? null;
 
   const redis = tryRedis();

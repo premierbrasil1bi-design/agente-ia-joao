@@ -1,12 +1,11 @@
-import pg from "pg";
+import pg from 'pg';
+import { resolveDatabaseUrl, maskDatabaseUrl, buildPoolOptions } from './databaseConfig.js';
+
 const { Pool } = pg;
 
-const connectionString = process.env.DATABASE_URL;
-const poolOpts = {
-  connectionString,
-  ssl: {
-    rejectUnauthorized: false,
-  },
-};
+const connectionString = resolveDatabaseUrl();
+console.log('[DB] Connecting to:', maskDatabaseUrl(connectionString));
+
+const poolOpts = buildPoolOptions(connectionString);
 
 export const pool = new Pool(poolOpts);

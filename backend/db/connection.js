@@ -1,23 +1,15 @@
-import pkg from 'pg';
-const { Pool } = pkg;
+/**
+ * API de query e health — usa o mesmo pool que `pool.js` (evita duas conexões divergentes).
+ */
 
-if (!process.env.DATABASE_URL) {
-  console.error('DATABASE_URL não está definida.');
-  process.exit(1);
-}
-
-const connectionString = process.env.DATABASE_URL;
-const poolOpts = {
-  connectionString,
-  ssl: {
-    rejectUnauthorized: false,
-  },
-};
-
-const pool = new Pool(poolOpts);
+import { pool } from './pool.js';
 
 export async function query(text, params) {
   return pool.query(text, params);
+}
+
+export function getPool() {
+  return pool;
 }
 
 export async function isDbConnected() {
@@ -32,5 +24,9 @@ export async function isDbConnected() {
 
 /* Alias para manter compatibilidade com código antigo */
 export const isConnected = isDbConnected;
+
+export async function closePool() {
+  await pool.end();
+}
 
 export default pool;

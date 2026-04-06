@@ -497,6 +497,14 @@ io.on('connection', (socket) => {
 // O HTTP deve subir e responder mesmo se infra assíncrona (Redis/BullMQ) estiver indisponível.
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server rodando na porta ${PORT}`);
+  (async () => {
+    try {
+      await pool.query('SELECT 1');
+      console.log('[DB] Connected successfully');
+    } catch (err) {
+      console.error('[DB] Connection failed:', err?.message || err);
+    }
+  })();
   startChannelMonitor();
   (async () => {
     try {
