@@ -95,6 +95,55 @@ function normalizeSessionName(name) {
  * @param {string} name
  * @param {{ channelId?: string | null; tenantId?: string | null }} [ctx]
  */
+/**
+ * Lê estado da sessão no WAHA (GET /api/sessions/:name) para não classificar como OFFLINE
+ * quando a sessão está aguardando QR (SCAN_QR_CODE / STARTING).
+ */
+async function fetchWahaSessionSnapshotForQr(sessionName) {
+  const name = String(sessionName ?? '').trim();
+  if (!name) return { status: null, data: null };
+  const enc = encodeURIComponent(name);
+  try {
+    const data = await wahaRequest('GET', `/api/sessions/${enc}`);
+    const raw = data?.status ?? data?.state ?? data?.session?.status ?? null;
+    console.log('[WAHA][STATUS]', raw);
+    const status = raw != null ? String(raw).toUpperCase().replace(/-/g, '_') : null;
+    return { status, data };
+  } catch (err) {
+    const http = err.httpStatus ?? err?.response?.status;
+    console.log('[WAHA][STATUS]', null, err?.message);
+    if (http === 404) {
+      try {
+        const listRaw = await wahaRequest('GET', '/api/sessions');
+        const arr = Array.isArray(listRaw) ? listRaw : listRaw?.sessions ?? listRaw?.data ?? [];
+        const item = arr.find((s) => String(s?.name ?? s?.session ?? s?.id ?? '').trim() === name);
+        const raw = item?.status ?? item?.state ?? null;
+        console.log('[WAHA][STATUS]', raw);
+        const status = raw != null ? String(raw).toUpperCase().replace(/-/g, '_') : null;
+        return { status, data: item ?? null };
+      } catch {
+        return { status: null, data: null };
+      }
+    }
+    return { status: null, data: null };
+  }
+}
+
+function isWahaWaitingForPairing(status) {
+  if (!status) return false;
+  return status === 'SCAN_QR_CODE' || status === 'STARTING';
+}
+
+function isWahaSessionConnected(status) {
+  if (!status) return false;
+  return ['WORKING', 'CONNECTED', 'OPEN'].includes(status);
+}
+
+function isWahaSessionDead(status) {
+  if (!status) return false;
+  return ['FAILED', 'STOPPED', 'LOGGED_OUT'].includes(status);
+}
+
 function resolveWahaRequestSession(name, ctx = {}) {
   if (ctx.tenantId != null && ctx.channelId != null) {
     return resolveWahaSessionName({
@@ -171,6 +220,17 @@ export async function waitForWahaQr(
   if (opts.skipHealthCheck !== true) {
     const alive = await isWahaAlive();
     if (!alive) {
+      const snap = await fetchWahaSessionSnapshotForQr(name);
+      if (isWahaWaitingForPairing(snap.status)) {
+        wahaStructuredLog(name, 'HEALTH_FAIL_SESSION_PENDING', logExtra({ wahaStatus: snap.status }));
+        return {
+          success: true,
+          state: 'PENDING',
+          qr: null,
+          format: null,
+          provider: 'waha',
+        };
+      }
       wahaStructuredLog(name, 'HEALTH_FAIL', logExtra());
       trackOffline();
       return {
@@ -219,6 +279,17 @@ export async function waitForWahaQr(
           trackQrFailure();
           wahaStructuredLog(name, 'QR_FETCH_ERROR', logExtra({ try: i + 1, err: qrData.error || 'fail' }));
           if (consecutiveFailures >= WAHA_CONSECUTIVE_FAIL_STOP) {
+            const snap = await fetchWahaSessionSnapshotForQr(name);
+            if (isWahaWaitingForPairing(snap.status)) {
+              wahaStructuredLog(name, 'QR_FAIL_STOP_PENDING', logExtra({ wahaStatus: snap.status }));
+              return {
+                success: true,
+                state: 'PENDING',
+                qr: null,
+                format: null,
+                provider: 'waha',
+              };
+            }
             wahaStructuredLog(name, 'QR_FAIL_STOP_OFFLINE', logExtra());
             trackOffline();
             return {
@@ -279,6 +350,17 @@ export async function waitForWahaQr(
         }
 
         if (consecutiveFailures >= WAHA_CONSECUTIVE_FAIL_STOP) {
+          const snap = await fetchWahaSessionSnapshotForQr(name);
+          if (isWahaWaitingForPairing(snap.status)) {
+            wahaStructuredLog(name, 'QR_FAIL_STOP_PENDING', logExtra({ wahaStatus: snap.status }));
+            return {
+              success: true,
+              state: 'PENDING',
+              qr: null,
+              format: null,
+              provider: 'waha',
+            };
+          }
           wahaStructuredLog(name, 'QR_FAIL_STOP_OFFLINE', logExtra());
           trackOffline();
           return {
@@ -435,6 +517,74 @@ export async function getQrCode(name, ctx = {}) {
     return payload;
   };
 
+  /**
+   * Decisão final alinhada ao snapshot WAHA: SCAN_QR_CODE/STARTING → PENDING; WORKING → CONNECTED.
+   * Retorna null se o snapshot não justifica sobrescrever o fluxo (ex.: status desconhecido).
+   */
+  const tryFinalizeFromSnapshot = (snap, metaSuffix, prep = null) => {
+    const st = snap?.status ?? null;
+    if (st == null || st === '') return null;
+    if (isWahaWaitingForPairing(st)) {
+      const unified = buildUnifiedQrResponse({
+        success: true,
+        format: null,
+        qr: null,
+        session: sessionName,
+        provider: 'waha',
+        state: SessionState.PENDING,
+        source: null,
+        error: null,
+        correlationId,
+        meta: {
+          path: `wahaService_final_snapshot_${metaSuffix}`,
+          wahaStatus: st,
+          ...(prep != null ? { prepare: prep } : {}),
+        },
+      });
+      console.log('[WAHA][FINAL DECISION]', {
+        snapshotStatus: st,
+        decidedState: SessionState.PENDING,
+      });
+      return finalize(SessionState.PENDING, {
+        ok: true,
+        pending: true,
+        data: unified,
+        raw: unified,
+        ...unified,
+      });
+    }
+    if (isWahaSessionConnected(st)) {
+      const unified = buildUnifiedQrResponse({
+        success: true,
+        format: null,
+        qr: null,
+        session: sessionName,
+        provider: 'waha',
+        state: SessionState.CONNECTED,
+        source: null,
+        error: null,
+        correlationId,
+        meta: {
+          path: `wahaService_final_snapshot_${metaSuffix}`,
+          wahaStatus: st,
+          ...(prep != null ? { prepare: prep } : {}),
+        },
+      });
+      console.log('[WAHA][FINAL DECISION]', {
+        snapshotStatus: st,
+        decidedState: SessionState.CONNECTED,
+      });
+      return finalize(SessionState.CONNECTED, {
+        ok: true,
+        alreadyConnected: true,
+        data: unified,
+        raw: unified,
+        ...unified,
+      });
+    }
+    return null;
+  };
+
   logWahaContext(sessionName, ctxWithCid.channelId, ctxWithCid.tenantId, correlationId);
   assertWahaConfig();
 
@@ -467,8 +617,8 @@ export async function getQrCode(name, ctx = {}) {
 
   await enforceWahaQrRateLimit(sessionName);
 
-  const alive = await isWahaAlive();
-  if (!alive) {
+  const snapBeforeLock = await fetchWahaSessionSnapshotForQr(sessionName);
+  if (isWahaSessionDead(snapBeforeLock.status)) {
     trackOffline();
     const offlineUnified = buildUnifiedQrResponse({
       success: false,
@@ -478,17 +628,69 @@ export async function getQrCode(name, ctx = {}) {
       provider: 'waha',
       state: SessionState.OFFLINE,
       source: null,
-      error: 'WAHA unavailable',
+      error: 'Sessão indisponível no WAHA',
       correlationId,
-      meta: { path: 'wahaService_waha_offline' },
+      meta: { path: 'wahaService_session_dead', wahaStatus: snapBeforeLock.status },
+    });
+    console.log('[WAHA][FINAL DECISION]', {
+      snapshotStatus: snapBeforeLock?.status ?? null,
+      decidedState: SessionState.OFFLINE,
     });
     return finalize(SessionState.OFFLINE, {
       ok: false,
-      error: 'WAHA unavailable',
+      error: offlineUnified.error,
       data: offlineUnified,
       raw: offlineUnified,
       ...offlineUnified,
     });
+  }
+
+  const wahaAliveEnoughForQr =
+    isWahaWaitingForPairing(snapBeforeLock.status) ||
+    isWahaSessionConnected(snapBeforeLock.status);
+
+  if (!wahaAliveEnoughForQr) {
+    const alive = await isWahaAlive();
+    if (!alive) {
+      const snapRetry = await fetchWahaSessionSnapshotForQr(sessionName);
+      if (
+        isWahaWaitingForPairing(snapRetry.status) ||
+        isWahaSessionConnected(snapRetry.status)
+      ) {
+        console.log(
+          `[WAHA][CID:${cidShort}] Health falhou mas sessão ativa (status=${snapRetry.status}) — seguindo fluxo QR`,
+        );
+      } else {
+        const snapFinalGate = await fetchWahaSessionSnapshotForQr(sessionName);
+        const reconciledGate = tryFinalizeFromSnapshot(snapFinalGate, 'gate_health_offline');
+        if (reconciledGate) return reconciledGate;
+
+        trackOffline();
+        const offlineUnified = buildUnifiedQrResponse({
+          success: false,
+          format: null,
+          qr: null,
+          session: sessionName,
+          provider: 'waha',
+          state: SessionState.OFFLINE,
+          source: null,
+          error: 'WAHA unavailable',
+          correlationId,
+          meta: { path: 'wahaService_waha_offline', wahaStatus: snapFinalGate.status },
+        });
+        console.log('[WAHA][FINAL DECISION]', {
+          snapshotStatus: snapFinalGate?.status ?? null,
+          decidedState: SessionState.OFFLINE,
+        });
+        return finalize(SessionState.OFFLINE, {
+          ok: false,
+          error: 'WAHA unavailable',
+          data: offlineUnified,
+          raw: offlineUnified,
+          ...offlineUnified,
+        });
+      }
+    }
   }
 
   return withWahaSessionLock(sessionName, async () => {
@@ -545,6 +747,14 @@ export async function getQrCode(name, ctx = {}) {
     }
 
     if (waited.state === 'UNSTABLE') {
+      const snapAfterUnstable = await fetchWahaSessionSnapshotForQr(sessionName);
+      const reconciledUnstable = tryFinalizeFromSnapshot(
+        snapAfterUnstable,
+        'after_unstable',
+        prep,
+      );
+      if (reconciledUnstable) return reconciledUnstable;
+
       const unified = buildUnifiedQrResponse({
         success: false,
         format: null,
@@ -557,6 +767,10 @@ export async function getQrCode(name, ctx = {}) {
         correlationId,
         meta: { path: 'wahaService_waha_unstable', prepare: prep },
       });
+      console.log('[WAHA][FINAL DECISION]', {
+        snapshotStatus: snapAfterUnstable?.status ?? null,
+        decidedState: SessionState.UNSTABLE,
+      });
       return finalize(SessionState.UNSTABLE, {
         ok: false,
         error: unified.error,
@@ -567,6 +781,14 @@ export async function getQrCode(name, ctx = {}) {
     }
 
     if (!waited.success && waited.state === 'OFFLINE') {
+      const snapAfterPollOffline = await fetchWahaSessionSnapshotForQr(sessionName);
+      const reconciledPoll = tryFinalizeFromSnapshot(
+        snapAfterPollOffline,
+        'after_poll_offline',
+        prep,
+      );
+      if (reconciledPoll) return reconciledPoll;
+
       const unified = buildUnifiedQrResponse({
         success: false,
         format: null,
@@ -578,6 +800,10 @@ export async function getQrCode(name, ctx = {}) {
         error: waited.error || 'WAHA temporarily unavailable',
         correlationId,
         meta: { path: 'wahaService_waha_offline_poll', prepare: prep },
+      });
+      console.log('[WAHA][FINAL DECISION]', {
+        snapshotStatus: snapAfterPollOffline?.status ?? null,
+        decidedState: SessionState.OFFLINE,
       });
       return finalize(SessionState.OFFLINE, {
         ok: false,
@@ -702,6 +928,37 @@ export async function getQrCode(name, ctx = {}) {
       correlationId,
     });
 
+    const snapEnd = await fetchWahaSessionSnapshotForQr(sessionName);
+    const reconciledEnd = tryFinalizeFromSnapshot(snapEnd, 'end_exhausted', prep);
+    if (reconciledEnd) return reconciledEnd;
+
+    if (isWahaSessionDead(snapEnd.status)) {
+      trackOffline();
+      const offlineUnified = buildUnifiedQrResponse({
+        success: false,
+        format: null,
+        qr: null,
+        session: sessionName,
+        provider: 'waha',
+        state: SessionState.OFFLINE,
+        source: 'logs',
+        error: 'Sessão indisponível no WAHA',
+        correlationId,
+        meta: { path: 'wahaService_end_exhausted_dead', prepare: prep, wahaStatus: snapEnd.status },
+      });
+      console.log('[WAHA][FINAL DECISION]', {
+        snapshotStatus: snapEnd?.status ?? null,
+        decidedState: SessionState.OFFLINE,
+      });
+      return finalize(SessionState.OFFLINE, {
+        ok: false,
+        error: offlineUnified.error,
+        data: offlineUnified,
+        raw: offlineUnified,
+        ...offlineUnified,
+      });
+    }
+
     const pendingUnified = buildUnifiedQrResponse({
       success: true,
       format: null,
@@ -713,6 +970,11 @@ export async function getQrCode(name, ctx = {}) {
       error: null,
       correlationId,
       meta: { path: 'wahaService_qr_pending_poll', prepare: prep },
+    });
+
+    console.log('[WAHA][FINAL DECISION]', {
+      snapshotStatus: snapEnd?.status ?? null,
+      decidedState: SessionState.PENDING,
     });
 
     return finalize(SessionState.PENDING, {
