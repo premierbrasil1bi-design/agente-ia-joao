@@ -80,41 +80,40 @@ process.on('uncaughtException', console.error);
 const app = express();
 const PORT = config.port || 3000;
 
-const corsProductionOrigins = [
+const corsAllowedOrigins = [
   'https://app.omnia1biai.com.br',
   'https://admin.omnia1biai.com.br',
 ];
 
-const corsAllowedOrigins = [
-  ...corsProductionOrigins,
-  ...(process.env.NODE_ENV !== 'production'
-    ? ['http://localhost:5173', 'http://localhost:3000']
-    : []),
+if (process.env.NODE_ENV !== 'production') {
+  corsAllowedOrigins.push('http://localhost:5173');
+  corsAllowedOrigins.push('http://localhost:3000');
+}
+
+const corsAllowedHeaders = [
+  'Content-Type',
+  'Authorization',
+  'apikey',
+  'x-channel',
+  'x-correlation-id',
+  'x-tenant-id',
+  'x-request-id',
+  'x-trace-id',
 ];
 
 const corsOptions = {
   origin(origin, callback) {
-    if (process.env.NODE_ENV !== 'production' && origin) {
-      console.log('[CORS] Origin:', origin);
-    }
     if (!origin) return callback(null, true);
-    if (corsAllowedOrigins.includes(origin)) return callback(null, true);
-    console.error('[CORS] bloqueado:', origin);
-    return callback(new Error('CORS bloqueado'), false);
+
+    if (corsAllowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    console.error('[CORS] Not allowed:', origin);
+    return callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'Origin',
-    'X-Requested-With',
-    'Accept',
-    'apikey',
-    'x-channel',
-    'x-correlation-id',
-    'x-request-id',
-    'x-trace-id',
-  ],
+  allowedHeaders: corsAllowedHeaders,
   credentials: true,
 };
 
@@ -122,13 +121,19 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// 2) Log de requisições (antes das rotas)
+// 2) Debug CORS / preflight (temporário — remover ou reduzir em produção se muito barulho)
+app.use((req, res, next) => {
+  console.log('[CORS]', req.method, req.path, req.headers.origin);
+  next();
+});
+
+// 3) Log de requisições (antes das rotas)
 app.use((req, res, next) => {
   console.log(`[REQ] ${req.method} ${req.url}`);
   next();
 });
 
-// 3) Body parser (antes das rotas)
+// 4) Body parser (antes das rotas)
 app.use(express.json());
 app.use(correlationIdMiddleware);
 
@@ -367,7 +372,7 @@ const io = new SocketIOServer(server, {
   cors: {
     origin: corsAllowedOrigins,
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: corsAllowedHeaders,
     credentials: true,
   },
 });
