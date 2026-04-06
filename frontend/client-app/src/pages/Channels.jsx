@@ -13,6 +13,8 @@ import { CHANNEL_CONNECTION_STATE } from '../utils/channelCore.js';
 import { CreateChannelCard } from '../components/CreateChannelCard.jsx';
 import chLayout from './Channels.module.css';
 
+const ONLINE_STATES = ['SCAN_QR_CODE', 'STARTING', 'WORKING'];
+
 const styles = {
   page: {
     padding: '1.5rem 2rem',
@@ -873,8 +875,18 @@ export function Channels() {
   const getChannelContextText = (ch) => {
     const t = (ch.type || '').toLowerCase();
     const s = (ch.status || '').toLowerCase();
+    const state = String(ch?.status || '').trim().toUpperCase();
 
     if (t === 'whatsapp') {
+      if (state === 'SCAN_QR_CODE') {
+        return 'Aguardando leitura do QR.';
+      }
+      if (state === 'STARTING') {
+        return 'Inicializando conexão.';
+      }
+      if (state === 'WORKING') {
+        return 'Conectado.';
+      }
       const fp = ch.flowPhase;
       if (fp === 'draft') {
         return 'Canal criado. Use “Preparar WhatsApp” ou crie outro canal — a instância será gerada automaticamente.';
@@ -1139,8 +1151,10 @@ export function Channels() {
 
   const statusSummary = channels.reduce(
     (acc, ch) => {
-      const status = String(ch.status || '').toLowerCase();
-      if (status === 'connected' || status === 'open') {
+      const state = String(ch.status || '').trim().toUpperCase();
+      const status = state.toLowerCase();
+      const isOnline = ONLINE_STATES.includes(state) || status === 'connected' || status === 'open';
+      if (isOnline) {
         acc.online += 1;
       } else if (status === 'connecting' || status === 'created') {
         acc.unstable += 1;
@@ -1224,6 +1238,13 @@ export function Channels() {
       setLoadingEditId(null);
     }
   };
+
+  const qr = typeof qrCode === 'string' ? qrCode.trim() : '';
+  const hasQr = qr.length > 0;
+  const formattedQr = hasQr
+    ? (qr.startsWith('data:image') || /^https?:\/\//i.test(qr) ? qr : `data:image/png;base64,${qr}`)
+    : '';
+  const shouldRenderQrAsImage = hasQr && (qrDisplayFormat === 'image' || qr.length > 100);
 
   return (
     <div className={chLayout.page}>
@@ -1461,7 +1482,7 @@ export function Channels() {
                     {qrLoadError}
                   </p>
                 )}
-                {qrCode && qrDisplayFormat === 'ascii' && (
+                {hasQr && !shouldRenderQrAsImage && (
                   <pre
                     style={{
                       fontSize: 6,
@@ -1475,12 +1496,12 @@ export function Channels() {
                       maxWidth: '100%',
                     }}
                   >
-                    {qrCode}
+                    {qr}
                   </pre>
                 )}
-                {qrCode && qrDisplayFormat === 'image' && (
+                {hasQr && shouldRenderQrAsImage && (
                   <img
-                    src={qrCode}
+                    src={formattedQr}
                     alt="QR Code WhatsApp"
                     style={{ width: 220, maxWidth: '100%', borderRadius: 8 }}
                   />

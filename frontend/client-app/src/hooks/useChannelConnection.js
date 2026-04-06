@@ -12,6 +12,7 @@ function toQrDataUrl(raw) {
 
 /** Estados explícitos do fluxo WAHA (backend / socket). */
 const WAHA_QR_STATES = new Set([
+  'SCAN_QR_CODE',
   'QR_AVAILABLE',
   'PENDING',
   'OFFLINE',
@@ -20,6 +21,11 @@ const WAHA_QR_STATES = new Set([
   'CANCELLED',
   'CONNECTED',
 ]);
+const QR_STATES = new Set(['SCAN_QR_CODE', 'QR_AVAILABLE']);
+
+function extractQrValue(payload) {
+  return payload?.qr || payload?.qrCode || payload?.qrcode || payload?.qrAscii || null;
+}
 
 export function useChannelConnection() {
   const [qrCode, setQrCode] = useState('');
@@ -82,6 +88,27 @@ export function useChannelConnection() {
       if (!WAHA_QR_STATES.has(state)) return false;
 
       console.log(`[CHANNEL] state: ${state}`);
+
+      const qrValue = extractQrValue(payload);
+      if (QR_STATES.has(state) && qrValue) {
+        setError(null);
+        setLoading(false);
+        if (state === 'SCAN_QR_CODE' && payload?.qrAscii && !payload?.qr && !payload?.qrCode && !payload?.qrcode) {
+          setQrCode(String(payload.qrAscii));
+          setQrFormat('ascii');
+        } else {
+          const formatted = toQrDataUrl(typeof qrValue === 'string' ? qrValue : '');
+          if (formatted) {
+            setQrCode(formatted);
+            setQrFormat('image');
+          } else {
+            setQrCode(String(qrValue));
+            setQrFormat('ascii');
+          }
+        }
+        setStatus('PENDING');
+        return true;
+      }
 
       switch (state) {
         case 'QR_AVAILABLE': {

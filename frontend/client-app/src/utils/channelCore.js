@@ -14,7 +14,11 @@ export const CHANNEL_CONNECTION_STATE = {
 
 export function normalizeChannelStatus(status) {
   if (!status) return 'UNKNOWN';
-  const s = String(status).toLowerCase();
+  const raw = String(status).trim();
+  const upper = raw.toUpperCase();
+  const s = raw.toLowerCase();
+  if (upper === 'WORKING') return 'CONNECTED';
+  if (upper === 'SCAN_QR_CODE' || upper === 'STARTING') return 'PENDING';
   if (['connected', 'online', 'open'].includes(s)) return 'CONNECTED';
   if (['connecting', 'pending', 'qr', 'created', 'awaiting_connection'].includes(s)) return 'PENDING';
   if (['disconnected', 'closed', 'close', 'inactive', 'offline', 'error'].includes(s)) return 'DISCONNECTED';
