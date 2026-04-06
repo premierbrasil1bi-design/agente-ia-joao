@@ -3,7 +3,7 @@
  * Mantém wahaHttp como única porta de chamada à API WAHA para sessão.
  */
 
-import { wahaRequest } from './wahaHttp.js';
+import { wahaRequest, wahaPostStartSession } from './wahaHttp.js';
 
 export function extractStatusFromSessionEntry(entry) {
   if (entry == null || typeof entry !== 'object') return null;
@@ -42,18 +42,5 @@ export async function wahaAdapterCreateSessionRecord(sessionName) {
 }
 
 export async function wahaAdapterPostStart(sessionName) {
-  try {
-    await wahaRequest('POST', `/api/sessions/${encodeURIComponent(sessionName)}/start`, {});
-  } catch (e1) {
-    const st = e1.httpStatus ?? e1.response?.status;
-    if (st === 404) {
-      try {
-        await wahaRequest('POST', '/api/sessions/start', { name: sessionName });
-      } catch {
-        await wahaRequest('POST', '/api/sessions/start', { session: sessionName });
-      }
-    } else {
-      throw e1;
-    }
-  }
+  return wahaPostStartSession(sessionName);
 }

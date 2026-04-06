@@ -1,14 +1,14 @@
 /**
- * Cliente HTTP único para WAHA — WAHA_API_URL / WAHA_URL / WAHA_BASE_URL e WAHA_API_KEY.
- * Headers de auth: {@link ./providerAuthResolver.js} (x-api-key, apikey SIMPLE ou key CORE).
+ * Cliente HTTP único para WAHA — WAHA_API_URL / WAHA_URL / WAHA_BASE_URL.
+ * Sem autenticação na API WAHA (rede interna Docker; controle no backend OMNIA).
  */
 
 import axios from 'axios';
 import { extractQrPayload, toQrDataUrl } from '../utils/extractQrPayload.js';
 import { getCurrentQr } from './wahaQrCapture.js';
-import { resolveProviderAuth } from './providerAuthResolver.js';
 import { withTimeout } from '../utils/withTimeout.js';
 import { SessionOpErrorCode } from './whatsapp/whatsappSessionErrors.js';
+import { withWahaTimeout, WAHA_GLOBAL_TIMEOUT_MS } from './whatsapp/wahaHardening.js';
 
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
@@ -18,7 +18,6 @@ const WAHA_API_URL = (
   process.env.WAHA_BASE_URL ||
   ''
 ).trim();
-const WAHA_API_KEY = (process.env.WAHA_API_KEY || '').trim();
 
 function timeoutMs() {
   const n = parseInt(process.env.WAHA_REQUEST_TIMEOUT_MS || '15000', 10);
@@ -26,8 +25,138 @@ function timeoutMs() {
 }
 
 export function validateWahaEnv() {
-  if (!WAHA_API_URL || !WAHA_API_KEY) {
-    throw new Error('WAHA não configurado no ambiente');
+  if (!WAHA_API_URL) {
+    throw new Error('WAHA não configurado no ambiente (defina WAHA_API_URL)');
+  }
+}
+
+/**
+ * Health rápido: GET /api/sessions (sem auth; usa WAHA_API_URL).
+ * @returns {Promise<boolean>}
+ */
+export async function isWahaAlive() {
+  if (!WAHA_API_URL) return false;
+  const url = `${WAHA_API_URL.replace(/\/$/, '')}/api/sessions`;
+  const healthMs = Math.min(5000, WAHA_GLOBAL_TIMEOUT_MS);
+  try {
+    const r = await withWahaTimeout(
+      axios.get(url, {
+        headers: { Accept: 'application/json' },
+        timeout: healthMs,
+        validateStatus: (s) => s >= 200 && s < 500,
+      }),
+      healthMs,
+    );
+    if (r.status >= 200 && r.status < 300) return true;
+    return false;
+  } catch {
+    console.log('[WAHA] Health check failed');
+    return false;
+  }
+}
+
+/**
+ * @param {string} sessionName
+ */
+export async function wahaPostStartSession(sessionName) {
+  const enc = encodeURIComponent(String(sessionName || '').trim());
+  try {
+    await wahaRequest('POST', `/api/sessions/${enc}/start`, {});
+  } catch (e1) {
+    const st = e1.httpStatus ?? e1.response?.status;
+    if (st === 404) {
+      try {
+        await wahaRequest('POST', '/api/sessions/start', { name: sessionName });
+      } catch {
+        await wahaRequest('POST', '/api/sessions/start', { session: sessionName });
+      }
+    } else {
+      throw e1;
+    }
+  }
+}
+
+function extractSessionsArray(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (raw && Array.isArray(raw.sessions)) return raw.sessions;
+  if (raw && Array.isArray(raw.data)) return raw.data;
+  if (raw && Array.isArray(raw.items)) return raw.items;
+  return [];
+}
+
+function sessionNameMatches(entry, sessionName) {
+  const want = String(sessionName).trim();
+  if (entry == null) return false;
+  if (typeof entry === 'string') return entry.trim() === want;
+  if (typeof entry === 'object') {
+    const n = entry.name ?? entry.session ?? entry.id;
+    return n != null && String(n).trim() === want;
+  }
+  return false;
+}
+
+/**
+ * Garante sessão listada no WAHA, cria se faltar e inicia.
+ * @param {string} [session]
+ */
+export async function ensureWahaSession(session = 'default') {
+  const name = String(session ?? 'default').trim() || 'default';
+  validateWahaEnv();
+  console.log('[WAHA] Session check', name);
+
+  const rawList = await wahaRequest('GET', '/api/sessions');
+  const list = extractSessionsArray(rawList);
+  const exists = list.some((e) => sessionNameMatches(e, name));
+
+  if (!exists) {
+    console.log('[WAHA] Session created', name);
+    try {
+      await wahaRequest('POST', '/api/sessions', { name });
+    } catch (err) {
+      const st = err.httpStatus ?? err.response?.status;
+      if (st !== 409 && st !== 400) throw err;
+    }
+  }
+
+  try {
+    await wahaPostStartSession(name);
+    console.log('[WAHA] Session started', name);
+  } catch (err) {
+    console.log('[WAHA] Session start ignored (possibly already started)', err?.message || err);
+  }
+}
+
+/**
+ * QR via rota auth (devlikeapro/waha atual).
+ * @param {string} [session]
+ * @param {{ quiet?: boolean }} [opts]
+ */
+export async function getWahaQr(session = 'default', opts = {}) {
+  const quiet = Boolean(opts.quiet);
+  const name = String(session ?? 'default').trim() || 'default';
+  validateWahaEnv();
+  const enc = encodeURIComponent(name);
+  if (!quiet) console.log('[WAHA] QR requested', name);
+  try {
+    const data = await wahaRequest('GET', `/api/${enc}/auth/qr`);
+    const qr = data?.qr ?? null;
+    if (!quiet) {
+      if (qr) console.log('[WAHA] QR READY');
+      else console.log('[WAHA] QR pending');
+    }
+    return {
+      success: true,
+      qr: qr || null,
+      raw: data,
+    };
+  } catch (e) {
+    if (!quiet) console.warn('[WAHA] QR request failed:', e?.message || e);
+    return {
+      success: false,
+      qr: null,
+      raw: null,
+      error: e?.message || String(e),
+    };
   }
 }
 
@@ -48,12 +177,10 @@ export async function wahaRequest(method, path, data = null) {
   console.log('[WAHA] Request:', methodUpper, url);
 
   try {
-    const { headers: authHeaders } = await resolveProviderAuth('waha');
     const cfg = {
       method: methodUpper,
       url,
       headers: {
-        ...authHeaders,
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
@@ -62,14 +189,14 @@ export async function wahaRequest(method, path, data = null) {
     if (data != null && methodUpper !== 'GET' && methodUpper !== 'HEAD') {
       cfg.data = data;
     }
-    const response = await axios(cfg);
+    const response = await withWahaTimeout(axios(cfg), WAHA_GLOBAL_TIMEOUT_MS);
     return response.data;
   } catch (error) {
     if (error.response) {
       const status = error.response.status;
       let msg;
       if (status === 401) {
-        msg = 'WAHA authentication failed: API key inválida ou ausente';
+        msg = 'WAHA ERROR 401: não autorizado (remova WAHA_API_KEY do WAHA se não for suportado pela imagem)';
       } else {
         const body = error.response.data;
         const detail = typeof body === 'string' ? body : JSON.stringify(body ?? {});
@@ -93,12 +220,7 @@ export async function wahaRequest(method, path, data = null) {
 }
 
 /**
- * Obtém imagem QR da sessão via REST (GET /api/sessions/:name/qrcode ou /qr).
- * Usa WAHA_API_URL (ex.: http://saas_waha:3000) e header x-api-key.
- * @param {string} sessionName
- * @returns {Promise<string|null>} data URL ou null se indisponível / rota inexistente
- */
-/**
+ * Obtém imagem QR da sessão via REST (rota auth/qr + fallbacks legados).
  * @param {string} sessionName
  * @param {{ correlationId?: string|null }} [opts]
  */
@@ -110,7 +232,7 @@ export async function fetchWahaSessionQrcodeRest(sessionName, opts = {}) {
   }
   const name = String(sessionName ?? 'default').trim() || 'default';
   const enc = encodeURIComponent(name);
-  const paths = [`/api/sessions/${enc}/qrcode`, `/api/sessions/${enc}/qr`];
+  const paths = [`/api/${enc}/auth/qr`];
   const qrRestMs = parseInt(process.env.WHATSAPP_QR_REST_TIMEOUT_MS || '12000', 10) || 12000;
   const correlationId = opts.correlationId ?? null;
 

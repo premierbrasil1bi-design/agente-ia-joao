@@ -1,17 +1,160 @@
-export { wahaProvider, wahaRequest, validateWahaEnv, fetchWahaSessionQrcodeRest } from '../services/wahaHttp.js';
+export {
+  wahaProvider,
+  wahaRequest,
+  validateWahaEnv,
+  fetchWahaSessionQrcodeRest,
+  isWahaAlive,
+} from '../services/wahaHttp.js';
 export { resolveWahaSessionName, WAHA_CORE_DEFAULT_SESSION } from '../utils/wahaSession.util.js';
 
+import { resolveWahaSessionName } from '../utils/wahaSession.util.js';
 import * as wahaService from '../services/wahaService.js';
 import * as whatsappSessionFacade from '../services/whatsappSessionProvider.facade.js';
-import { fetchWahaSessionQrcodeRest } from '../services/wahaHttp.js';
-import { getCurrentQr, getQrSnapshotFromDockerLogs } from '../services/wahaQrCapture.js';
-import { resolveWahaSessionName } from '../utils/wahaSession.util.js';
-// HTTP WAHA: wahaHttp → providerAuthResolver (auth dinâmica).
-import { BaseWhatsAppProvider } from './base/BaseWhatsAppProvider.js';
-import * as wahaProvision from '../services/wahaProvision.service.js';
 import { SessionState } from '../services/whatsapp/whatsappSessionState.js';
 import { buildUnifiedQrResponse } from '../utils/whatsappQrContract.js';
-import { whatsappLogger } from '../services/whatsapp/whatsappSessionLogger.js';
+// HTTP WAHA: wahaHttp (sem API key no container; WAHA_API_URL no backend).
+import { BaseWhatsAppProvider } from './base/BaseWhatsAppProvider.js';
+import * as wahaProvision from '../services/wahaProvision.service.js';
+
+/**
+ * Mapeia saída de {@link wahaService.getQrCode} para contrato unificado com mensagens estáveis por estado.
+ * @param {object} svc
+ * @param {string} session
+ * @param {string|null} correlationId
+ */
+function mapWahaServiceQrToUnified(svc, session, correlationId) {
+  const state = String(svc?.state ?? SessionState.UNKNOWN).toUpperCase();
+  const baseMeta = {
+    ...(svc?.meta && typeof svc.meta === 'object' && !Array.isArray(svc.meta) ? svc.meta : {}),
+    path: 'waha_provider_explicit_state',
+  };
+
+  if (state === SessionState.UNAVAILABLE) {
+    return buildUnifiedQrResponse({
+      success: false,
+      format: null,
+      qr: null,
+      session,
+      provider: 'waha',
+      state: SessionState.UNAVAILABLE,
+      source: svc?.source ?? null,
+      error: svc?.error || 'WAHA temporarily disabled (circuit breaker)',
+      message: 'WAHA temporarily unavailable',
+      correlationId,
+      meta: { ...baseMeta, path: 'waha_provider_unavailable' },
+    });
+  }
+
+  if (state === SessionState.OFFLINE) {
+    return buildUnifiedQrResponse({
+      success: false,
+      format: null,
+      qr: null,
+      session,
+      provider: 'waha',
+      state: SessionState.OFFLINE,
+      source: svc?.source ?? null,
+      error: 'WAHA offline',
+      message: 'WAHA offline',
+      correlationId,
+      meta: { ...baseMeta, path: 'waha_provider_offline' },
+    });
+  }
+
+  if (state === SessionState.UNSTABLE) {
+    return buildUnifiedQrResponse({
+      success: false,
+      format: null,
+      qr: null,
+      session,
+      provider: 'waha',
+      state: SessionState.UNSTABLE,
+      source: svc?.source ?? null,
+      error: svc?.error || 'WAHA not responding properly',
+      message: 'WAHA unstable',
+      correlationId,
+      meta: { ...baseMeta, path: 'waha_provider_unstable' },
+    });
+  }
+
+  if (state === SessionState.CANCELLED) {
+    return buildUnifiedQrResponse({
+      success: false,
+      format: null,
+      qr: null,
+      session,
+      provider: 'waha',
+      state: SessionState.CANCELLED,
+      source: svc?.source ?? null,
+      error: svc?.error || 'QR request cancelled',
+      message: 'QR request cancelled',
+      correlationId,
+      meta: { ...baseMeta, path: 'waha_provider_cancelled' },
+    });
+  }
+
+  if (state === SessionState.CONNECTED) {
+    return buildUnifiedQrResponse({
+      success: true,
+      format: null,
+      qr: null,
+      session,
+      provider: 'waha',
+      state: SessionState.CONNECTED,
+      source: svc?.source ?? null,
+      error: null,
+      message: null,
+      correlationId,
+      meta: baseMeta,
+    });
+  }
+
+  if (state === SessionState.QR_AVAILABLE) {
+    return buildUnifiedQrResponse({
+      success: true,
+      format: svc?.format ?? null,
+      qr: svc?.qr ?? null,
+      message: svc?.message ?? null,
+      session,
+      provider: 'waha',
+      state: SessionState.QR_AVAILABLE,
+      source: svc?.source ?? 'rest',
+      error: null,
+      correlationId,
+      meta: baseMeta,
+    });
+  }
+
+  if (state === SessionState.PENDING) {
+    return buildUnifiedQrResponse({
+      success: true,
+      format: null,
+      qr: null,
+      message: 'Gerando QR Code...',
+      session,
+      provider: 'waha',
+      state: SessionState.PENDING,
+      source: svc?.source ?? null,
+      error: null,
+      correlationId,
+      meta: baseMeta,
+    });
+  }
+
+  return buildUnifiedQrResponse({
+    success: Boolean(svc?.success),
+    format: svc?.format ?? null,
+    qr: svc?.qr ?? null,
+    message: svc?.message ?? null,
+    session,
+    provider: 'waha',
+    state: state || SessionState.UNKNOWN,
+    source: svc?.source ?? null,
+    error: svc?.error ?? null,
+    correlationId,
+    meta: baseMeta,
+  });
+}
 
 export class WahaProvider extends BaseWhatsAppProvider {
   constructor(config = {}) {
@@ -82,137 +225,20 @@ export class WahaProvider extends BaseWhatsAppProvider {
       if (err.httpStatus === 401) throw err;
       if (msg.includes('Falha ao conectar') && err.httpStatus) throw err;
       if (err.code === 'WAHA_UNREACHABLE') throw err;
-      if (/WAHA_API_URL|WAHA_API_KEY/.test(msg)) throw err;
+      if (/WAHA_API_URL/.test(msg)) throw err;
       console.error('[WAHA ERROR]:', err.response?.data || err.message);
       throw new Error(err.message || 'Falha ao conectar WhatsApp (WAHA)');
     }
   }
 
+  /**
+   * QR via serviço WAHA endurecido (lock, timeout, estados CANCELLED / UNSTABLE / OFFLINE / PENDING).
+   * @param {object} [_channel]
+   */
   async getQRCode(_channel) {
     void _channel;
-    const prep = await wahaService.ensureSessionReady(this.session, this._ctx());
-    const prepState = prep?.state ?? SessionState.UNKNOWN;
-    const baseMeta = { prepare: prep };
-
-    if (prepState === SessionState.CONNECTED) {
-      return buildUnifiedQrResponse({
-        success: true,
-        format: null,
-        qr: null,
-        session: this.session,
-        provider: 'waha',
-        state: prepState,
-        source: null,
-        error: null,
-        correlationId: this.correlationId,
-        meta: { ...baseMeta, path: 'waha_provider_already_connected' },
-      });
-    }
-
-    try {
-      const fromRest = await fetchWahaSessionQrcodeRest(this.session, { correlationId: this.correlationId });
-      if (fromRest) {
-        const n = this.normalize(fromRest);
-        return buildUnifiedQrResponse({
-          success: n.success,
-          format: n.format,
-          qr: n.qr,
-          message: n.message,
-          session: this.session,
-          provider: 'waha',
-          state: n.success
-            ? prepState !== SessionState.UNKNOWN
-              ? prepState
-              : SessionState.QR_AVAILABLE
-            : prepState,
-          source: 'rest',
-          error: n.success ? null : n.message ?? 'QR REST inválido',
-          correlationId: this.correlationId,
-          meta: baseMeta,
-        });
-      }
-    } catch (err) {
-      whatsappLogger.warn('waha_rest_qr_failed', {
-        session: this.session,
-        correlationId: this.correlationId,
-        errorMessage: err?.message || String(err),
-      });
-    }
-
-    try {
-      const fromStream = getCurrentQr();
-      if (fromStream) {
-        const n = this.normalize(fromStream);
-        return buildUnifiedQrResponse({
-          success: n.success,
-          format: n.format,
-          qr: n.qr,
-          message: n.message,
-          session: this.session,
-          provider: 'waha',
-          state: SessionState.QR_AVAILABLE,
-          source: 'stream',
-          error: n.success ? null : n.message ?? 'QR stream inválido',
-          correlationId: this.correlationId,
-          meta: baseMeta,
-        });
-      }
-    } catch {
-      /* stream opcional */
-    }
-
-    try {
-      const snap = await getQrSnapshotFromDockerLogs();
-      if (snap?.imageDataUrl) {
-        const n = this.normalize(snap.imageDataUrl);
-        return buildUnifiedQrResponse({
-          success: n.success,
-          format: n.format,
-          qr: n.qr,
-          message: n.message,
-          session: this.session,
-          provider: 'waha',
-          state: SessionState.QR_AVAILABLE,
-          source: 'logs',
-          error: n.success ? null : n.message ?? null,
-          correlationId: this.correlationId,
-          meta: { ...baseMeta, dockerSnapshot: true },
-        });
-      }
-      if (snap?.ascii) {
-        const n = this.normalize({ format: 'ascii', qr: snap.ascii });
-        return buildUnifiedQrResponse({
-          success: n.success,
-          format: n.format,
-          qr: n.qr,
-          message: n.message,
-          session: this.session,
-          provider: 'waha',
-          state: SessionState.QR_AVAILABLE,
-          source: 'logs',
-          error: n.success ? null : n.message ?? null,
-          correlationId: this.correlationId,
-          meta: { ...baseMeta, dockerSnapshot: true, ascii: true },
-        });
-      }
-    } catch {
-      /* snapshot Docker opcional */
-    }
-
-    const msg = 'QR ainda não disponível, aguardando geração';
-    return buildUnifiedQrResponse({
-      success: false,
-      format: null,
-      qr: null,
-      message: msg,
-      session: this.session,
-      provider: 'waha',
-      state: prepState,
-      source: null,
-      error: msg,
-      correlationId: this.correlationId,
-      meta: baseMeta,
-    });
+    const svc = await wahaService.getQrCode(this.session, this._ctx());
+    return mapWahaServiceQrToUnified(svc, this.session, this.correlationId);
   }
 
   /**

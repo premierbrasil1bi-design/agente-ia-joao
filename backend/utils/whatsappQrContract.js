@@ -48,6 +48,10 @@ export function buildUnifiedQrResponse(p) {
     out.qrcode = qr;
   }
 
+  if (p.correlationId != null && String(p.correlationId).trim() !== '') {
+    out.correlationId = String(p.correlationId).slice(0, 128);
+  }
+
   return out;
 }
 

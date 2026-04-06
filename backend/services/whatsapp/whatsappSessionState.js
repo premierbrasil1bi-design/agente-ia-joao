@@ -10,12 +10,22 @@ export const SessionState = {
   CREATED: 'CREATED',
   STARTING: 'STARTING',
   CONNECTING: 'CONNECTING',
+  /** QR ainda não disponível no WAHA; cliente pode continuar polling. */
+  PENDING: 'PENDING',
   QR_AVAILABLE: 'QR_AVAILABLE',
   READY: 'READY',
   CONNECTED: 'CONNECTED',
   DISCONNECTED: 'DISCONNECTED',
   FAILED: 'FAILED',
   RATE_LIMITED: 'RATE_LIMITED',
+  /** WAHA inacessível (health check). */
+  OFFLINE: 'OFFLINE',
+  /** Polling QR desta sessão foi substituído por outro. */
+  CANCELLED: 'CANCELLED',
+  /** WAHA não responde de forma estável (timeouts / falhas repetidas). */
+  UNSTABLE: 'UNSTABLE',
+  /** Circuit breaker ativo — WAHA temporariamente desabilitado no backend. */
+  UNAVAILABLE: 'UNAVAILABLE',
 };
 
 function norm(raw) {

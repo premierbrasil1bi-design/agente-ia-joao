@@ -42,18 +42,23 @@ services:
       - "6379:6379"
 
   # WAHA — WhatsApp HTTP API (provider=waha no OMNIA). Host 3099 evita conflito com API Node na 3000 (PM2).
-  # Persistência: sem volume, sessões somem após restart (GET /api/sessions vazio, 404 em /default).
+  # Persistência: volume em ./waha_sessions.
+  #
+  # IMPORTANTE:
+  # Após alterar este arquivo (ou variáveis de ambiente do WAHA), executar:
+  #   docker compose down -v
+  #   docker compose up -d
+  #
+  # Não usar WAHA_API_KEY nesta imagem: versões atuais do devlikeapro/waha podem bloquear a API com 401
+  # se a chave não for a esperada pelo motor interno. Segurança na rede Docker + backend OMNIA.
   saas_waha:
     image: devlikeapro/waha:latest
     container_name: saas_waha
-    restart: always
     ports:
       - "3099:3000"
     volumes:
       - ./waha_sessions:/app/.sessions
-    environment:
-      - WAHA_LOG_LEVEL=info
-      - WAHA_API_KEY=OMNIA_SECURE_9X7A_2026_JOAO
+    restart: always
 
   # Evolution API: trocado de evoapicloud/evolution-api:v2.2.3 para atendai/evolution-api:v2.1.1 porque a
   # v2.2.3 falhava na criação de instâncias (erro interno ao ler connectionStatus.state indefinido). A v2.1.1
@@ -114,7 +119,6 @@ services:
       EVOLUTION_API_URL: http://saas_evolution:8080
       EVOLUTION_API_KEY: EVOLUTION_2026_JOAO_998877
       WAHA_API_URL: http://saas_waha:3000
-      WAHA_API_KEY: OMNIA_SECURE_9X7A_2026_JOAO
     ports:
       - "3000:3000"
     env_file:

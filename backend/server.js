@@ -39,6 +39,7 @@ import wahaWebhookRoutes from './routes/wahaWebhook.routes.js';
 import messagesRoutes from './routes/messages.routes.js';
 import alertsRoutes from './routes/alerts.routes.js';
 import providersRoutes from './routes/providers.routes.js';
+import internalWahaRoutes from './routes/internalWaha.routes.js';
 import globalAdminAuth from './middlewares/globalAdminAuth.js';
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { correlationIdMiddleware } from './middleware/correlationId.middleware.js';
@@ -157,6 +158,8 @@ app.get('/api/health/db', async (req, res) => {
     res.status(503).json({ database: 'disconnected', error: 'Unavailable' });
   }
 });
+
+app.use('/api/internal', internalWahaRoutes);
 
 app.get('/api/health/providers', async (req, res) => {
   try {

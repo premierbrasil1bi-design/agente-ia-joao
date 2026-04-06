@@ -28,6 +28,7 @@ import {
   recordSessionCircuitSuccess,
 } from './whatsapp/sessionProviderCircuitBreaker.js';
 import { buildCanonicalConnectResult } from '../utils/whatsappCanonicalContracts.js';
+import { ensureWahaSession } from './wahaHttp.js';
 
 const WAHA_PROVIDER = 'waha';
 
@@ -247,6 +248,8 @@ async function executeEnsureWahaSessionPreparedBody(ctx, correlationId) {
   const tenantId = ctx.tenantId ?? null;
   const channelId = ctx.channelId ?? null;
   const t0 = Date.now();
+
+  await ensureWahaSession(sessionName);
 
   let detail = await wahaAdapterGetSessionDetail(sessionName);
 

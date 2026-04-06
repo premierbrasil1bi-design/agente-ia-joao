@@ -67,8 +67,6 @@ export function validateChannelProvidersConfig() {
   };
   if (!wahaUrlRaw) {
     console.error('[CONFIG] WAHA_API_URL não configurado - provider desativado');
-  } else if (!wahaKeyRaw) {
-    console.error('[CONFIG] WAHA_API_KEY não configurado - provider WAHA desativado');
   }
   if (evoUrlRaw && !evoKeyStrict && !evoKeyLegacy) {
     console.error(

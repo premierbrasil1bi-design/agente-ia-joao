@@ -62,7 +62,7 @@ async function checkWaha() {
   try {
     validateWahaEnv();
   } catch (e) {
-    const err = new Error('WAHA não configurado (WAHA_API_URL / WAHA_API_KEY).');
+    const err = new Error('WAHA não configurado (defina WAHA_API_URL).');
     err.code = 'WAHA_UNREACHABLE';
     throw err;
   }
@@ -70,7 +70,9 @@ async function checkWaha() {
     await wahaRequest('GET', '/api/sessions');
   } catch (error) {
     if (error.httpStatus === 401) {
-      const e = new Error('WAHA: não autorizado (verifique WAHA_API_KEY).');
+      const e = new Error(
+        'WAHA: 401 — remova WAHA_API_KEY do container WAHA se a imagem não suportar essa variável.',
+      );
       e.httpStatus = 401;
       throw e;
     }

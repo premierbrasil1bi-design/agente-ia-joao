@@ -28,6 +28,10 @@ import {
 import { ProviderAccessError, validateProviderAccessForTenant } from '../services/providerAccess.service.js';
 import { normalizeQrResult } from '../utils/normalizeQrResult.js';
 import { pickUnifiedQrTransportFields, buildUnifiedQrResponse } from '../utils/whatsappQrContract.js';
+import {
+  buildWahaQrcodeJsonResponse,
+  buildWahaQrcodeSocketPayload,
+} from '../utils/wahaQrChannelResponse.js';
 
 const router = Router();
 
@@ -266,7 +270,7 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
         process.env.WAHA_BASE_URL ||
         ''
       ).trim();
-      if (!wahaUrlEnv || !process.env.WAHA_API_KEY?.trim()) {
+      if (!wahaUrlEnv) {
         return wahaSoft({
           success: false,
           qr: null,
@@ -375,29 +379,9 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
 
     if (!result.success || !result.qr) {
       if (providerLc === 'waha') {
-        return wahaSoft({
-          success: false,
-          message: result.message || 'QR ainda não disponível, aguardando geração',
-          qr: null,
-          qrCode: null,
-          qrcode: null,
-          format: null,
-          status: normalizedStatus,
-          ...pickUnifiedQrTransportFields(
-            buildUnifiedQrResponse({
-              success: false,
-              format: null,
-              qr: null,
-              session: resolveSessionName(channel),
-              provider: 'waha',
-              state: result.state ?? null,
-              source: result.source ?? null,
-              error: result.message || 'QR ainda não disponível, aguardando geração',
-              correlationId: req.correlationId ?? null,
-              meta: { path: 'channelsRoutes_qr_not_ready' },
-            }),
-          ),
-        });
+        const cid = req.correlationId ?? null;
+        emitChannelSocketEvent('channel:qr', buildWahaQrcodeSocketPayload(channel, result, cid));
+        return wahaSoft(buildWahaQrcodeJsonResponse(result, cid));
       }
       return res.json({
         success: false,
@@ -413,29 +397,9 @@ router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
     console.log('[CHANNEL] [QR] Generated', { id: req.params.id, tenantId });
 
     if (providerLc === 'waha') {
-      emitChannelSocketEvent('channel:qr', {
-        channelId: channel.id,
-        tenantId: channel.tenant_id,
-        status: 'PENDING',
-        format: result.format,
-        qr: result.qr,
-        qrCode: result.format === 'image' ? result.qr : null,
-        qrAscii: result.format === 'ascii' ? result.qr : null,
-        connected: false,
-        correlationId: result.correlationId ?? req.correlationId ?? null,
-        ...pickUnifiedQrTransportFields(result),
-      });
-      return wahaSoft({
-        success: true,
-        qr: result.qr,
-        qrCode: result.format === 'image' ? result.qr : null,
-        qrcode: result.format === 'image' ? result.qr : null,
-        format: result.format,
-        status: normalizedStatus,
-        message: result.message ?? null,
-        correlationId: result.correlationId ?? req.correlationId ?? null,
-        ...pickUnifiedQrTransportFields(result),
-      });
+      const cid = req.correlationId ?? null;
+      emitChannelSocketEvent('channel:qr', buildWahaQrcodeSocketPayload(channel, result, cid));
+      return wahaSoft(buildWahaQrcodeJsonResponse(result, cid));
     }
 
     emitChannelSocketEvent('channel:qr', {

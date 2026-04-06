@@ -11,8 +11,11 @@ import {
 } from '../services/channelConnection.service.js';
 import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service.js';
 import { normalizeQrResult } from '../utils/normalizeQrResult.js';
-import { pickUnifiedQrTransportFields, buildUnifiedQrResponse } from '../utils/whatsappQrContract.js';
-import { resolveSessionName } from '../utils/resolveSessionName.js';
+import { pickUnifiedQrTransportFields } from '../utils/whatsappQrContract.js';
+import {
+  buildWahaQrcodeJsonResponse,
+  buildWahaQrcodeSocketPayload,
+} from '../utils/wahaQrChannelResponse.js';
 import { deriveFlowPhase } from '../utils/whatsappChannelFlow.js';
 import { resolveProvider } from '../providers/provider.factory.js';
 import {
@@ -49,8 +52,7 @@ function isWahaAuthError(err) {
 function isWahaNotConfiguredMessage(err) {
   return (
     String(err?.message || '').includes('WAHA não configurado') ||
-    String(err?.message || '').includes('WAHA_API_URL') ||
-    String(err?.message || '').includes('WAHA_API_KEY')
+    String(err?.message || '').includes('WAHA_API_URL')
   );
 }
 
@@ -211,60 +213,13 @@ export async function getQrCode(req, res) {
     };
 
     if (providerLc === 'waha') {
-      let wahaSession = null;
-      try {
-        wahaSession = resolveSessionName(channel);
-      } catch {
-        wahaSession = null;
-      }
-      const wahaFailExtras = pickUnifiedQrTransportFields(
-        buildUnifiedQrResponse({
-          success: false,
-          format: null,
-          qr: null,
-          session: wahaSession,
-          provider: 'waha',
-          state: result.state ?? null,
-          source: result.source ?? null,
-          error: result.message || 'QR ainda não disponível, aguardando geração',
-          correlationId: cid,
-          meta: { path: 'channelConnection_getQrCode_waha_pending' },
-        }),
-      );
-      if (result.success && result.format === 'ascii' && result.qr) {
-        emitChannelSocketEvent('channel:qr', socketPayload);
-        return res.status(200).json({
-          success: true,
-          format: 'ascii',
-          qr: result.qr,
-          qrCode: null,
-          qrcode: null,
-          message: result.message ?? null,
-          ...pickUnifiedQrTransportFields(result),
-        });
-      }
-      if (result.success && result.format === 'image' && result.qr) {
-        emitChannelSocketEvent('channel:qr', socketPayload);
-        console.log('[CHANNEL SOCKET] QR emitted', { id: channel.id, tenantId: channel.tenant_id });
-        return res.status(200).json({
-          success: true,
-          format: 'image',
-          qr: result.qr,
-          qrCode: result.qr,
-          qrcode: result.qr,
-          message: result.message ?? null,
-          ...pickUnifiedQrTransportFields(result),
-        });
-      }
-      return res.status(200).json({
-        success: false,
-        format: null,
-        qr: null,
-        qrCode: null,
-        qrcode: null,
-        message: result.message || 'QR ainda não disponível, aguardando geração',
-        ...wahaFailExtras,
+      const wahaSocket = buildWahaQrcodeSocketPayload(channel, result, cid);
+      emitChannelSocketEvent('channel:qr', wahaSocket);
+      console.log('[CHANNEL SOCKET] channel:qr (waha)', {
+        id: channel.id,
+        state: wahaSocket.state,
       });
+      return res.status(200).json(buildWahaQrcodeJsonResponse(result, cid));
     }
 
     if (!result.success || !result.qr) {
@@ -317,7 +272,7 @@ export async function getQrCode(req, res) {
       return res.status(503).json({
         success: false,
         error: 'WAHA_NOT_CONFIGURED',
-        message: 'WAHA não configurado no servidor (defina WAHA_API_URL e WAHA_API_KEY).',
+        message: 'WAHA não configurado no servidor (defina WAHA_API_URL).',
       });
     }
     if (String(err.message || '') === 'QR não disponível') {
