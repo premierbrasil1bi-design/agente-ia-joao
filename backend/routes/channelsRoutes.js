@@ -32,6 +32,9 @@ import {
   buildWahaQrcodeJsonResponse,
   buildWahaQrcodeSocketPayload,
 } from '../utils/wahaQrChannelResponse.js';
+import { provisionWithFallback } from '../services/channelProvisioning.service.js';
+import { checkChannelHealth } from '../services/channelHealth.service.js';
+import { getProvisioningQueue } from '../queues/provisioning.queue.js';
 
 const router = Router();
 
@@ -48,6 +51,47 @@ async function provisionInstanceWithProvider(channel) {
   const result = await provider.provisionInstance(channel);
   const providerName = String(channel.provider || '').toLowerCase().trim();
   return { result, providerName };
+}
+
+async function autoProvisionChannel(channelRow) {
+  const provider = String(channelRow?.provider || '').toLowerCase().trim();
+  if (!provider || !['waha', 'evolution'].includes(provider)) {
+    return { skipped: true, provider: provider || null, reason: 'provider_not_supported' };
+  }
+  const queue = getProvisioningQueue();
+  let result;
+  try {
+    result = await provisionWithFallback(channelRow);
+    if (!result?.success) {
+      result = { ...(result || {}), success: false, fallback: true };
+      await queue.add(
+        'retry-provision',
+        { channel: channelRow },
+        {
+          jobId: `retry-${channelRow.id}`,
+          removeOnComplete: true,
+          removeOnFail: false,
+        },
+      );
+      console.log('[QUEUE] Canal enviado para reprocessamento:', channelRow?.id ?? 'N/A');
+    }
+  } catch (error) {
+    console.error('[FAIL-OPEN] Provision falhou:', error?.message || error);
+    result = { success: false, fallback: true };
+    await queue.add(
+      'retry-provision',
+      { channel: channelRow },
+      {
+        jobId: `retry-${channelRow.id}`,
+        removeOnComplete: true,
+        removeOnFail: false,
+      },
+    );
+    console.log('[QUEUE] Canal enviado para reprocessamento:', channelRow?.id ?? 'N/A');
+  }
+  const isHealthy = await checkChannelHealth(channelRow);
+  console.log(`[HEALTH] Canal ${channelRow?.id ?? 'N/A'} está saudável?`, isHealthy);
+  return { ...result, provider, isHealthy };
 }
 
 /**
@@ -635,11 +679,13 @@ router.post('/', requireActiveTenant, async (req, res) => {
       });
       invalidateTenantChannels(tenantId);
       const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
+      const provisioning = await autoProvisionChannel(full);
       return res.status(200).json({
         success: true,
         channel: full,
-        nextAction: 'provision_instance',
+        nextAction: provisioning.success ? 'connect' : 'provision_instance',
         provider: 'waha',
+        provisioning,
       });
     }
 
@@ -667,11 +713,13 @@ router.post('/', requireActiveTenant, async (req, res) => {
       });
       invalidateTenantChannels(tenantId);
       const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
+      const provisioning = await autoProvisionChannel(full);
       return res.status(200).json({
         success: true,
         channel: full,
         nextAction: 'connect',
         mode: 'legacy_instance',
+        provisioning,
       });
     }
 
@@ -709,10 +757,12 @@ router.post('/', requireActiveTenant, async (req, res) => {
 
     invalidateTenantChannels(tenantId);
     const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
+    const provisioning = await autoProvisionChannel(full);
     return res.status(200).json({
       success: true,
       channel: full,
-      nextAction: 'provision_instance',
+      nextAction: provisioning.success ? 'connect' : 'provision_instance',
+      provisioning,
     });
   } catch (err) {
     if (err instanceof ProviderAccessError) {

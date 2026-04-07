@@ -33,6 +33,21 @@ export async function findById(id, tenantId) {
   return row ? withProviderConfigFallback(row) : null;
 }
 
+/**
+ * Canais elegíveis para monitor de saúde contínuo.
+ * Não altera schema; leitura leve para auto-healing.
+ */
+export async function findActiveChannels() {
+  const { rows } = await pool.query(
+    `SELECT id, type, provider, instance, tenant_id
+     FROM channels
+     WHERE status = 'connected'
+        OR status = 'active'
+        OR status IS NULL`
+  );
+  return rows;
+}
+
 /** Evita duplicate key em idx_channels_type_instance (mesmo tenant, mesmo type+instance). */
 export async function findByTenantTypeAndInstance(tenantId, type, instance) {
   if (!tenantId || !type || instance == null || String(instance).trim() === '') return null;

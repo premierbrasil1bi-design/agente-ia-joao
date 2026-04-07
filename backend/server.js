@@ -83,13 +83,14 @@ process.on('uncaughtException', console.error);
 const app = express();
 const PORT = config.port || 3000;
 
-const corsAllowedOrigins = [
+const corsAllowedOrigins = new Set([
   'https://app.omnia1biai.com.br',
   'https://admin.omnia1biai.com.br',
-];
+]);
 
 if (process.env.NODE_ENV !== 'production') {
-  corsAllowedOrigins.push('http://localhost:5173', 'http://localhost:3000');
+  corsAllowedOrigins.add('http://localhost:5173');
+  corsAllowedOrigins.add('http://localhost:3000');
 }
 
 const corsAllowedHeaders = [
@@ -104,10 +105,18 @@ const corsAllowedHeaders = [
 ];
 
 const corsOptions = {
-  origin: corsAllowedOrigins,
+  origin: (origin, cb) => {
+    // Permite ferramentas sem Origin (curl, health checks internos, webhooks server-to-server).
+    if (!origin) return cb(null, true);
+    if (corsAllowedOrigins.has(origin)) return cb(null, true);
+    return cb(new Error(`CORS origin não permitida: ${origin}`));
+  },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: corsAllowedHeaders,
+  exposedHeaders: ['x-request-id', 'x-correlation-id'],
   credentials: true,
+  maxAge: 86400,
+  optionsSuccessStatus: 204,
 };
 
 // 1) CORS (antes de body parser e rotas)
@@ -368,7 +377,7 @@ const server = createServer(app);
 
 const io = new SocketIOServer(server, {
   cors: {
-    origin: corsAllowedOrigins,
+    origin: Array.from(corsAllowedOrigins),
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: corsAllowedHeaders,
     credentials: true,
