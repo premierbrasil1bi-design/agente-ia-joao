@@ -57,6 +57,7 @@ services:
       - HOST=0.0.0.0
       - PORT=3000
       - WAHA_HOST=0.0.0.0
+    command: ["node", "dist/main.js", "--host=0.0.0.0"]
     ports:
       - "3099:3000"
     volumes:
