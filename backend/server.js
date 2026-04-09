@@ -337,6 +337,7 @@ apiRouter.use('/auth', authRoutes);
 
 /* ---------- WEBHOOKS (WAHA) — rota pública (sem auth) ---------- */
 app.use('/api/channels', wahaWebhookRoutes);
+app.use('/', wahaWebhookRoutes);
 
 app.use('/api', apiRouter);
 

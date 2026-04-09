@@ -20,8 +20,12 @@ function normalizeProvider(channel) {
   return type === 'evolution' ? 'evolution' : type === 'waha' ? 'waha' : provider;
 }
 
-function webhookTarget() {
+function evolutionWebhookTarget() {
   return `${String(CONFIG.API_BASE_URL).replace(/\/$/, '')}/api/agents/webhook`;
+}
+
+function wahaWebhookTarget() {
+  return `${String(CONFIG.API_BASE_URL).replace(/\/$/, '')}/webhook/waha`;
 }
 
 function wahaHeaders() {
@@ -152,12 +156,25 @@ async function provisionWaha(channel, correlationId) {
         : [];
     const exists = sessions.some((s) => String(s?.name || s?.id || s?.session || '').trim() === sessionName);
 
+    const webhookUrl = wahaWebhookTarget();
+    const webhookConfig = {
+      webhooks: [
+        {
+          url: webhookUrl,
+          events: ['message', 'session.status'],
+        },
+      ],
+    };
+
     if (!exists) {
       await retry(
         () =>
           axios.post(
             `${base}/api/sessions`,
-            { name: sessionName },
+            {
+              name: sessionName,
+              config: webhookConfig,
+            },
             { headers: wahaHeaders(), timeout: 20000 },
           ),
         4,
@@ -166,8 +183,7 @@ async function provisionWaha(channel, correlationId) {
       console.log(`[${correlationId}] [WAHA] Sessão criada`);
     }
 
-    const webhookUrl = webhookTarget();
-    const webhookPayload = { url: webhookUrl, events: ['messages.upsert'] };
+    const webhookPayload = { url: webhookUrl, events: ['message', 'session.status'] };
     const webhookCandidates = [
       `${base}/api/sessions/${encodeURIComponent(sessionName)}/webhooks`,
       `${base}/api/sessions/${encodeURIComponent(sessionName)}/webhook`,
@@ -204,6 +220,36 @@ async function provisionWaha(channel, correlationId) {
 
     if (!webhookDone && lastErr) throw lastErr;
     if (webhookDone) console.log(`[${correlationId}] [WAHA] Webhook configurado`);
+
+    // Hardening: atualiza config da sessão com webhooks e tenta restart/start best-effort.
+    try {
+      await retry(
+        () =>
+          axios.put(
+            `${base}/api/sessions/${encodeURIComponent(sessionName)}`,
+            { name: sessionName, config: webhookConfig },
+            { headers: wahaHeaders(), timeout: 20000 },
+          ),
+        2,
+        correlationId,
+      );
+    } catch {
+      // Ignora: alguns builds WAHA não suportam PUT /api/sessions/:name.
+    }
+    try {
+      await retry(
+        () =>
+          axios.post(
+            `${base}/api/sessions/${encodeURIComponent(sessionName)}/start`,
+            {},
+            { headers: wahaHeaders(), timeout: 20000 },
+          ),
+        2,
+        correlationId,
+      );
+    } catch {
+      // Ignora: sessão pode já estar iniciada.
+    }
 
     return { success: true, provider: 'waha', sessionName, correlationId };
   } catch (error) {
@@ -243,7 +289,7 @@ async function provisionEvolution(channel, correlationId) {
       console.log(`[${correlationId}] [EVOLUTION] Instance já existe`);
     }
 
-    const webhookUrl = webhookTarget();
+    const webhookUrl = evolutionWebhookTarget();
     const webhookPayload = {
       instanceName,
       webhook: webhookUrl,

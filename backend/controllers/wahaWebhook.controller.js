@@ -9,10 +9,10 @@
  */
 
 import * as channelsRepository from '../repositories/channelsRepository.js';
-import * as agentsRepository from '../repositories/agentsRepository.js';
 import { processIncomingMessage } from '../services/messagePipeline.js';
 import { enqueueConversationTask } from '../services/conversationQueueService.js';
-import { sendWhatsAppTextForChannel } from '../services/whatsappOutbound.service.js';
+import { sendMessage as sendWahaMessage } from '../services/wahaService.js';
+import { resolveAgentForChannel } from '../services/agentRouter.js';
 import {
   CONNECTION,
   transitionEvolutionChannelConnection,
@@ -48,6 +48,39 @@ function mapWahaSessionStatusToConnectionStatus(status) {
   return CONNECTION.DISCONNECTED;
 }
 
+function parseWahaIncoming(payload = {}) {
+  const fromRaw = payload.from ?? payload.key?.remoteJid ?? payload.chatId ?? '';
+  const textRaw =
+    payload.body ??
+    payload.text ??
+    payload.caption ??
+    payload.message?.conversation ??
+    payload.message?.extendedTextMessage?.text ??
+    payload.message ??
+    '';
+  const fromMe = Boolean(
+    payload.fromMe ??
+      payload.key?.fromMe ??
+      payload.message?.key?.fromMe ??
+      payload?.participant?.includes?.('@g.us-self'),
+  );
+  let from = String(fromRaw || '').trim();
+  if (from.endsWith('@c.us')) from = from.replace('@c.us', '');
+  const messageText = typeof textRaw === 'string' ? textRaw.trim() : '';
+  return {
+    from,
+    messageText,
+    fromMe,
+  };
+}
+
+function resolveWahaSession(data = {}) {
+  const raw = String(data.session || data.instance || data.sessionName || '').trim();
+  if (raw) return raw;
+  // WAHA free/core normalmente usa sessão fixa "default".
+  return 'default';
+}
+
 export async function handleWahaWebhook(req, res) {
   try {
     const data = req.body;
@@ -59,7 +92,7 @@ export async function handleWahaWebhook(req, res) {
 
     console.log('[WAHA WEBHOOK] recebido', { event: data.event, session: data.session });
 
-    const session = String(data.session || '').trim();
+    const session = resolveWahaSession(data);
     const event = String(data.event || '').trim();
 
     if (!session) {
@@ -74,6 +107,78 @@ export async function handleWahaWebhook(req, res) {
     }
 
     console.log('[WAHA WEBHOOK]', { session, event, channelId: '(lookup)' });
+
+    // ========================================
+    // EVENTO: MENSAGEM RECEBIDA
+    // ========================================
+    if (event === 'message') {
+      const payload = data.payload || {};
+      const parsed = parseWahaIncoming(payload);
+      if (parsed.fromMe) {
+        console.log('[WAHA] Ignorando mensagem própria');
+        return res.sendStatus(200);
+      }
+
+      if (!parsed.messageText || !parsed.from) {
+        console.warn('[WAHA] mensagem inválida (sem body/from)', {
+          fromRawPresent: Boolean(parsed.from),
+          bodyPresent: Boolean(parsed.messageText),
+        });
+        return res.sendStatus(200);
+      }
+
+      // WAHA usa JID em @c.us
+      let from = parsed.from;
+      from = normalizeBrazilNumber(from) || from;
+      const messageText = parsed.messageText;
+
+      console.log('[WAHA] Session:', session);
+      console.log(`[WAHA] Incoming message from ${from}: "${messageText}"`);
+
+      const agent = await resolveAgentForChannel('whatsapp', session);
+      if (!agent?.agentId) {
+        console.warn('[WAHA] Agent not found:', session);
+        return res.sendStatus(200);
+      }
+      console.log('[WAHA] Agent resolved:', agent.agentId);
+
+      const conversationKey = `whatsapp:${from}:${agent.agentId ?? 'null'}`;
+
+      enqueueConversationTask(conversationKey, async () => {
+        const result = await processIncomingMessage({
+          channel: 'whatsapp',
+          senderId: from,
+          messageText: messageText,
+          timestamp: payload.timestamp ?? payload.timestampMs ?? Date.now(),
+          metadata: {
+            agentId: agent.agentId,
+            clientId: agent.clientId,
+            channelId: agent.channelId,
+            provider: 'waha',
+            session,
+          },
+        });
+
+        const aiResponse = result?.replyText != null ? String(result.replyText).trim() : '';
+        if (!aiResponse) {
+          console.warn('[WAHA] Empty AI response');
+          return;
+        }
+
+        console.log('[WAHA] AI response:', aiResponse);
+        const sent = await sendWahaMessage(session, from, aiResponse, {
+          channelId: agent.channelId,
+        });
+        if (!sent?.ok) {
+          console.error('[WAHA] sendText failed', sent?.error || sent);
+        } else {
+          console.log('[WAHA] Response sent');
+        }
+      });
+
+      console.log('[WAHA] Mensagem processada:', { conversationKey });
+      return res.sendStatus(200);
+    }
 
     const channel = await channelsRepository.findEvolutionChannelByExternalId(session);
     if (!channel) {
@@ -131,60 +236,6 @@ export async function handleWahaWebhook(req, res) {
       } catch (statusErr) {
         console.warn('[WAHA] status update failed:', statusErr.message);
       }
-      return res.sendStatus(200);
-    }
-
-    // ========================================
-    // EVENTO: MENSAGEM RECEBIDA
-    // ========================================
-    if (event === 'message') {
-      const payload = data.payload || {};
-      const fromRaw = payload.from;
-      const messageText =
-        payload.body || payload.text || payload.caption || payload.message || '';
-
-      if (!messageText || !fromRaw) {
-        console.warn('[WAHA] mensagem inválida (sem body/from)', { fromRawPresent: !!fromRaw });
-        return res.sendStatus(200);
-      }
-
-      // WAHA usa JID em @c.us
-      let from = String(fromRaw).trim();
-      if (from.endsWith('@c.us')) from = from.replace('@c.us', '');
-      from = normalizeBrazilNumber(from) || from;
-
-      console.log('[WAHA] Mensagem recebida:', { channelId: channel.id, from, len: messageText.length });
-
-      const agentRow = channel.agent_id
-        ? await agentsRepository.findById(channel.agent_id)
-        : null;
-      const agentId = channel.agent_id ?? null;
-      const clientId = agentRow?.client_id ?? null;
-
-      const conversationKey = `whatsapp:${from}:${agentId ?? 'null'}`;
-
-      enqueueConversationTask(conversationKey, async () => {
-        const result = await processIncomingMessage({
-          channel: 'whatsapp',
-          senderId: from,
-          messageText: messageText,
-          timestamp: payload.timestamp ?? payload.timestampMs ?? Date.now(),
-          metadata: {
-            agentId,
-            clientId,
-            channelId: channel.id,
-            tenantId: channel.tenant_id,
-            provider: 'waha',
-            session,
-          },
-        });
-
-        if (result?.replyText) {
-          await sendWhatsAppTextForChannel(channel, from, result.replyText);
-        }
-      });
-
-      console.log('[WAHA] Mensagem processada:', { conversationKey });
       return res.sendStatus(200);
     }
 
