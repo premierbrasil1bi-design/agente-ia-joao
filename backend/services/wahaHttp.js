@@ -1,6 +1,6 @@
 /**
  * Cliente HTTP único para WAHA — WAHA_API_URL / WAHA_URL / WAHA_BASE_URL.
- * Autenticação obrigatória via header `X-Api-Key` em todas as requisições.
+ * Suporta autenticação por X-Api-Key e/ou Basic Auth (username/password).
  */
 
 import axios from 'axios';
@@ -25,8 +25,24 @@ function resolveWahaApiKey() {
   return (process.env.WAHA_API_KEY || '').trim();
 }
 
+function resolveWahaUsername() {
+  return (process.env.WAHA_USERNAME || '').trim();
+}
+
+function resolveWahaPassword() {
+  return (process.env.WAHA_PASSWORD || '').trim();
+}
+
+function resolveWahaBasicAuth() {
+  const username = resolveWahaUsername();
+  const password = resolveWahaPassword();
+  if (!username || !password) return null;
+  return { username, password };
+}
+
 const WAHA_BASE_URL = resolveWahaBaseUrl();
 const WAHA_API_KEY = resolveWahaApiKey();
+const WAHA_BASIC_AUTH = resolveWahaBasicAuth();
 
 if (!WAHA_API_KEY) {
   console.error('[WAHA] API KEY NÃO DEFINIDA (defina WAHA_API_KEY no container ou .env)');
@@ -39,9 +55,11 @@ if (!WAHA_API_KEY) {
 export function logWahaStartupConfig() {
   const baseURL = resolveWahaBaseUrl();
   const hasApiKey = Boolean(resolveWahaApiKey());
+  const hasBasicAuth = Boolean(resolveWahaBasicAuth());
   console.log('[WAHA][CONFIG]', {
     baseURL: baseURL || null,
     hasApiKey,
+    hasBasicAuth,
   });
 }
 
@@ -59,6 +77,7 @@ export function validateWahaEnv() {
 export const wahaClient = axios.create({
   baseURL: WAHA_BASE_URL,
   timeout: 15000,
+  ...(WAHA_BASIC_AUTH ? { auth: WAHA_BASIC_AUTH } : {}),
   headers: {
     'Content-Type': 'application/json',
     'X-Api-Key': WAHA_API_KEY,
@@ -67,16 +86,21 @@ export const wahaClient = axios.create({
 
 wahaClient.interceptors.request.use((cfg) => {
   const key = resolveWahaApiKey();
+  const basicAuth = resolveWahaBasicAuth();
   cfg.headers = {
     ...(cfg.headers || {}),
     'X-Api-Key': key,
     'Content-Type': (cfg.headers && cfg.headers['Content-Type']) || 'application/json',
   };
+  if (basicAuth) {
+    cfg.auth = basicAuth;
+  }
   const endpoint = cfg.url != null ? String(cfg.url) : '';
   console.log('[WAHA][REQUEST]', {
     endpoint,
     method: cfg.method,
     hasApiKey: Boolean(key),
+    hasBasicAuth: Boolean(basicAuth),
   });
   return cfg;
 });
@@ -94,7 +118,7 @@ wahaClient.interceptors.response.use(
 );
 
 /**
- * Health rápido: GET /api/sessions (com X-Api-Key via wahaClient).
+ * Health rápido: GET /api/sessions (com auth configurada via wahaClient).
  * @returns {Promise<boolean>}
  */
 export async function isWahaAlive() {
@@ -288,7 +312,7 @@ export async function wahaRequest(method, path, data = null) {
       const status = error.response.status;
       let msg;
       if (status === 401) {
-        msg = 'WAHA ERROR 401: não autorizado (valide WAHA_API_KEY no backend e no container WAHA)';
+        msg = 'WAHA ERROR 401: não autorizado (valide WAHA_API_KEY e/ou WAHA_USERNAME/WAHA_PASSWORD no backend e no WAHA)';
       } else {
         const body = error.response.data;
         const detail = typeof body === 'string' ? body : JSON.stringify(body ?? {});
