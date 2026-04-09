@@ -55,6 +55,8 @@ services:
     environment:
       - WAHA_API_KEY=OMNIA_SECURE_9X7A_2026_JOAO
       - HOST=0.0.0.0
+      - PORT=3000
+      - WAHA_HOST=0.0.0.0
     ports:
       - "3099:3000"
     volumes:
