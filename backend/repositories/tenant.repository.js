@@ -112,6 +112,27 @@ export async function refundTenantMessageQuota(tenantId) {
   );
 }
 
+/**
+ * Persiste apenas overrides de feature_flags (JSONB). Espera objeto já validado/normalizado.
+ * @param {string} id
+ * @param {Record<string, boolean>} featureFlags
+ * @param {import('pg').PoolClient} [client] — conexão de transação; se omitido, usa o pool.
+ */
+export async function updateTenantFeatureFlags(id, featureFlags, client = null) {
+  const payload = featureFlags && typeof featureFlags === 'object' ? featureFlags : {};
+  const executor = client || pool;
+  const result = await executor.query(
+    `
+    UPDATE tenants
+    SET feature_flags = $2::jsonb, updated_at = NOW()
+    WHERE id = $1::uuid
+    RETURNING *;
+    `,
+    [id, JSON.stringify(payload)]
+  );
+  return result.rows[0] ?? null;
+}
+
 export const updateTenant = async (id, data) => {
   const name = data?.name != null ? String(data.name).trim() : null;
   const slug = data?.slug != null ? String(data.slug).trim() : null;
@@ -172,3 +193,188 @@ export const deleteTenant = async (id) => {
   );
 };
 
+/**
+ * Persiste IDs externos do provedor de pagamento (checkout / webhook).
+ * @param {string} tenantId
+ * @param {{ billing_provider?: string|null, billing_customer_id?: string|null, billing_subscription_id?: string|null }} refs
+ */
+export async function updateTenantBillingRefs(tenantId, refs) {
+  const provider = refs?.billing_provider != null ? String(refs.billing_provider).trim() || null : null;
+  const customer = refs?.billing_customer_id != null ? String(refs.billing_customer_id).trim() || null : null;
+  const sub = refs?.billing_subscription_id != null ? String(refs.billing_subscription_id).trim() || null : null;
+  const r = await pool.query(
+    `
+    UPDATE tenants
+    SET
+      billing_provider = COALESCE($2, billing_provider),
+      billing_customer_id = COALESCE($3, billing_customer_id),
+      billing_subscription_id = COALESCE($4, billing_subscription_id),
+      updated_at = NOW()
+    WHERE id = $1::uuid
+    RETURNING *;
+    `,
+    [tenantId, provider, customer, sub]
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
+ * Ativa plano pago após confirmação no webhook (fonte de verdade).
+ * @param {string} tenantId
+ * @param {string} planKey — pro | enterprise (normalizado)
+ * @param {{ billing_provider: string, billing_customer_id?: string|null, billing_subscription_id?: string|null, max_agents: number|null, max_messages: number|null }} row
+ */
+export async function applyTenantPlanFromPayment(tenantId, planKey, row) {
+  const r = await pool.query(
+    `
+    UPDATE tenants
+    SET
+      plan = $2,
+      max_agents = $3,
+      max_messages = $4,
+      active = true,
+      billing_provider = $5,
+      billing_customer_id = COALESCE($6, billing_customer_id),
+      billing_subscription_id = COALESCE($7, billing_subscription_id),
+      billing_status = 'ok',
+      billing_updated_at = NOW(),
+      updated_at = NOW()
+    WHERE id = $1::uuid
+    RETURNING *;
+    `,
+    [
+      tenantId,
+      planKey,
+      row.max_agents,
+      row.max_messages,
+      row.billing_provider,
+      row.billing_customer_id ?? null,
+      row.billing_subscription_id ?? null,
+    ]
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
+ * Limpa assinatura externa (cancelamento). Mantém plano atual até próximo ciclo de negócio se desejado.
+ * @param {string} tenantId
+ */
+export async function clearTenantBillingSubscription(tenantId) {
+  const r = await pool.query(
+    `
+    UPDATE tenants
+    SET
+      billing_subscription_id = NULL,
+      updated_at = NOW()
+    WHERE id = $1::uuid
+    RETURNING *;
+    `,
+    [tenantId]
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
+ * @param {import('pg').PoolClient} client
+ * @param {string} tenantId
+ */
+export async function lockTenantRowForUpdate(client, tenantId) {
+  const r = await client.query(`SELECT * FROM tenants WHERE id = $1::uuid FOR UPDATE`, [tenantId]);
+  return r.rows[0] ?? null;
+}
+
+/**
+ * Ativa plano pago dentro de transação (com lock prévio no tenant).
+ * @param {import('pg').PoolClient} client
+ */
+export async function applyTenantPlanFromPaymentTx(client, tenantId, planKey, row) {
+  const r = await client.query(
+    `
+    UPDATE tenants
+    SET
+      plan = $2,
+      max_agents = $3,
+      max_messages = $4,
+      active = true,
+      billing_provider = $5,
+      billing_customer_id = COALESCE($6, billing_customer_id),
+      billing_subscription_id = COALESCE($7, billing_subscription_id),
+      billing_status = 'ok',
+      billing_updated_at = NOW(),
+      updated_at = NOW()
+    WHERE id = $1::uuid
+    RETURNING *;
+    `,
+    [
+      tenantId,
+      planKey,
+      row.max_agents,
+      row.max_messages,
+      row.billing_provider,
+      row.billing_customer_id ?? null,
+      row.billing_subscription_id ?? null,
+    ],
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
+ * @param {import('pg').PoolClient} client
+ */
+export async function applyTenantBillingPastDueTx(client, tenantId) {
+  await client.query(
+    `
+    UPDATE tenants
+    SET
+      billing_status = 'past_due',
+      billing_updated_at = NOW(),
+      updated_at = NOW()
+    WHERE id = $1::uuid
+    `,
+    [tenantId],
+  );
+}
+
+/**
+ * Assinatura encerrada: downgrade para free ou suspensão (BILLING_CANCEL_POLICY).
+ * @param {import('pg').PoolClient} client
+ * @param {'downgrade'|'suspend'} policy
+ */
+export async function applyTenantSubscriptionCanceledTx(client, tenantId, policy, freeLimits) {
+  if (policy === 'suspend') {
+    const r = await client.query(
+      `
+      UPDATE tenants
+      SET
+        active = false,
+        billing_subscription_id = NULL,
+        billing_status = 'canceled',
+        billing_updated_at = NOW(),
+        updated_at = NOW()
+      WHERE id = $1::uuid
+      RETURNING *;
+      `,
+      [tenantId],
+    );
+    return r.rows[0] ?? null;
+  }
+
+  const r = await client.query(
+    `
+    UPDATE tenants
+    SET
+      plan = $2,
+      max_agents = $3,
+      max_messages = $4,
+      active = true,
+      billing_subscription_id = NULL,
+      billing_status = 'canceled',
+      billing_updated_at = NOW(),
+      updated_at = NOW()
+    WHERE id = $1::uuid
+    RETURNING *;
+    `,
+    [tenantId, 'free', freeLimits.max_agents, freeLimits.max_messages],
+  );
+  return r.rows[0] ?? null;
+}

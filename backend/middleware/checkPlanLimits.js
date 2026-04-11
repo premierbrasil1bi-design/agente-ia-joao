@@ -1,33 +1,38 @@
-import { pool } from '../db/pool.js';
+import * as tenantLimits from '../services/tenantLimits.service.js';
+import { sendTenantPlanLimit } from '../utils/tenantPlanLimitHttp.js';
+import { log } from '../utils/logger.js';
 
 export async function checkAgentLimit(req, res, next) {
   try {
     const tenantId = req.user?.tenantId;
-
-    const { rows } = await pool.query(
-      `
-      SELECT max_agents, agents_used_current_period
-      FROM tenants
-      WHERE id = $1
-      `,
-      [tenantId]
-    );
-
-    if (!rows.length) {
-      return res.status(404).json({ error: 'Tenant não encontrado' });
+    if (!tenantId) {
+      return res.status(401).json({ error: 'Tenant não identificado' });
     }
 
-    const { max_agents, agents_used_current_period } = rows[0];
+    const check = await tenantLimits.canCreateAgent(tenantId, {
+      requestId: req.requestId ?? null,
+      logSuccessCheck: true,
+    });
 
-    if (agents_used_current_period >= max_agents) {
-      return res.status(403).json({
-        error: 'Limite de agentes atingido no plano atual'
+    if (!check.allowed) {
+      log.warn({
+        event: 'TENANT_LIMIT_BLOCKED',
+        context: 'middleware',
+        tenantId,
+        metadata: { check: 'canCreateAgent', reason: check.reason },
       });
+      return sendTenantPlanLimit(res, check);
     }
 
     next();
   } catch (error) {
-    console.error('Erro checkAgentLimit:', error);
+    log.error({
+      event: 'CHECK_AGENT_LIMIT_ERROR',
+      context: 'middleware',
+      tenantId: req.user?.tenantId ?? null,
+      error: error?.message || String(error),
+      stack: error?.stack,
+    });
     return res.status(500).json({ error: 'Erro interno' });
   }
 }

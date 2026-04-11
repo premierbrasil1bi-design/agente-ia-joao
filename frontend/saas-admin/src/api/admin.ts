@@ -1,5 +1,14 @@
 import { request, getAuthToken } from "./http";
 
+export type TenantFeatureFlagsMap = Record<
+  | "realtimeMonitoring"
+  | "autoHealing"
+  | "providerFallback"
+  | "advancedArtifacts"
+  | "extendedMonitoringHistory",
+  boolean
+>;
+
 export interface Tenant {
   id: string;
   nome_empresa: string;
@@ -13,6 +22,27 @@ export interface Tenant {
   billing_cycle_start?: string;
   created_at?: string;
   allowed_providers?: string[];
+  /** Overrides persistidos (esparsos). */
+  feature_flags?: Partial<TenantFeatureFlagsMap>;
+  /** Plano + overrides (somente leitura). */
+  effective_feature_flags?: TenantFeatureFlagsMap;
+  /** Defaults do plano atual (somente leitura). */
+  plan_feature_defaults?: TenantFeatureFlagsMap;
+}
+
+export interface FeatureTemplateItem {
+  key: string;
+  flags: Record<string, boolean>;
+}
+
+export interface TenantFeatureFlagAuditItem {
+  id: string;
+  changed_by: string;
+  previous_flags: Record<string, unknown>;
+  new_flags: Record<string, unknown>;
+  effective_previous_flags: Record<string, unknown>;
+  effective_new_flags: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface TenantUpsertPayload {
@@ -289,6 +319,63 @@ export const adminApi = {
     return request<Tenant>(`/api/global-admin/tenants/${tenantId}`, {
       method: "PATCH",
       body: payload,
+    });
+  },
+
+  patchTenantFeatures(
+    tenantId: string,
+    feature_flags: Record<string, boolean>
+  ): Promise<{
+    tenant_id: string;
+    feature_flags: Record<string, boolean>;
+    effective_feature_flags: TenantFeatureFlagsMap;
+  }> {
+    return request(`/api/platform/tenants/${tenantId}/features`, {
+      method: "PATCH",
+      body: { feature_flags },
+    });
+  },
+
+  getTenantFeatureFlagHistory(
+    tenantId: string,
+    limit = 20
+  ): Promise<{ items: TenantFeatureFlagAuditItem[] }> {
+    const q = new URLSearchParams();
+    q.set("limit", String(limit));
+    return request(`/api/platform/tenants/${tenantId}/features/history?${q.toString()}`);
+  },
+
+  revertTenantFeatures(
+    tenantId: string,
+    auditId: string
+  ): Promise<{
+    ok: boolean;
+    noop?: boolean;
+    message?: string;
+    feature_flags: Record<string, boolean>;
+    effective_feature_flags: TenantFeatureFlagsMap;
+  }> {
+    return request(`/api/platform/tenants/${tenantId}/features/revert/${auditId}`, {
+      method: "POST",
+    });
+  },
+
+  getFeatureTemplates(): Promise<{ items: FeatureTemplateItem[] }> {
+    return request("/api/platform/feature-templates");
+  },
+
+  applyFeatureTemplate(
+    tenantId: string,
+    templateKey: string
+  ): Promise<{
+    tenant_id: string;
+    template_key: string;
+    feature_flags: Record<string, boolean>;
+    effective_feature_flags: TenantFeatureFlagsMap;
+  }> {
+    return request(`/api/platform/tenants/${tenantId}/features/apply-template`, {
+      method: "POST",
+      body: { templateKey },
     });
   },
 

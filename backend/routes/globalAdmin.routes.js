@@ -5,6 +5,8 @@ import { sendUnauthorized, sendServerError } from '../utils/errorResponses.js';
 import { config } from '../config/env.js';
 import { pool } from '../db/pool.js';
 import { toTenantApiRow } from '../utils/tenantMapper.js';
+import { getBaseFeaturesForPlan } from '../config/planFeatures.config.js';
+import { computeFeaturesForTenantRow, validateTenantFeatureFlags } from '../services/tenantFeatures.service.js';
 import globalAdminAuth from '../middlewares/globalAdminAuth.js';
 import globalAdminRateLimit from '../middlewares/globalAdminRateLimit.js';
 import * as agentsCtrl from '../controllers/globalAdmin.agents.controller.js';
@@ -556,7 +558,24 @@ router.delete('/channels/:channelId', globalAdminAuth, channelsCtrl.deleteChanne
 router.get('/tenants/:id', globalAdminAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, name, slug, plan, max_agents, max_messages, agents_used_current_period, messages_used_current_period, billing_cycle_start, allowed_providers, active, created_at FROM tenants WHERE id = $1`,
+      `
+      SELECT
+        id,
+        name,
+        slug,
+        plan,
+        max_agents,
+        max_messages,
+        agents_used_current_period,
+        messages_used_current_period,
+        billing_cycle_start,
+        allowed_providers,
+        active,
+        created_at,
+        feature_flags
+      FROM tenants
+      WHERE id = $1
+      `,
       [req.params.id]
     );
     const row = rows[0];
@@ -568,6 +587,9 @@ router.get('/tenants/:id', globalAdminAuth, async (req, res) => {
       max_agents: row.max_agents ?? 0,
       max_messages: row.max_messages ?? 0,
     });
+    const plan_feature_defaults = getBaseFeaturesForPlan(t.plan);
+    const feature_flags = validateTenantFeatureFlags(row.feature_flags);
+    const effective_feature_flags = { ...computeFeaturesForTenantRow(row) };
     res.status(200).json({
       id: t.id,
       nome_empresa: t.nome_empresa,
@@ -584,6 +606,9 @@ router.get('/tenants/:id', globalAdminAuth, async (req, res) => {
       messages_used_current_period: t.messages_used_current_period ?? 0,
       billing_cycle_start: t.billing_cycle_start ?? null,
       created_at: t.created_at,
+      feature_flags,
+      effective_feature_flags,
+      plan_feature_defaults,
     });
   } catch (err) {
     console.error('[global-admin] tenants/:id:', err.message);

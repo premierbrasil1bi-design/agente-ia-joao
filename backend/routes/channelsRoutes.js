@@ -21,32 +21,49 @@ import {
 import { invalidateTenantChannels } from '../utils/channelCache.js';
 import { resolveSessionName } from '../utils/resolveSessionName.js';
 import { emitChannelSocketEvent } from '../utils/channelRealtime.js';
+import * as channelOrchestrator from '../services/channelOrchestrator.js';
 import {
   CONNECTION,
   transitionEvolutionChannelConnection,
 } from '../services/channelEvolutionState.service.js';
-import { ProviderAccessError, validateProviderAccessForTenant } from '../services/providerAccess.service.js';
-import { normalizeQrResult } from '../utils/normalizeQrResult.js';
-import { pickUnifiedQrTransportFields, buildUnifiedQrResponse } from '../utils/whatsappQrContract.js';
+import { ProviderAccessError, assertProviderAllowedForTenant } from '../services/providerAccess.service.js';
 import {
-  buildWahaQrcodeJsonResponse,
-  buildWahaQrcodeSocketPayload,
-} from '../utils/wahaQrChannelResponse.js';
+  ConnectedChannelProviderChangeError,
+  isChannelConnectedBlockingProviderChange,
+} from '../services/channelProviderChangeGuard.service.js';
+import { normalizeProviderId } from '../config/providersByPlan.js';
+import {
+  sendConnectedChannelProviderChangeBlocked,
+  sendProviderAccessForbidden,
+} from '../utils/providerAccessHttp.js';
 import { provisionWithFallback } from '../services/channelProvisioning.service.js';
 import { checkChannelHealth } from '../services/channelHealth.service.js';
 import { getProvisioningQueue } from '../queues/provisioning.queue.js';
+import { log } from '../utils/logger.js';
+import { canConnectChannel } from '../services/tenantLimits.service.js';
+import { sendTenantPlanLimit } from '../utils/tenantPlanLimitHttp.js';
+import {
+  assertCanCreateChannel,
+  TenantPlanLimitBlockedError,
+} from '../services/tenantLimitsGuard.js';
 
 const router = Router();
 
 router.use(agentAuth);
 
-async function provisionInstanceWithProvider(channel) {
+async function provisionInstanceWithProvider(channel, requestId = null) {
   if (!channel) {
     const err = new Error('Canal não encontrado.');
     err.httpStatus = 404;
     throw err;
   }
-  await validateProviderAccessForTenant(channel.tenant_id, channel.provider);
+  await assertProviderAllowedForTenant({
+    tenantId: channel.tenant_id,
+    provider: channel.provider,
+    channelId: channel.id,
+    action: 'provision_instance',
+    requestId,
+  });
   const provider = getProviderForChannel(channel);
   const result = await provider.provisionInstance(channel);
   const providerName = String(channel.provider || '').toLowerCase().trim();
@@ -73,10 +90,34 @@ async function autoProvisionChannel(channelRow) {
           removeOnFail: false,
         },
       );
-      console.log('[QUEUE] Canal enviado para reprocessamento:', channelRow?.id ?? 'N/A');
+      log.info({
+        event: 'PROVISIONING_ENQUEUED',
+        context: 'route',
+        tenantId: channelRow?.tenant_id ?? null,
+        channelId: channelRow?.id ?? null,
+      });
     }
   } catch (error) {
-    console.error('[FAIL-OPEN] Provision falhou:', error?.message || error);
+    if (error instanceof ProviderAccessError) {
+      log.warn({
+        event: 'AUTO_PROVISION_PROVIDER_BLOCKED',
+        context: 'route',
+        tenantId: channelRow?.tenant_id ?? null,
+        channelId: channelRow?.id ?? null,
+        provider,
+        requestId: null,
+      });
+      return { success: false, skipped: true, provider: provider || null, reason: 'provider_not_allowed' };
+    }
+    log.error({
+      event: 'PROVISION_FAIL_OPEN',
+      context: 'route',
+      tenantId: channelRow?.tenant_id ?? null,
+      channelId: channelRow?.id ?? null,
+      provider,
+      error: error?.message || String(error),
+      stack: error?.stack,
+    });
     result = { success: false, fallback: true };
     await queue.add(
       'retry-provision',
@@ -87,10 +128,21 @@ async function autoProvisionChannel(channelRow) {
         removeOnFail: false,
       },
     );
-    console.log('[QUEUE] Canal enviado para reprocessamento:', channelRow?.id ?? 'N/A');
+    log.info({
+      event: 'PROVISIONING_ENQUEUED',
+      context: 'route',
+      tenantId: channelRow?.tenant_id ?? null,
+      channelId: channelRow?.id ?? null,
+    });
   }
   const isHealthy = await checkChannelHealth(channelRow);
-  console.log(`[HEALTH] Canal ${channelRow?.id ?? 'N/A'} está saudável?`, isHealthy);
+  log.info({
+    event: 'CHANNEL_HEALTH_CHECKED',
+    context: 'route',
+    tenantId: channelRow?.tenant_id ?? null,
+    channelId: channelRow?.id ?? null,
+    status: isHealthy ? 'healthy' : 'unhealthy',
+  });
   return { ...result, provider, isHealthy };
 }
 
@@ -154,15 +206,6 @@ function enrichChannelForApi(ch) {
   return base;
 }
 
-function normalizeChannelStatus(status) {
-  if (!status) return 'DISCONNECTED';
-  const s = String(status).toLowerCase();
-  if (['connected', 'online', 'open'].includes(s)) return 'CONNECTED';
-  if (['connecting', 'pending', 'qr', 'created', 'awaiting_connection'].includes(s)) return 'PENDING';
-  if (['disconnected', 'closed', 'close', 'inactive', 'offline', 'error'].includes(s)) return 'DISCONNECTED';
-  return 'DISCONNECTED';
-}
-
 /**
  * GET /api/channels (e GET /api/agent/channels – mesma rota)
  * Lista canais do tenant no banco. Para instâncias na Evolution use GET /evolution-instances.
@@ -176,7 +219,7 @@ router.get('/', requireActiveTenant, async (req, res) => {
     const rows = await channelRepo.findAllByTenant(tenantId);
     res.status(200).json(rows.map((ch) => enrichChannelForApi(ch)));
   } catch (err) {
-    console.error('[channels] GET /:', err.message);
+    log.error({ event: 'CHANNELS_LIST_ERROR', context: 'route', error: err?.message || String(err), stack: err?.stack });
     res.status(500).json({ error: err.message || 'Erro ao listar canais.' });
   }
 });
@@ -191,8 +234,17 @@ router.post('/:id/create-instance', requireActiveTenant, async (req, res) => {
     if (!tenantId) {
       return res.status(401).json({ error: 'Tenant não identificado.' });
     }
+    const connectOk = await canConnectChannel(tenantId, {
+      requestId: req.requestId ?? req.correlationId ?? null,
+    });
+    if (!connectOk.allowed) {
+      return sendTenantPlanLimit(res, connectOk);
+    }
     const existing = await channelRepo.findById(req.params.id, tenantId);
-    const { result, providerName } = await provisionInstanceWithProvider(existing);
+    const { result, providerName } = await provisionInstanceWithProvider(
+      existing,
+      req.requestId ?? req.correlationId ?? null,
+    );
     if (!result.ok) {
       return res.status(400).json({ success: false, error: true, message: result.error });
     }
@@ -215,9 +267,16 @@ router.post('/:id/create-instance', requireActiveTenant, async (req, res) => {
     });
   } catch (err) {
     if (err instanceof ProviderAccessError) {
-      return res.status(err.httpStatus || 403).json({ error: err.code, message: err.message, details: err.details });
+      return sendProviderAccessForbidden(res, err);
     }
-    console.error('[channels] create-instance:', err.message);
+    log.error({
+      event: 'CHANNEL_CREATE_INSTANCE_ERROR',
+      context: 'route',
+      tenantId: req.tenantId || req.user?.tenantId || null,
+      channelId: req.params?.id ?? null,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
     return res.status(500).json({ success: false, error: true, message: 'Erro ao provisionar.' });
   }
 });
@@ -232,13 +291,24 @@ router.post('/:id/provision-instance', requireActiveTenant, async (req, res) => 
     if (!tenantId) {
       return res.status(401).json({ error: 'Tenant não identificado.' });
     }
+    const connectOk = await canConnectChannel(tenantId, {
+      requestId: req.requestId ?? req.correlationId ?? null,
+    });
+    if (!connectOk.allowed) {
+      return sendTenantPlanLimit(res, connectOk);
+    }
     const existing = await channelRepo.findById(req.params.id, tenantId);
-    console.log('[CHANNEL] [PROVISION] Creating instance', {
-      channelId: req.params.id,
+    log.info({
+      event: 'CHANNEL_PROVISION_INSTANCE_START',
+      context: 'route',
       tenantId,
+      channelId: req.params.id,
       provider: existing?.provider || null,
     });
-    const { result, providerName } = await provisionInstanceWithProvider(existing);
+    const { result, providerName } = await provisionInstanceWithProvider(
+      existing,
+      req.requestId ?? req.correlationId ?? null,
+    );
     if (!result.ok) {
       return res.status(400).json({
         success: false,
@@ -257,9 +327,16 @@ router.post('/:id/provision-instance', requireActiveTenant, async (req, res) => 
     });
   } catch (err) {
     if (err instanceof ProviderAccessError) {
-      return res.status(err.httpStatus || 403).json({ error: err.code, message: err.message, details: err.details });
+      return sendProviderAccessForbidden(res, err);
     }
-    console.error('[channels] provision-instance:', err.message);
+    log.error({
+      event: 'CHANNEL_PROVISION_INSTANCE_ERROR',
+      context: 'route',
+      tenantId: req.tenantId || req.user?.tenantId || null,
+      channelId: req.params?.id ?? null,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
     return res.status(500).json({
       success: false,
       error: true,
@@ -268,256 +345,119 @@ router.post('/:id/provision-instance', requireActiveTenant, async (req, res) => 
   }
 });
 
-router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
-  const wahaSoft = (payload) => res.status(200).json(payload);
-
-  const wahaQrFailUnified = (message, channel) => {
-    let session = null;
-    try {
-      session = resolveSessionName(channel);
-    } catch {
-      session = null;
-    }
-    return pickUnifiedQrTransportFields(
-      buildUnifiedQrResponse({
-        success: false,
-        format: null,
-        qr: null,
-        session,
-        provider: 'waha',
-        state: null,
-        source: null,
-        error: message,
-        meta: { path: 'channelsRoutes_qrcode' },
-      }),
-    );
-  };
-
+router.get('/:id/connection-state', requireActiveTenant, async (req, res) => {
   try {
     const tenantId = req.tenantId || req.user?.tenantId;
-    if (!tenantId) {
-      return res.status(401).json({ error: 'Tenant não identificado.' });
-    }
+    if (!tenantId) return res.status(401).json({ error: 'Tenant não identificado.' });
 
     const channel = await channelRepo.findById(req.params.id, tenantId);
-    if (!channel) {
-      return res.status(404).json({ error: 'Channel not found' });
-    }
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
 
-    const providerLc = String(channel.provider || '').toLowerCase();
-    const channelNormStatus = () => normalizeChannelStatus(channel.connection_status || channel.status);
-
-    if (providerLc === 'waha') {
-      const wahaUrlEnv = (
-        process.env.WAHA_API_URL ||
-        process.env.WAHA_URL ||
-        process.env.WAHA_BASE_URL ||
-        ''
-      ).trim();
-      if (!wahaUrlEnv) {
-        return wahaSoft({
-          success: false,
-          qr: null,
-          qrCode: null,
-          qrcode: null,
-          message: 'WAHA não configurado no servidor',
-          status: channelNormStatus(),
-          ...wahaQrFailUnified('WAHA não configurado no servidor', channel),
-        });
-      }
-    }
-
-    try {
-      await validateProviderAccessForTenant(channel.tenant_id, channel.provider);
-    } catch (e) {
-      if (e instanceof ProviderAccessError) {
-        if (providerLc === 'waha') {
-          return wahaSoft({
-            success: false,
-            qr: null,
-            qrCode: null,
-            qrcode: null,
-            message: e.message || 'Provider não permitido',
-            status: channelNormStatus(),
-            ...wahaQrFailUnified(e.message || 'Provider não permitido', channel),
-          });
-        }
-        return res.status(e.httpStatus || 403).json({ error: e.code, message: e.message, details: e.details });
-      }
-      throw e;
-    }
-
-    let qrData = null;
-    try {
-      qrData = await channelConnectionService.getChannelQrCode(channel, {
-        correlationId: req.correlationId ?? null,
-      });
-    } catch (qrErr) {
-      console.error('[channels] qrcode:', qrErr.message);
-      if (providerLc === 'waha') {
-        let message = qrErr.message || 'Não foi possível obter o QR code';
-        if (qrErr.httpStatus === 401 || String(qrErr.message || '').includes('WAHA authentication failed')) {
-          message = qrErr.message || 'WAHA não autorizado';
-        } else if (
-          String(qrErr.message || '').includes('WAHA não configurado') ||
-          String(qrErr.message || '').includes('WAHA_API_URL')
-        ) {
-          message = 'WAHA não configurado no servidor';
-        } else if (qrErr.code === 'INSTANCE_NOT_FOUND') {
-          message = qrErr.message || 'Instância não encontrada';
-        } else if (String(qrErr.message || '') === 'QR não disponível') {
-          message = 'QR ainda não disponível, aguardando geração';
-        }
-        return wahaSoft({
-          success: false,
-          qr: null,
-          qrCode: null,
-          qrcode: null,
-          message,
-          status: channelNormStatus(),
-          ...wahaQrFailUnified(message, channel),
-        });
-      }
-      if (qrErr.httpStatus === 401 || String(qrErr.message || '').includes('WAHA authentication failed')) {
-        return res.status(401).json({
-          error: 'WAHA_AUTH_FAILED',
-          message: qrErr.message || 'WAHA não autorizado',
-        });
-      }
-      if (
-        String(qrErr.message || '').includes('WAHA não configurado') ||
-        String(qrErr.message || '').includes('WAHA_API_URL')
-      ) {
-        return res.status(400).json({
-          error: 'WAHA_NOT_CONFIGURED',
-          message: 'WAHA não configurado no servidor',
-        });
-      }
-      if (qrErr.code === 'INSTANCE_NOT_FOUND') {
-        return res.status(404).json({ error: qrErr.code, message: qrErr.message || 'Instância não encontrada' });
-      }
-      if (String(qrErr.message || '') === 'QR não disponível') {
-        return res.json({
-          qrCode: null,
-          qr: null,
-          qrcode: null,
-          status: channelNormStatus(),
-          message: 'QR ainda não disponível',
-        });
-      }
-      return res.status(502).json({
-        error: 'QR_FETCH_FAILED',
-        message: qrErr.message || 'Não foi possível obter o QR code',
-      });
-    }
-
-    let result = normalizeQrResult(qrData);
-    if ((!result.success || !result.qr) && channel.qr_code) {
-      const alt = normalizeQrResult(channel.qr_code);
-      if (alt.success && alt.qr) {
-        result = alt;
-      }
-    }
-
-    const normalizedStatus = normalizeChannelStatus(channel.connection_status || channel.status);
-
-    if (!result.success || !result.qr) {
-      if (providerLc === 'waha') {
-        const cid = req.correlationId ?? null;
-        emitChannelSocketEvent('channel:qr', buildWahaQrcodeSocketPayload(channel, result, cid));
-        return wahaSoft(buildWahaQrcodeJsonResponse(result, cid));
-      }
-      return res.json({
-        success: false,
-        format: null,
-        qr: null,
-        qrCode: null,
-        qrcode: null,
-        status: normalizedStatus,
-        message: result.message || 'QR ainda não disponível',
-      });
-    }
-
-    console.log('[CHANNEL] [QR] Generated', { id: req.params.id, tenantId });
-
-    if (providerLc === 'waha') {
-      const cid = req.correlationId ?? null;
-      emitChannelSocketEvent('channel:qr', buildWahaQrcodeSocketPayload(channel, result, cid));
-      return wahaSoft(buildWahaQrcodeJsonResponse(result, cid));
-    }
-
-    emitChannelSocketEvent('channel:qr', {
-      channelId: channel.id,
+    await assertProviderAllowedForTenant({
       tenantId: channel.tenant_id,
-      status: 'PENDING',
-      format: result.format,
-      qr: result.qr,
-      qrCode: result.format === 'image' ? result.qr : null,
-      qrAscii: result.format === 'ascii' ? result.qr : null,
-      connected: false,
+      provider: channel.provider,
+      channelId: channel.id,
+      action: 'connection_state',
+      requestId: req.requestId ?? req.correlationId ?? null,
     });
-
-    return res.json({
-      success: true,
-      format: result.format,
-      qr: result.qr,
-      qrCode: result.qr,
-      qrcode: result.qr,
-      status: normalizedStatus,
-      message: result.message ?? null,
+    const state = await channelOrchestrator.resolveConnectionState(channel, {
+      correlationId: req.correlationId ?? null,
     });
+    return res.status(200).json(state);
   } catch (err) {
-    console.error('[channels] qrcode:', err.message);
-    return res.status(502).json({ error: err.message || 'Failed to get QR code' });
+    if (err instanceof ProviderAccessError) {
+      return sendProviderAccessForbidden(res, err);
+    }
+    log.error({
+      event: 'CHANNEL_CONNECTION_STATE_ERROR',
+      context: 'route',
+      tenantId: req.tenantId || req.user?.tenantId || null,
+      channelId: req.params?.id ?? null,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
+    return res.status(200).json({
+      status: 'error',
+      qr: null,
+      provider: null,
+      lastUpdate: Date.now(),
+    });
+  }
+});
+
+router.get('/:id/qrcode', requireActiveTenant, async (req, res) => {
+  try {
+    const tenantId = req.tenantId || req.user?.tenantId;
+    if (!tenantId) return res.status(401).json({ error: 'Tenant não identificado.' });
+    const channel = await channelRepo.findById(req.params.id, tenantId);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    await assertProviderAllowedForTenant({
+      tenantId: channel.tenant_id,
+      provider: channel.provider,
+      channelId: channel.id,
+      action: 'qrcode',
+      requestId: req.requestId ?? req.correlationId ?? null,
+    });
+    const state = await channelOrchestrator.resolveConnectionState(channel, {
+      correlationId: req.correlationId ?? null,
+    });
+    return res.status(200).json(state);
+  } catch (err) {
+    if (err instanceof ProviderAccessError) {
+      return sendProviderAccessForbidden(res, err);
+    }
+    log.error({
+      event: 'CHANNEL_QRCODE_ERROR',
+      context: 'route',
+      tenantId: req.tenantId || req.user?.tenantId || null,
+      channelId: req.params?.id ?? null,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
+    return res.status(200).json({
+      status: 'error',
+      qr: null,
+      provider: null,
+      lastUpdate: Date.now(),
+    });
   }
 });
 
 router.get('/:id/status', requireActiveTenant, async (req, res) => {
   try {
     const tenantId = req.tenantId || req.user?.tenantId;
-    if (!tenantId) {
-      return res.status(401).json({ error: 'Tenant não identificado.' });
-    }
-
+    if (!tenantId) return res.status(401).json({ error: 'Tenant não identificado.' });
     const channel = await channelRepo.findById(req.params.id, tenantId);
-    if (!channel) {
-      return res.status(404).json({ error: 'Channel not found' });
-    }
-
-    try {
-      await validateProviderAccessForTenant(channel.tenant_id, channel.provider);
-    } catch (e) {
-      if (e instanceof ProviderAccessError) {
-        return res.status(e.httpStatus || 403).json({ error: e.code, message: e.message, details: e.details });
-      }
-      throw e;
-    }
-    const statusData = await channelConnectionService
-      .getChannelStatus(channel, { correlationId: req.correlationId ?? null })
-      .catch(() => null);
-    const status =
-      statusData?.normalizedStatus ||
-      statusData?.publicStatus ||
-      channel.connection_status ||
-      channel.status ||
-      'disconnected';
-    const normalizedStatus = normalizeChannelStatus(status);
-    const connected = normalizedStatus === 'CONNECTED';
-
-    if (connected) {
-      console.log('[CHANNEL] [STATUS] CONNECTED', { id: req.params.id, tenantId });
-    }
-
-    return res.json({
-      status: normalizedStatus,
-      connected,
-      channel: statusData?.channel || channel,
-      correlationId: statusData?.sessionStatusCanonical?.correlationId ?? req.correlationId ?? null,
-      sessionStatus: statusData?.sessionStatusCanonical ?? null,
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    await assertProviderAllowedForTenant({
+      tenantId: channel.tenant_id,
+      provider: channel.provider,
+      channelId: channel.id,
+      action: 'channel_status',
+      requestId: req.requestId ?? req.correlationId ?? null,
     });
+    const state = await channelOrchestrator.resolveConnectionState(channel, {
+      correlationId: req.correlationId ?? null,
+    });
+    return res.status(200).json(state);
   } catch (err) {
-    console.error('[channels] status:', err.message);
-    return res.status(500).json({ error: 'Failed to get status' });
+    if (err instanceof ProviderAccessError) {
+      return sendProviderAccessForbidden(res, err);
+    }
+    log.error({
+      event: 'CHANNEL_STATUS_ERROR',
+      context: 'route',
+      tenantId: req.tenantId || req.user?.tenantId || null,
+      channelId: req.params?.id ?? null,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
+    return res.status(200).json({
+      status: 'error',
+      qr: null,
+      provider: null,
+      lastUpdate: Date.now(),
+    });
   }
 });
 
@@ -537,7 +477,14 @@ router.get('/:id', requireActiveTenant, async (req, res) => {
     }
     res.status(200).json(enrichChannelForApi(channel));
   } catch (err) {
-    console.error('[channels] GET /:id:', err.message);
+    log.error({
+      event: 'CHANNEL_GET_BY_ID_ERROR',
+      context: 'route',
+      tenantId: req.tenantId || req.user?.tenantId || null,
+      channelId: req.params?.id ?? null,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
     res.status(500).json({ error: 'Erro ao buscar canal.' });
   }
 });
@@ -579,6 +526,18 @@ router.post('/', requireActiveTenant, async (req, res) => {
       return sendBadRequest(res, 'Agente não encontrado ou não pertence ao tenant.');
     }
 
+    try {
+      await assertCanCreateChannel(tenantId, {
+        requestId: req.requestId ?? req.correlationId ?? null,
+        logSuccessCheck: true,
+      });
+    } catch (e) {
+      if (e instanceof TenantPlanLimitBlockedError) {
+        return sendTenantPlanLimit(res, e.check);
+      }
+      throw e;
+    }
+
     const channelType = String(type || 'whatsapp').toLowerCase().trim();
     const normalizedInstance =
       instance != null && String(instance).trim() !== ''
@@ -588,8 +547,25 @@ router.post('/', requireActiveTenant, async (req, res) => {
     if (channelType === 'whatsapp' && !providerLc) {
       return sendBadRequest(res, 'provider é obrigatório para canais WhatsApp.');
     }
+    const limitsRequestId = req.requestId ?? req.correlationId ?? null;
     if (channelType === 'whatsapp' && providerLc) {
-      await validateProviderAccessForTenant(tenantId, providerLc);
+      await assertProviderAllowedForTenant({
+        tenantId,
+        provider: providerLc,
+        channelId: null,
+        action: 'channel_create',
+        requestId: limitsRequestId,
+      });
+    }
+
+    for (const fp of fallbackProviders) {
+      await assertProviderAllowedForTenant({
+        tenantId,
+        provider: fp,
+        channelId: null,
+        action: 'channel_create_fallback',
+        requestId: limitsRequestId,
+      });
     }
 
     if (!['waha', 'evolution', 'zapi', 'official', 'whatsapp_oficial'].includes(providerLc) && channelType === 'whatsapp') {
@@ -765,10 +741,19 @@ router.post('/', requireActiveTenant, async (req, res) => {
       provisioning,
     });
   } catch (err) {
-    if (err instanceof ProviderAccessError) {
-      return res.status(err.httpStatus || 403).json({ error: err.code, message: err.message, details: err.details });
+    if (err instanceof TenantPlanLimitBlockedError) {
+      return sendTenantPlanLimit(res, err.check);
     }
-    console.error('[channels] POST /:', err.message);
+    if (err instanceof ProviderAccessError) {
+      return sendProviderAccessForbidden(res, err);
+    }
+    log.error({
+      event: 'CHANNEL_CREATE_ERROR',
+      context: 'route',
+      tenantId: req.tenantId || req.user?.tenantId || null,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
     res.status(500).json({ error: 'Erro ao criar canal.' });
   }
 });
@@ -778,6 +763,7 @@ router.post('/', requireActiveTenant, async (req, res) => {
  * Atualiza canal apenas se pertencer ao tenant.
  */
 router.put('/:id', requireActiveTenant, async (req, res) => {
+  const requestId = req.requestId ?? req.correlationId ?? null;
   try {
     const tenantId = req.tenantId || req.user?.tenantId;
     if (!tenantId) {
@@ -790,30 +776,139 @@ router.put('/:id', requireActiveTenant, async (req, res) => {
     }
 
     const { type, instance, agent_id, active, provider, fallback_providers, config, provider_config } = req.body || {};
-    const previousProvider = String(existing.provider || '').toLowerCase().trim();
-    const nextProvider = provider !== undefined ? String(provider || '').toLowerCase().trim() : previousProvider;
+    const previousProvider = normalizeProviderId(existing.provider);
+    let nextProvider = previousProvider;
+    if (provider !== undefined) {
+      const raw = String(provider || '').trim();
+      if (!raw) {
+        return sendBadRequest(res, 'provider inválido.');
+      }
+      nextProvider = normalizeProviderId(provider);
+    }
+    const providerChanging = provider !== undefined && nextProvider !== previousProvider;
+
+    const hasConnPatch =
+      provider !== undefined || fallback_providers !== undefined || config !== undefined || provider_config !== undefined;
+
+    if (fallback_providers !== undefined) {
+      const fbList = Array.isArray(fallback_providers)
+        ? [...new Set(fallback_providers.map((p) => normalizeProviderId(p)).filter(Boolean))]
+        : [];
+      for (const fp of fbList) {
+        try {
+          await assertProviderAllowedForTenant({
+            tenantId,
+            provider: fp,
+            channelId: req.params.id,
+            action: 'channel_update_fallback_list',
+            requestId,
+          });
+        } catch (e) {
+          if (e instanceof ProviderAccessError) {
+            log.warn({
+              event: 'PROVIDER_UPDATE_BLOCKED_BY_PLAN',
+              context: 'route',
+              tenantId,
+              channelId: req.params.id,
+              currentProvider: previousProvider,
+              nextProvider: fp,
+              action: 'channel_update_fallback_list',
+              requestId,
+            });
+            return sendProviderAccessForbidden(res, e);
+          }
+          throw e;
+        }
+      }
+    }
+
+    if (providerChanging) {
+      log.info({
+        event: 'PROVIDER_UPDATE_ATTEMPT',
+        context: 'route',
+        tenantId,
+        channelId: req.params.id,
+        currentProvider: previousProvider,
+        nextProvider,
+        action: 'channel_update_provider',
+        requestId,
+      });
+      if (isChannelConnectedBlockingProviderChange(existing)) {
+        log.warn({
+          event: 'CONNECTED_CHANNEL_PROVIDER_CHANGE_BLOCKED',
+          context: 'route',
+          tenantId,
+          channelId: req.params.id,
+          currentProvider: previousProvider,
+          nextProvider,
+          action: 'channel_update_provider',
+          requestId,
+        });
+        return sendConnectedChannelProviderChangeBlocked(res, new ConnectedChannelProviderChangeError());
+      }
+      try {
+        await assertProviderAllowedForTenant({
+          tenantId,
+          provider: nextProvider,
+          channelId: req.params.id,
+          action: 'channel_update_provider',
+          requestId,
+        });
+      } catch (e) {
+        if (e instanceof ProviderAccessError) {
+          log.warn({
+            event: 'PROVIDER_UPDATE_BLOCKED_BY_PLAN',
+            context: 'route',
+            tenantId,
+            channelId: req.params.id,
+            currentProvider: previousProvider,
+            nextProvider,
+            action: 'channel_update_provider',
+            requestId,
+          });
+          return sendProviderAccessForbidden(res, e);
+        }
+        throw e;
+      }
+      log.info({
+        event: 'PROVIDER_UPDATE_ALLOWED',
+        context: 'route',
+        tenantId,
+        channelId: req.params.id,
+        currentProvider: previousProvider,
+        nextProvider,
+        action: 'channel_update_provider',
+        requestId,
+      });
+    }
+
     const updated = await channelRepo.update(req.params.id, tenantId, {
       type,
       instance,
       agent_id,
       active,
     });
-    const hasConnPatch =
-      provider !== undefined || fallback_providers !== undefined || config !== undefined || provider_config !== undefined;
+
     if (!hasConnPatch) {
       return res.status(200).json(updated);
     }
-    if (provider !== undefined && nextProvider && previousProvider && nextProvider !== previousProvider) {
+
+    if (provider !== undefined && nextProvider && previousProvider && providerChanging) {
       try {
-        // Produção: desconecta provider anterior antes da troca para evitar estado zumbi.
         await channelConnectionService.disconnectChannel(existing);
       } catch (e) {
-        console.warn('[channels] PUT provider-switch: disconnect anterior falhou (seguindo com reset):', e.message);
+        log.warn({
+          event: 'CHANNEL_PROVIDER_SWITCH_DISCONNECT_FAILED',
+          context: 'route',
+          tenantId,
+          channelId: req.params?.id ?? null,
+          error: e?.message || String(e),
+        });
       }
     }
 
     const updatedConn = await channelRepo.updateConnection(req.params.id, tenantId, {
-      ...(provider !== undefined ? { provider: String(provider || '').toLowerCase().trim() || null } : {}),
+      ...(provider !== undefined ? { provider: nextProvider || null } : {}),
       ...(fallback_providers !== undefined ? { fallback_providers } : {}),
       ...(config !== undefined ? { config: config && typeof config === 'object' ? config : {} } : {}),
       ...(provider_config !== undefined
@@ -823,7 +918,20 @@ router.put('/:id', requireActiveTenant, async (req, res) => {
     });
     res.status(200).json(updatedConn);
   } catch (err) {
-    console.error('[channels] PUT /:id:', err.message);
+    if (err instanceof ConnectedChannelProviderChangeError) {
+      return sendConnectedChannelProviderChangeBlocked(res, err);
+    }
+    if (err instanceof ProviderAccessError) {
+      return sendProviderAccessForbidden(res, err);
+    }
+    log.error({
+      event: 'CHANNEL_UPDATE_ERROR',
+      context: 'route',
+      tenantId: req.tenantId || req.user?.tenantId || null,
+      channelId: req.params?.id ?? null,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
     res.status(500).json({ error: 'Erro ao atualizar canal.' });
   }
 });
@@ -847,7 +955,13 @@ router.delete('/:id', requireActiveTenant, async (req, res) => {
     const ext = existing.external_id != null ? String(existing.external_id).trim() : '';
     const prov = String(existing.provider || '').toLowerCase();
     if (prov) {
-      await validateProviderAccessForTenant(existing.tenant_id, prov);
+      await assertProviderAllowedForTenant({
+        tenantId: existing.tenant_id,
+        provider: prov,
+        channelId: existing.id,
+        action: 'channel_delete',
+        requestId: req.requestId ?? req.correlationId ?? null,
+      });
     }
     if (prov && ext) {
       try {
@@ -855,26 +969,54 @@ router.delete('/:id', requireActiveTenant, async (req, res) => {
         try {
           await provider.disconnect(existing);
         } catch (e) {
-          console.warn('[channels] DELETE: disconnect provider falhou (seguindo):', e.message);
+          log.warn({
+            event: 'CHANNEL_DELETE_DISCONNECT_FAILED',
+            context: 'route',
+            tenantId,
+            channelId: req.params?.id ?? null,
+            provider: prov,
+            error: e?.message || String(e),
+          });
         }
         try {
           const rm = await provider.removeInstance(existing);
           if (rm?.skipped) {
-            console.warn('[channels] DELETE: removeInstance não suportado/ignorado', {
+            log.warn({
+              event: 'CHANNEL_DELETE_REMOVE_INSTANCE_UNSUPPORTED',
+              context: 'route',
+              tenantId,
               channelId: existing.id,
               provider: prov,
-              reason: rm?.reason || null,
+              metadata: { reason: rm?.reason || null },
             });
           }
         } catch (e) {
-          console.warn('[channels] DELETE: removeInstance provider falhou (seguindo):', e.message);
+          log.warn({
+            event: 'CHANNEL_DELETE_REMOVE_INSTANCE_FAILED',
+            context: 'route',
+            tenantId,
+            channelId: req.params?.id ?? null,
+            provider: prov,
+            error: e?.message || String(e),
+          });
         }
       } catch (e) {
-        console.warn('[channels] DELETE: provider abstraction indisponível (seguindo exclusão local):', e.message);
+        log.warn({
+          event: 'CHANNEL_DELETE_PROVIDER_ABSTRACTION_UNAVAILABLE',
+          context: 'route',
+          tenantId,
+          channelId: req.params?.id ?? null,
+          provider: prov,
+          error: e?.message || String(e),
+        });
       }
     } else if (prov === 'waha') {
-      console.log('[channels] DELETE: WAHA sem external_id, removendo só vínculo local', {
+      log.info({
+        event: 'CHANNEL_DELETE_WAHA_WITHOUT_EXTERNAL_ID',
+        context: 'route',
+        tenantId,
         channelId: existing.id,
+        provider: 'waha',
       });
     }
 
@@ -883,9 +1025,16 @@ router.delete('/:id', requireActiveTenant, async (req, res) => {
     res.status(204).send();
   } catch (err) {
     if (err instanceof ProviderAccessError) {
-      return res.status(err.httpStatus || 403).json({ error: err.code, message: err.message, details: err.details });
+      return sendProviderAccessForbidden(res, err);
     }
-    console.error('[channels] DELETE /:id:', err.message);
+    log.error({
+      event: 'CHANNEL_DELETE_ERROR',
+      context: 'route',
+      tenantId: req.tenantId || req.user?.tenantId || null,
+      channelId: req.params?.id ?? null,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
     res.status(500).json({ error: 'Erro ao remover canal.' });
   }
 });

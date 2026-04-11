@@ -1,5 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useAgentAuth } from '../context/AgentAuthContext';
+import { TenantPlanBadge } from './tenant/TenantPlanBadge.jsx';
+import { useTenantLimitsContext } from '../context/TenantLimitsContext.jsx';
 
 const styles = {
   bar: {
@@ -40,6 +42,7 @@ const styles = {
 export function TopBar() {
   const { agent, logout } = useAgentAuth();
   const navigate = useNavigate();
+  const { plan, loading: limitsLoading } = useTenantLimitsContext();
 
   const handleLogout = () => {
     logout();
@@ -48,7 +51,10 @@ export function TopBar() {
 
   return (
     <header style={styles.bar}>
-      <span style={styles.product}>Agent Admin</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+        <span style={styles.product}>Agent Admin</span>
+        {!limitsLoading && plan != null ? <TenantPlanBadge plan={plan} compact /> : null}
+      </div>
       <div style={styles.right}>
         {agent?.name && (
           <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{agent.name}</span>

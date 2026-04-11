@@ -64,8 +64,8 @@ export function logWahaStartupConfig() {
 }
 
 function timeoutMs() {
-  const n = parseInt(process.env.WAHA_REQUEST_TIMEOUT_MS || '15000', 10);
-  return Number.isFinite(n) && n > 0 ? n : 15000;
+  const n = parseInt(process.env.WAHA_REQUEST_TIMEOUT_MS || '5000', 10);
+  return Number.isFinite(n) && n > 0 ? n : 5000;
 }
 
 export function validateWahaEnv() {
@@ -76,7 +76,7 @@ export function validateWahaEnv() {
 
 export const wahaClient = axios.create({
   baseURL: WAHA_BASE_URL,
-  timeout: 15000,
+  timeout: 5000,
   ...(WAHA_BASIC_AUTH ? { auth: WAHA_BASIC_AUTH } : {}),
   headers: {
     'Content-Type': 'application/json',

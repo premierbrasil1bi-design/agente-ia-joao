@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getTenantById } from '../repositories/tenant.repository.js';
-import { getAllowedProviders } from '../utils/tenantAllowedProviders.js';
+import { getEffectiveProvidersForTenant } from '../services/providerPlanAccess.service.js';
 
 const router = Router();
 
@@ -12,7 +12,7 @@ router.get('/allowed', async (req, res) => {
     if (!tenant) return res.status(404).json({ error: 'Tenant não encontrado.' });
     return res.status(200).json({
       tenantId,
-      allowedProviders: getAllowedProviders(tenant),
+      allowedProviders: getEffectiveProvidersForTenant(tenant),
     });
   } catch (err) {
     console.error('[providers] allowed:', err.message);

@@ -72,7 +72,13 @@ async function request(path, options = {}) {
     throw new Error(data.error || 'Sessão inválida. Faça login novamente.');
   }
   if (!res.ok) {
-    throw new Error(data.error || data.message || `Erro ${res.status}`);
+    const err = new Error(data.error || data.message || `Erro ${res.status}`);
+    if (data.code) err.code = data.code;
+    if (data.reason != null) err.reason = data.reason;
+    if (data.feature != null) err.feature = data.feature;
+    err.status = res.status;
+    err.body = data;
+    throw err;
   }
   return data;
 }

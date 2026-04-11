@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { Card, Badge, Button, Tabs, Skeleton } from "../components/ui";
+import { Card, Badge, Button, Tabs, Skeleton, Modal } from "../components/ui";
 import {
   adminApi,
   type Tenant,
@@ -10,9 +10,137 @@ import {
   type TenantUsage,
   type TenantLogRow,
   type TenantBilling,
+  type TenantFeatureFlagsMap,
+  type TenantFeatureFlagAuditItem,
+  type FeatureTemplateItem,
 } from "../api/admin";
 import styles from "./TenantDetailPage.module.css";
 import { getTenantProvidersDisplay, providerOptions, sanitizeAllowedProviders } from "../utils/tenantProviders";
+
+const DEFAULT_PLAN_FEATURES: TenantFeatureFlagsMap = {
+  realtimeMonitoring: false,
+  autoHealing: false,
+  providerFallback: false,
+  advancedArtifacts: false,
+  extendedMonitoringHistory: false,
+};
+
+const TENANT_FEATURE_KEYS = [
+  "realtimeMonitoring",
+  "autoHealing",
+  "providerFallback",
+  "advancedArtifacts",
+  "extendedMonitoringHistory",
+] as const;
+
+const TENANT_FEATURE_LABELS: Record<(typeof TENANT_FEATURE_KEYS)[number], string> = {
+  realtimeMonitoring: "Monitoramento em tempo real",
+  autoHealing: "Auto-healing de canais",
+  providerFallback: "Fallback entre providers",
+  advancedArtifacts: "Artefatos avançados",
+  extendedMonitoringHistory: "Histórico estendido de monitoramento",
+};
+
+const TEMPLATE_DISPLAY_LABELS: Record<string, string> = {
+  enterprise_safe: "Enterprise (seguro)",
+  pilot_restricted: "Piloto restrito",
+};
+
+function boolFromJson(v: unknown): boolean {
+  return v === true;
+}
+
+function savedOverrideLabel(t: Tenant | null, key: (typeof TENANT_FEATURE_KEYS)[number]): string {
+  const f = t?.feature_flags as Record<string, unknown> | undefined;
+  if (!f || !(key in f) || typeof f[key] !== "boolean") return "sem override";
+  return f[key] ? "true" : "false";
+}
+
+function summarizeEffectiveFlagChange(
+  prev: Record<string, unknown>,
+  next: Record<string, unknown>
+): string[] {
+  const lines: string[] = [];
+  for (const key of TENANT_FEATURE_KEYS) {
+    const a = boolFromJson(prev[key]);
+    const b = boolFromJson(next[key]);
+    if (a !== b) {
+      lines.push(`${TENANT_FEATURE_LABELS[key]}: ${a} -> ${b}`);
+    }
+  }
+  return lines;
+}
+
+/** Overrides persistidos que serão restaurados (previous_flags da auditoria). */
+function summarizeStoredOverridesLines(flags: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  for (const key of TENANT_FEATURE_KEYS) {
+    if (key in flags && typeof flags[key] === "boolean") {
+      lines.push(`${TENANT_FEATURE_LABELS[key]}: ${flags[key] ? "true" : "false"}`);
+    }
+  }
+  if (lines.length === 0) return ["(nenhum override salvo — seguirá apenas o plano para as flags conhecidas)"];
+  return lines;
+}
+
+/** Alinhado a validateTenantFeatureFlags: só chaves conhecidas com boolean. */
+function validatedSparseFromRow(raw: unknown): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  const o = raw as Record<string, unknown>;
+  for (const key of TENANT_FEATURE_KEYS) {
+    if (typeof o[key] === "boolean") out[key] = o[key];
+  }
+  return out;
+}
+
+function sparseMapsEqual(a: Record<string, boolean>, b: Record<string, boolean>): boolean {
+  for (const key of TENANT_FEATURE_KEYS) {
+    const hasA = Object.prototype.hasOwnProperty.call(a, key);
+    const hasB = Object.prototype.hasOwnProperty.call(b, key);
+    if (hasA !== hasB) return false;
+    if (hasA && a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+/** Efetivo atual vs efetivo após aplicar previous_flags da auditoria (effective_previous). */
+function normalizeSparseOverridesLocal(
+  sparse: Record<string, boolean>,
+  planBase: TenantFeatureFlagsMap
+): Record<string, boolean> {
+  const out: Record<string, boolean> = { ...sparse };
+  for (const key of TENANT_FEATURE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(out, key) && out[key] === planBase[key]) {
+      delete out[key];
+    }
+  }
+  return out;
+}
+
+function effectiveAfterSparse(sparse: Record<string, boolean>, planBase: TenantFeatureFlagsMap): TenantFeatureFlagsMap {
+  const out: TenantFeatureFlagsMap = { ...planBase };
+  for (const key of TENANT_FEATURE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(sparse, key)) out[key] = sparse[key];
+  }
+  return out;
+}
+
+function summarizeRevertEffectivePreview(
+  currentEffective: TenantFeatureFlagsMap | undefined,
+  targetEffectivePrevious: Record<string, unknown>
+): string[] {
+  if (!currentEffective) return [];
+  const lines: string[] = [];
+  for (const key of TENANT_FEATURE_KEYS) {
+    const cur = Boolean(currentEffective[key]);
+    const tgt = boolFromJson(targetEffectivePrevious[key]);
+    if (cur !== tgt) {
+      lines.push(`${TENANT_FEATURE_LABELS[key]}: ${cur} → ${tgt}`);
+    }
+  }
+  return lines;
+}
 
 const TABS = [
   { id: "overview", label: "Visão geral" },
@@ -44,6 +172,18 @@ export default function TenantDetailPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [savingTenant, setSavingTenant] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [featureDraft, setFeatureDraft] = useState<TenantFeatureFlagsMap>({ ...DEFAULT_PLAN_FEATURES });
+  const [featuresSaving, setFeaturesSaving] = useState(false);
+  const [featuresError, setFeaturesError] = useState("");
+  const [featureHistory, setFeatureHistory] = useState<TenantFeatureFlagAuditItem[]>([]);
+  const [featureHistoryLoading, setFeatureHistoryLoading] = useState(false);
+  const [revertTarget, setRevertTarget] = useState<TenantFeatureFlagAuditItem | null>(null);
+  const [revertLoading, setRevertLoading] = useState(false);
+  const [revertError, setRevertError] = useState("");
+  const [revertToast, setRevertToast] = useState<string | null>(null);
+  const [featureTemplates, setFeatureTemplates] = useState<FeatureTemplateItem[]>([]);
+  const [featureTemplatesLoading, setFeatureTemplatesLoading] = useState(false);
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState("");
   const [editForm, setEditForm] = useState({
     nome_empresa: "",
     slug: "",
@@ -71,6 +211,77 @@ export default function TenantDetailPage() {
       }
     });
   }, [tenantId]);
+
+  useEffect(() => {
+    if (!tenant) return;
+    const eff = tenant.effective_feature_flags;
+    if (eff) {
+      setFeatureDraft({ ...eff });
+      return;
+    }
+    setFeatureDraft({ ...DEFAULT_PLAN_FEATURES });
+  }, [tenant]);
+
+  const refreshFeatureHistory = useCallback(async () => {
+    if (!tenantId) return;
+    setFeatureHistoryLoading(true);
+    try {
+      const data = await adminApi.getTenantFeatureFlagHistory(tenantId, 20);
+      setFeatureHistory(data.items);
+    } catch {
+      setFeatureHistory([]);
+    } finally {
+      setFeatureHistoryLoading(false);
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (!tenantId || tab !== "overview") return;
+    void refreshFeatureHistory();
+  }, [tenantId, tab, refreshFeatureHistory]);
+
+  useEffect(() => {
+    if (!revertToast) return;
+    const t = window.setTimeout(() => setRevertToast(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [revertToast]);
+
+  useEffect(() => {
+    if (!tenantId || tab !== "overview") return;
+    let cancelled = false;
+    setFeatureTemplatesLoading(true);
+    adminApi
+      .getFeatureTemplates()
+      .then((data) => {
+        if (!cancelled) setFeatureTemplates(data.items || []);
+      })
+      .catch(() => {
+        if (!cancelled) setFeatureTemplates([]);
+      })
+      .finally(() => {
+        if (!cancelled) setFeatureTemplatesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tenantId, tab]);
+
+  const templatePreviewLines = useMemo(() => {
+    if (!selectedTemplateKey || !tenant) return [];
+    const tpl = featureTemplates.find((t) => t.key === selectedTemplateKey);
+    if (!tpl) return [];
+    const planBase = tenant.plan_feature_defaults ?? DEFAULT_PLAN_FEATURES;
+    const sparse = normalizeSparseOverridesLocal(validatedSparseFromRow(tpl.flags), planBase);
+    const nextEff = effectiveAfterSparse(sparse, planBase);
+    const currentEff = tenant.effective_feature_flags ?? DEFAULT_PLAN_FEATURES;
+    const lines: string[] = [];
+    for (const key of TENANT_FEATURE_KEYS) {
+      const a = Boolean(currentEff[key]);
+      const b = Boolean(nextEff[key]);
+      if (a !== b) lines.push(`${TENANT_FEATURE_LABELS[key]}: ${a} → ${b}`);
+    }
+    return lines;
+  }, [selectedTemplateKey, tenant, featureTemplates]);
 
   function toggleProvider(provider: string) {
     setEditForm((prev) => {
@@ -101,6 +312,119 @@ export default function TenantDetailPage() {
       setSaveError(err?.message || "Erro ao salvar tenant.");
     } finally {
       setSavingTenant(false);
+    }
+  }
+
+  async function handleSaveFeatures() {
+    if (!tenantId || !tenant) return;
+    setFeaturesSaving(true);
+    setFeaturesError("");
+    try {
+      const planBase = tenant.plan_feature_defaults ?? DEFAULT_PLAN_FEATURES;
+      const sparse: Record<string, boolean> = {};
+      for (const key of TENANT_FEATURE_KEYS) {
+        if (featureDraft[key] !== planBase[key]) sparse[key] = featureDraft[key];
+      }
+      const res = await adminApi.patchTenantFeatures(tenantId, sparse);
+      setTenant((prev) =>
+        prev
+          ? {
+              ...prev,
+              feature_flags: res.feature_flags as Tenant["feature_flags"],
+              effective_feature_flags: res.effective_feature_flags,
+            }
+          : null
+      );
+      setFeatureDraft({ ...res.effective_feature_flags });
+      await refreshFeatureHistory();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro ao salvar features.";
+      setFeaturesError(msg);
+    } finally {
+      setFeaturesSaving(false);
+    }
+  }
+
+  async function handleResetFeaturesToPlan() {
+    if (!tenantId || !tenant) return;
+    setFeaturesSaving(true);
+    setFeaturesError("");
+    try {
+      const res = await adminApi.patchTenantFeatures(tenantId, {});
+      setTenant((prev) =>
+        prev
+          ? {
+              ...prev,
+              feature_flags: res.feature_flags as Tenant["feature_flags"],
+              effective_feature_flags: res.effective_feature_flags,
+            }
+          : null
+      );
+      setFeatureDraft({ ...res.effective_feature_flags });
+      await refreshFeatureHistory();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro ao restaurar padrão do plano.";
+      setFeaturesError(msg);
+    } finally {
+      setFeaturesSaving(false);
+    }
+  }
+
+  async function handleApplyFeatureTemplate() {
+    if (!tenantId || !tenant || !selectedTemplateKey) return;
+    const tpl = featureTemplates.find((t) => t.key === selectedTemplateKey);
+    if (!tpl) return;
+    const planBase = tenant.plan_feature_defaults ?? DEFAULT_PLAN_FEATURES;
+    const sparse = normalizeSparseOverridesLocal(validatedSparseFromRow(tpl.flags), planBase);
+    const nextEff = effectiveAfterSparse(sparse, planBase);
+    const currentEff = tenant.effective_feature_flags ?? featureDraft;
+    const changeLines: string[] = [];
+    for (const key of TENANT_FEATURE_KEYS) {
+      const a = Boolean(currentEff[key]);
+      const b = Boolean(nextEff[key]);
+      if (a !== b) changeLines.push(`${TENANT_FEATURE_LABELS[key]}: ${a} → ${b}`);
+    }
+    const intro =
+      changeLines.length > 0
+        ? changeLines.join("\n")
+        : "Nenhuma mudança efetiva será aplicada (apenas normalização de overrides em relação ao plano).";
+    const label = TEMPLATE_DISPLAY_LABELS[selectedTemplateKey] || selectedTemplateKey;
+    if (!window.confirm(`Aplicar template "${label}"?\n\n${intro}`)) return;
+    setFeaturesSaving(true);
+    setFeaturesError("");
+    try {
+      await adminApi.applyFeatureTemplate(tenantId, selectedTemplateKey);
+      const fresh = await adminApi.getTenant(tenantId);
+      setTenant(fresh);
+      if (fresh?.effective_feature_flags) setFeatureDraft({ ...fresh.effective_feature_flags });
+      await refreshFeatureHistory();
+    } catch (err: unknown) {
+      setFeaturesError(err instanceof Error ? err.message : "Erro ao aplicar template.");
+    } finally {
+      setFeaturesSaving(false);
+    }
+  }
+
+  async function handleConfirmRevert() {
+    if (!tenantId || !revertTarget) return;
+    setRevertLoading(true);
+    setRevertError("");
+    try {
+      const res = await adminApi.revertTenantFeatures(tenantId, revertTarget.id);
+      if (res.noop) {
+        setRevertToast("Este estado já está aplicado");
+        setRevertTarget(null);
+        return;
+      }
+      const fresh = await adminApi.getTenant(tenantId);
+      setTenant(fresh);
+      if (fresh?.effective_feature_flags) setFeatureDraft({ ...fresh.effective_feature_flags });
+      await refreshFeatureHistory();
+      setRevertTarget(null);
+    } catch (err: unknown) {
+      setRevertError(err instanceof Error ? err.message : "Erro ao reverter.");
+    } finally {
+      setRevertLoading(false);
     }
   }
 
@@ -194,6 +518,8 @@ export default function TenantDetailPage() {
     );
   }
 
+  const planBaseForFeatures = tenant.plan_feature_defaults ?? DEFAULT_PLAN_FEATURES;
+
   return (
     <div className={styles.page}>
       <div className={styles.header}>
@@ -220,6 +546,7 @@ export default function TenantDetailPage() {
 
       <Tabs tabs={TABS} activeId={tab} onChange={setTab}>
         {tab === "overview" && (
+          <Fragment>
           <Card title="Visão geral">
             <dl className={styles.dl}>
               <dt>Plano</dt>
@@ -330,6 +657,176 @@ export default function TenantDetailPage() {
               </div>
             ) : null}
           </Card>
+
+          <Card title="Features" className={styles.featureCardSpacer}>
+            <p style={{ margin: "0 0 12px", fontSize: "0.85rem", color: "var(--text-muted)" }}>
+              Plano <strong>{tenant.plan}</strong> define o padrão; overrides gravados só para chaves que diferem do
+              plano. O valor efetivo é sempre plano + override.
+            </p>
+            <div
+              style={{
+                marginBottom: 16,
+                paddingBottom: 16,
+                borderBottom: "1px solid var(--border)",
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>Template rápido</div>
+              {featureTemplatesLoading ? (
+                <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-muted)" }}>Carregando templates...</p>
+              ) : (
+                <>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
+                    <label style={{ flex: "1 1 220px" }}>
+                      <div style={{ fontSize: "0.8rem", marginBottom: 4 }}>Preset</div>
+                      <select
+                        style={{ width: "100%", minHeight: 36 }}
+                        value={selectedTemplateKey}
+                        onChange={(e) => setSelectedTemplateKey(e.target.value)}
+                      >
+                        <option value="">— Escolher template —</option>
+                        {featureTemplates.map((t) => (
+                          <option key={t.key} value={t.key}>
+                            {TEMPLATE_DISPLAY_LABELS[t.key] ?? t.key}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <Button
+                      variant="secondary"
+                      disabled={featuresSaving || !selectedTemplateKey}
+                      onClick={() => void handleApplyFeatureTemplate()}
+                    >
+                      Aplicar template
+                    </Button>
+                  </div>
+                  {selectedTemplateKey ? (
+                    <div style={{ marginTop: 10, fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                      <strong>Template:</strong>{" "}
+                      {TEMPLATE_DISPLAY_LABELS[selectedTemplateKey] || selectedTemplateKey}
+                      <div style={{ marginTop: 6 }}>
+                        <strong>Flags que mudarão (efetivo)</strong>
+                      </div>
+                      <div className={styles.historySummary} style={{ marginTop: 4 }}>
+                        {templatePreviewLines.length > 0 ? (
+                          templatePreviewLines.map((line, i) => (
+                            <div key={i} className={styles.historySummaryLine}>
+                              {line}
+                            </div>
+                          ))
+                        ) : (
+                          <span className={styles.historySummaryLine}>
+                            Nenhuma mudança efetiva será aplicada
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+            {TENANT_FEATURE_KEYS.map((key) => (
+              <div key={key} className={styles.featureRowBlock}>
+                <div className={styles.featureRowMain}>
+                  <div className={styles.featureTitle}>{TENANT_FEATURE_LABELS[key]}</div>
+                  <div className={styles.featureMeta}>
+                    <div>Plano: {String(boolFromJson(planBaseForFeatures[key]))}</div>
+                    <div>Override: {savedOverrideLabel(tenant, key)}</div>
+                    <div>Efetivo: {String(Boolean(featureDraft[key]))}</div>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  className={styles.featureSwitch}
+                  checked={Boolean(featureDraft[key])}
+                  onChange={(e) => setFeatureDraft((prev) => ({ ...prev, [key]: e.target.checked }))}
+                  aria-label={TENANT_FEATURE_LABELS[key]}
+                />
+              </div>
+            ))}
+            {featuresError ? <p style={{ color: "var(--danger)", marginTop: 10 }}>{featuresError}</p> : null}
+            <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 10 }}>
+              <Button onClick={handleSaveFeatures} disabled={featuresSaving}>
+                {featuresSaving ? "Salvando..." : "Salvar features"}
+              </Button>
+              <Button variant="secondary" onClick={handleResetFeaturesToPlan} disabled={featuresSaving}>
+                Voltar ao padrão do plano
+              </Button>
+            </div>
+          </Card>
+
+          <Card title="Histórico de features" className={styles.featureCardSpacer}>
+            {featureHistoryLoading ? (
+              <p className={styles.placeholder}>Carregando histórico...</p>
+            ) : featureHistory.length === 0 ? (
+              <p className={styles.placeholder}>Nenhuma alteração registrada ainda.</p>
+            ) : (
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>Data / hora</th>
+                    <th>Alterado por</th>
+                    <th>Resumo</th>
+                    <th style={{ width: "11rem" }}>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {featureHistory.map((row) => {
+                    const prev = (row.effective_previous_flags || {}) as Record<string, unknown>;
+                    const next = (row.effective_new_flags || {}) as Record<string, unknown>;
+                    const deltas = summarizeEffectiveFlagChange(prev, next);
+                    const auditPrev = validatedSparseFromRow(row.previous_flags);
+                    const tenantSparse = validatedSparseFromRow(tenant.feature_flags);
+                    const isSameAsCurrent = sparseMapsEqual(auditPrev, tenantSparse);
+                    return (
+                      <tr key={row.id}>
+                        <td>{row.created_at ? new Date(row.created_at).toLocaleString("pt-BR") : "-"}</td>
+                        <td>{row.changed_by || "-"}</td>
+                        <td>
+                          {isSameAsCurrent ? (
+                            <div className={styles.historyBadgeWrap}>
+                              <Badge variant="default">Igual ao estado atual</Badge>
+                            </div>
+                          ) : null}
+                          <div className={styles.historySummary}>
+                            {deltas.length > 0 ? (
+                              deltas.map((line, i) => (
+                                <div key={i} className={styles.historySummaryLine}>
+                                  {line}
+                                </div>
+                              ))
+                            ) : (
+                              <span className={styles.historySummaryLine}>
+                                Sem mudança no mapa efetivo (ajuste só nos overrides persistidos).
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td>
+                          <span
+                            title={isSameAsCurrent ? "Este estado já está aplicado" : undefined}
+                            style={{ display: "inline-block", maxWidth: "100%" }}
+                          >
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              disabled={featuresSaving || revertLoading || isSameAsCurrent}
+                              onClick={() => {
+                                setRevertError("");
+                                setRevertTarget(row);
+                              }}
+                            >
+                              Reverter para este estado anterior
+                            </Button>
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </Card>
+          </Fragment>
         )}
         {tab === "agents" && (
           <Card title="Agentes">
@@ -523,6 +1020,113 @@ export default function TenantDetailPage() {
           </Card>
         )}
       </Tabs>
+
+      <Modal
+        open={revertTarget !== null}
+        onClose={() => {
+          if (!revertLoading) {
+            setRevertTarget(null);
+            setRevertError("");
+          }
+        }}
+        title="Reverter feature flags"
+      >
+        {revertTarget && tenant ? (
+          <div>
+            {(() => {
+              const originalEffectLines = summarizeEffectiveFlagChange(
+                (revertTarget.effective_previous_flags || {}) as Record<string, unknown>,
+                (revertTarget.effective_new_flags || {}) as Record<string, unknown>
+              );
+              const impactPreviewLines = summarizeRevertEffectivePreview(
+                tenant.effective_feature_flags,
+                (revertTarget.effective_previous_flags || {}) as Record<string, unknown>
+              );
+              return (
+                <Fragment>
+                  <p style={{ marginTop: 0, fontSize: "0.9rem", lineHeight: 1.5 }}>
+                    Isso vai restaurar os overrides anteriores registrados nesta alteração.
+                  </p>
+                  <dl className={styles.dl} style={{ marginTop: 12 }}>
+                    <dt>Data / hora</dt>
+                    <dd>
+                      {revertTarget.created_at ? new Date(revertTarget.created_at).toLocaleString("pt-BR") : "-"}
+                    </dd>
+                    <dt>Alterado por</dt>
+                    <dd>{revertTarget.changed_by || "-"}</dd>
+                    <dt>Resumo da reversão</dt>
+                    <dd>
+                      <div className={styles.historySummary}>
+                        {summarizeStoredOverridesLines(
+                          (revertTarget.previous_flags || {}) as Record<string, unknown>
+                        ).map((line, i) => (
+                          <div key={i} className={styles.historySummaryLine}>
+                            {line}
+                          </div>
+                        ))}
+                      </div>
+                    </dd>
+                    <dt>FLAGS QUE VÃO MUDAR</dt>
+                    <dd>
+                      <div className={styles.historySummary}>
+                        {impactPreviewLines.length > 0 ? (
+                          impactPreviewLines.map((line, i) => (
+                            <div key={i} className={styles.historySummaryLine}>
+                              {line}
+                            </div>
+                          ))
+                        ) : (
+                          <span className={styles.historySummaryLine}>
+                            Nenhuma mudança efetiva será aplicada
+                          </span>
+                        )}
+                      </div>
+                    </dd>
+                    <dt>Contexto (efeito da alteração original)</dt>
+                    <dd>
+                      <div className={styles.historySummary}>
+                        {originalEffectLines.length > 0 ? (
+                          originalEffectLines.map((line, i) => (
+                            <div key={i} className={styles.historySummaryLine}>
+                              {line}
+                            </div>
+                          ))
+                        ) : (
+                          <span className={styles.historySummaryLine}>
+                            Sem mudança no mapa efetivo nesta entrada.
+                          </span>
+                        )}
+                      </div>
+                    </dd>
+                  </dl>
+                </Fragment>
+              );
+            })()}
+            {revertError ? <p style={{ color: "var(--danger)", marginTop: 8 }}>{revertError}</p> : null}
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
+              <Button
+                variant="secondary"
+                disabled={revertLoading}
+                onClick={() => {
+                  setRevertTarget(null);
+                  setRevertError("");
+                }}
+              >
+                Cancelar
+              </Button>
+              <Button disabled={revertLoading} onClick={() => void handleConfirmRevert()}>
+                {revertLoading ? "Revertendo..." : "Confirmar reversão"}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+
+      {revertToast ? (
+        <div role="status" aria-live="polite" className={`${styles.toast} ${styles.toastInfo}`}>
+          {revertToast}
+        </div>
+      ) : null}
     </div>
   );
 }

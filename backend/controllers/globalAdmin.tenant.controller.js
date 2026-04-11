@@ -1,5 +1,6 @@
 import { getTenantById, updateTenant, suspendTenant } from '../repositories/tenant.repository.js';
 import { toTenantApiRow } from '../utils/tenantMapper.js';
+import { invalidateTenantLimitsCache } from '../services/tenantLimits.service.js';
 
 /**
  * PATCH /api/global-admin/tenants/:tenantId
@@ -13,6 +14,7 @@ export async function updateTenantHandler(req, res) {
       return res.status(404).json({ error: 'Tenant não encontrado' });
     }
     const updated = await updateTenant(tenantId, req.body);
+    invalidateTenantLimitsCache(tenantId);
     const t = toTenantApiRow({
       ...updated,
       max_agents: updated.max_agents ?? 0,
@@ -48,6 +50,7 @@ export async function suspendTenantHandler(req, res) {
       return res.status(404).json({ error: 'Tenant não encontrado' });
     }
     const updated = await suspendTenant(tenantId);
+    invalidateTenantLimitsCache(tenantId);
     const t = toTenantApiRow({
       ...updated,
       max_agents: updated.max_agents ?? 0,

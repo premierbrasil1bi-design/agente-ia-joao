@@ -2,8 +2,33 @@ import express from 'express';
 import authJWT from '../middleware/authJWT.js';
 import { requireActiveTenant } from '../middleware/requireActiveTenant.js';
 import { getTenantMessageUsageFromLogs } from '../repositories/tenantMessageUsageLog.repository.js';
+import { getTenantLimitsPublicPayload } from '../services/tenantLimits.service.js';
+import { log } from '../utils/logger.js';
 
 const router = express.Router();
+
+/**
+ * GET /api/tenant/limits
+ * Plano, limites efetivos, uso atual e flags de feature (ex.: monitoring realtime).
+ */
+router.get('/limits', authJWT, requireActiveTenant, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const payload = await getTenantLimitsPublicPayload(tenantId, {
+      requestId: req.requestId ?? null,
+    });
+    return res.json(payload);
+  } catch (error) {
+    log.error({
+      event: 'TENANT_LIMITS_PUBLIC_ERROR',
+      context: 'route',
+      tenantId: req.user?.tenantId ?? null,
+      error: error?.message || String(error),
+      stack: error?.stack,
+    });
+    return res.status(500).json({ error: 'Erro interno' });
+  }
+});
 
 /**
  * GET /api/tenant/usage

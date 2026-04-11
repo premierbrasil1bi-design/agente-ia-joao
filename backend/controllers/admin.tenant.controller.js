@@ -5,6 +5,7 @@ import {
   updateTenant,
   deleteTenant
 } from '../repositories/tenant.repository.js';
+import { invalidateTenantLimitsCache } from '../services/tenantLimits.service.js';
 
 export async function createTenantHandler(req, res) {
   try {
@@ -40,6 +41,7 @@ export async function getTenant(req, res) {
 export async function updateTenantHandler(req, res) {
   try {
     const tenant = await updateTenant(req.params.id, req.body);
+    if (tenant?.id) invalidateTenantLimitsCache(String(tenant.id));
     res.json(tenant);
   } catch (error) {
     res.status(500).json({ error: 'Erro ao atualizar tenant' });

@@ -5,8 +5,10 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useChannel } from '../context/ChannelContext';
 import { agentApi } from '../services/agentApi';
+import { useTenantLimitsContext } from '../context/TenantLimitsContext.jsx';
+import { TenantUsageCard } from '../components/tenant/TenantUsageCard.jsx';
+import { TenantPlanBadge } from '../components/tenant/TenantPlanBadge.jsx';
 
 const styles = {
   grid: {
@@ -47,10 +49,10 @@ const styles = {
 };
 
 export function Dashboard() {
-  const { channel } = useChannel();
   const navigate = useNavigate();
   const [summary, setSummary] = useState(null);
   const [error, setError] = useState(null);
+  const { loading: limitsLoading, plan, limits, usage, features } = useTenantLimitsContext();
 
   useEffect(() => {
     if (!agentApi.getToken()) {
@@ -89,7 +91,7 @@ export function Dashboard() {
     return <p style={{ color: 'var(--text-muted)' }}>Carregando...</p>;
   }
 
-  const canalAtivo = (summary.canalAtivo || channel || 'web').toUpperCase();
+  const canalAtivo = (summary.canalAtivo || 'web').toUpperCase();
   const mensagensEnviadas = summary.mensagensEnviadas ?? 0;
   const mensagensRecebidas = summary.mensagensRecebidas ?? 0;
   const tokensEstimados = summary.tokensEstimados ?? summary.tokens ?? 0;
@@ -97,6 +99,26 @@ export function Dashboard() {
 
   return (
     <>
+      <div style={{ marginBottom: '1.25rem' }} id="current-plan-card">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+          <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: 'var(--text)' }}>Plano e uso</h2>
+          <TenantPlanBadge plan={plan} />
+        </div>
+        <TenantUsageCard
+          plan={plan}
+          limits={limits}
+          usage={usage}
+          features={features}
+          loading={limitsLoading}
+        />
+        <p style={{ margin: '12px 0 0', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+          Precisa de mais canais, agentes ou mensagens?{' '}
+          <a href="mailto:comercial@omnia1biai.com.br?subject=Upgrade%20de%20plano" style={{ color: 'var(--accent)' }}>
+            Fale com o comercial
+          </a>
+        </p>
+      </div>
+
       <div style={styles.grid}>
         <div style={styles.cardDestaque}>
           <div style={styles.label}>Canal ativo</div>

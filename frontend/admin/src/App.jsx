@@ -6,8 +6,10 @@ import { ContextoAgente } from './pages/ContextoAgente';
 import { Prompts } from './pages/Prompts';
 import { Agents } from './pages/Agents';
 import { Channels } from './pages/Channels.new';
+import { Monitoring } from './pages/Monitoring';
 import { Login } from './pages/Login';
 import { useAgentAuth } from './context/AgentAuthContext';
+import { TenantLimitsProvider } from './context/TenantLimitsContext.jsx';
 
 function Layout({ children }) {
   return (
@@ -31,6 +33,7 @@ function Layout({ children }) {
             <Link to="/prompts" style={linkStyle}>Prompts</Link>
             <Link to="/agents" style={linkStyle}>Agents</Link>
             <Link to="/channels" style={linkStyle}>Channels</Link>
+            <Link to="/admin/monitoring" style={linkStyle}>Monitoring</Link>
           </nav>
           <div style={{ padding: '1rem 1rem 0', borderTop: '1px solid var(--border)', marginTop: '0.5rem' }}>
             <ChannelIndicator compact />
@@ -64,6 +67,7 @@ function RequireAuth({ children }) {
 
 export default function App() {
   return (
+    <TenantLimitsProvider>
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route
@@ -77,11 +81,13 @@ export default function App() {
                 <Route path="/prompts" element={<Prompts />} />
                 <Route path="/agents" element={<Agents />} />
                 <Route path="/channels" element={<Channels />} />
+                <Route path="/admin/monitoring" element={<Monitoring />} />
               </Routes>
             </Layout>
           </RequireAuth>
         }
       />
     </Routes>
+    </TenantLimitsProvider>
   );
 }

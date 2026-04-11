@@ -202,3 +202,22 @@ export async function deleteById(id, tenantId) {
   );
   return rowCount > 0;
 }
+
+export async function getChannelStateCounts(tenantId = null) {
+  const params = [];
+  const where = tenantId ? `WHERE tenant_id = $1` : '';
+  if (tenantId) params.push(tenantId);
+
+  const { rows } = await pool.query(
+    `SELECT
+      COUNT(*)::int AS total,
+      SUM(CASE WHEN LOWER(COALESCE(connection_status, status, '')) = 'connected' THEN 1 ELSE 0 END)::int AS connected,
+      SUM(CASE WHEN LOWER(COALESCE(connection_status, status, '')) = 'error' THEN 1 ELSE 0 END)::int AS error,
+      SUM(CASE WHEN LOWER(COALESCE(connection_status, status, '')) IN ('waiting', 'ready', 'pending', 'qr', 'qrcode') THEN 1 ELSE 0 END)::int AS waiting,
+      SUM(CASE WHEN LOWER(COALESCE(connection_status, status, '')) IN ('connecting', '') THEN 1 ELSE 0 END)::int AS connecting
+     FROM channels
+     ${where}`,
+    params,
+  );
+  return rows[0] || { total: 0, connected: 0, error: 0, waiting: 0, connecting: 0 };
+}

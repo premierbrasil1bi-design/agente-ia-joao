@@ -10,6 +10,9 @@ import {
 } from 'recharts';
 import { messagesService } from '../services/messages.service.js';
 import { channelsService } from '../services/channels.service.js';
+import { useTenantLimitsContext } from '../context/TenantLimitsContext.jsx';
+import { TenantUsageCard } from '../components/tenant/TenantUsageCard.jsx';
+import { TenantPlanBadge } from '../components/tenant/TenantPlanBadge.jsx';
 import styles from './Dashboard.module.css';
 
 const RANGE_PRESETS = {
@@ -73,6 +76,7 @@ export function Dashboard() {
   const [loadingChannels, setLoadingChannels] = useState(true);
   const [loadingRanking, setLoadingRanking] = useState(true);
   const [error, setError] = useState(null);
+  const { loading: limitsLoading, plan, limits, usage, features } = useTenantLimitsContext();
 
   const rangeWindow = useMemo(() => RANGE_PRESETS[range] || RANGE_PRESETS['7d'], [range]);
   const filters = useMemo(() => {
@@ -263,6 +267,35 @@ export function Dashboard() {
 
   return (
     <div className={styles.page}>
+      <section
+        id="current-plan-card"
+        style={{
+          marginBottom: '1.25rem',
+          padding: '1rem',
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+          background: 'var(--surface)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+          <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>Plano e uso</h2>
+          <TenantPlanBadge plan={plan} />
+        </div>
+        <TenantUsageCard
+          plan={plan}
+          limits={limits}
+          usage={usage}
+          features={features}
+          loading={limitsLoading}
+        />
+        <p style={{ margin: '12px 0 0', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+          Precisa de mais recursos?{' '}
+          <a href="mailto:comercial@omnia1biai.com.br?subject=Upgrade%20de%20plano" style={{ color: 'var(--accent)' }}>
+            Fale com o comercial
+          </a>
+        </p>
+      </section>
+
       <header className={styles.header}>
         <div>
           <h1>Dashboard Executivo</h1>

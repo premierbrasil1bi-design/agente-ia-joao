@@ -20,7 +20,7 @@ import {
 import { resolveProvider } from '../providers/resolveProvider.js';
 import { resolveSessionName } from '../utils/resolveSessionName.js';
 import { getProvider, getProviderForChannel } from '../providers/index.js';
-import { validateProviderAccessForTenant } from './providerAccess.service.js';
+import { assertProviderAllowedForTenant } from './providerAccess.service.js';
 
 const MAX_WHATSAPP_ARTIFACT_LEN = 150000;
 
@@ -273,7 +273,13 @@ function normalizeProviderStatus(providerName, rawStatus, channel) {
  */
 export async function connectWhatsAppChannel(channel, ctx = {}) {
   const providerName = resolveProvider(channel);
-  await validateProviderAccessForTenant(channel.tenant_id, providerName);
+  await assertProviderAllowedForTenant({
+    tenantId: channel.tenant_id,
+    provider: providerName,
+    channelId: channel.id,
+    action: 'connect_whatsapp',
+    requestId: ctx.correlationId ?? null,
+  });
   const provider = getProviderForChannel(channel, { correlationId: ctx.correlationId ?? null });
   const tenantId = channel.tenant_id;
   const ext =
@@ -378,7 +384,13 @@ export async function connectWhatsAppChannel(channel, ctx = {}) {
  */
 export async function getChannelQrCode(channel, ctx = {}) {
   const providerName = resolveProvider(channel);
-  await validateProviderAccessForTenant(channel.tenant_id, providerName);
+  await assertProviderAllowedForTenant({
+    tenantId: channel.tenant_id,
+    provider: providerName,
+    channelId: channel.id,
+    action: 'get_qr_code',
+    requestId: ctx.correlationId ?? null,
+  });
   const provider = getProviderForChannel(channel, { correlationId: ctx.correlationId ?? null });
   const instanceName = isWahaChannel(channel) ? resolveSessionName(channel) : getEvolutionInstanceName(channel);
   if (!instanceName) {
@@ -413,7 +425,13 @@ export async function getChannelQrCode(channel, ctx = {}) {
  */
 export async function getChannelConnectionArtifact(channel) {
   const providerName = resolveProvider(channel);
-  await validateProviderAccessForTenant(channel.tenant_id, providerName);
+  await assertProviderAllowedForTenant({
+    tenantId: channel.tenant_id,
+    provider: providerName,
+    channelId: channel.id,
+    action: 'connection_artifact',
+    requestId: null,
+  });
   const provider = getProviderForChannel(channel);
   const instance = isWahaChannel(channel) ? resolveSessionName(channel) : getEvolutionInstanceName(channel);
   const tenantId = channel.tenant_id;
@@ -667,7 +685,13 @@ function mapPublicWhatsappStatus(rawState, channel) {
  */
 export async function getChannelStatus(channel, ctx = {}) {
   const providerName = resolveProvider(channel);
-  await validateProviderAccessForTenant(channel.tenant_id, providerName);
+  await assertProviderAllowedForTenant({
+    tenantId: channel.tenant_id,
+    provider: providerName,
+    channelId: channel.id,
+    action: 'get_channel_status',
+    requestId: ctx.correlationId ?? null,
+  });
   const provider = getProviderForChannel(channel, { correlationId: ctx.correlationId ?? null });
   const instanceName = isWahaChannel(channel) ? resolveSessionName(channel) : getEvolutionInstanceName(channel);
   const tenantId = channel.tenant_id;
@@ -819,8 +843,6 @@ export async function getChannelStatus(channel, ctx = {}) {
  * Só chama a Evolution se houver external_id (evita logout no nome padrão sem vínculo real).
  */
 export async function disconnectChannel(channel) {
-  const providerName = resolveProvider(channel);
-  await validateProviderAccessForTenant(channel.tenant_id, providerName);
   const provider = getProviderForChannel(channel);
   const ext = channel?.external_id != null ? String(channel.external_id).trim() : '';
 

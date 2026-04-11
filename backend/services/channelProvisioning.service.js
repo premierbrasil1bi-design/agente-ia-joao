@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { randomUUID } from 'node:crypto';
+import { assertProviderAllowedForTenant, ProviderAccessError } from './providerAccess.service.js';
+import { hasTenantFeature } from './tenantFeatures.service.js';
 
 const CONFIG = {
   WAHA_URL:
@@ -97,13 +99,44 @@ export async function provisionWithFallback(channel) {
   const primaryProvider = normalizeProvider(channel);
   console.log(`[${correlationId}] Iniciando provisionamento com fallback do canal ${channel?.id ?? 'N/A'}`);
 
+  await assertProviderAllowedForTenant({
+    tenantId: channel.tenant_id,
+    provider: primaryProvider,
+    channelId: channel.id,
+    action: 'provision_with_fallback_primary',
+    requestId: correlationId,
+  });
+
+  const allowFallback = await hasTenantFeature(channel.tenant_id, 'providerFallback');
+
   try {
     const primary = await provisionByProvider(channel, primaryProvider, correlationId);
     if (primary?.success) return { ...primary, attemptedProvider: primaryProvider };
 
     console.warn(`[${correlationId}] [FALLBACK] Provider principal falhou`);
     const fallbackProvider = resolveFallbackProvider(primaryProvider);
-    if (!fallbackProvider) return { ...primary, attemptedProvider: primaryProvider };
+    if (!fallbackProvider || !allowFallback) {
+      return {
+        ...primary,
+        attemptedProvider: primaryProvider,
+        ...(allowFallback ? {} : { fallbackSkipped: true, reason: 'provider_fallback_disabled' }),
+      };
+    }
+
+    try {
+      await assertProviderAllowedForTenant({
+        tenantId: channel.tenant_id,
+        provider: fallbackProvider,
+        channelId: channel.id,
+        action: 'provision_with_fallback_secondary',
+        requestId: correlationId,
+      });
+    } catch (e) {
+      if (e instanceof ProviderAccessError) {
+        return { ...primary, attemptedProvider: primaryProvider, fallbackSkipped: true, reason: 'fallback_provider_not_allowed' };
+      }
+      throw e;
+    }
 
     if (fallbackProvider === 'evolution') {
       console.log(`[${correlationId}] [FALLBACK] Tentando Evolution`);
@@ -118,9 +151,24 @@ export async function provisionWithFallback(channel) {
     );
     return { ...fallback, fallbackFrom: primaryProvider, attemptedProvider: fallbackProvider };
   } catch (error) {
+    if (error instanceof ProviderAccessError) throw error;
+    if (!allowFallback) throw error;
     console.warn(`[${correlationId}] [FALLBACK] Provider principal falhou`);
     const fallbackProvider = resolveFallbackProvider(primaryProvider);
     if (!fallbackProvider) throw error;
+
+    try {
+      await assertProviderAllowedForTenant({
+        tenantId: channel.tenant_id,
+        provider: fallbackProvider,
+        channelId: channel.id,
+        action: 'provision_with_fallback_secondary',
+        requestId: correlationId,
+      });
+    } catch (e) {
+      if (e instanceof ProviderAccessError) throw error;
+      throw e;
+    }
 
     if (fallbackProvider === 'evolution') {
       console.log(`[${correlationId}] [FALLBACK] Tentando Evolution`);

@@ -29,7 +29,12 @@ export function createAgentsApi(getToken, onUnauthorized = null) {
       throw new Error(data.error || data.message || 'Sessão inválida. Faça login novamente.');
     }
     if (!res.ok) {
-      throw new Error(data.error || data.message || `Erro ${res.status}`);
+      const err = new Error(data.error || data.message || `Erro ${res.status}`);
+      if (data.code) err.code = data.code;
+      if (data.reason != null) err.reason = data.reason;
+      err.status = res.status;
+      err.body = data;
+      throw err;
     }
     return data;
   }

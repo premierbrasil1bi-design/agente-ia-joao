@@ -22,8 +22,9 @@ export default function globalAdminAuth(req, res, next) {
   }
   try {
     const decoded = jwt.verify(token, secret);
-    if (decoded.role !== 'GLOBAL_ADMIN') {
-      return sendUnauthorized(res, 'Acesso restrito ao Global Admin.');
+    const role = String(decoded.role || '');
+    if (role !== 'GLOBAL_ADMIN' && role !== 'SUPER_ADMIN') {
+      return sendUnauthorized(res, 'Acesso restrito ao administrador da plataforma (SUPER_ADMIN).');
     }
     req.globalAdmin = {
       id: decoded.globalAdminId,

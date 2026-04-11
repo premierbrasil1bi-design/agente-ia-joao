@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { socket } from '../lib/socket.js';
 import { getApiBaseUrl } from '../config/env.js';
@@ -11,6 +12,14 @@ import { useChannelConnection } from '../hooks/useChannelConnection.js';
 import { ConnectionStateBanner } from '../components/ConnectionStateBanner.jsx';
 import { CHANNEL_CONNECTION_STATE, normalizeChannelStatus } from '../utils/channelCore.js';
 import { CreateChannelCard } from '../components/CreateChannelCard.jsx';
+import { useTenantLimitsContext } from '../context/TenantLimitsContext.jsx';
+import { TenantPlanBadge } from '../components/tenant/TenantPlanBadge.jsx';
+import { UpgradePlanModal } from '../components/tenant/UpgradePlanModal.jsx';
+import {
+  isTenantPlanLimitError,
+  mapTenantLimitReason,
+  tenantPlanLimitReasonFromError,
+} from '../utils/mapTenantLimitReason.js';
 import chLayout from './Channels.module.css';
 
 const styles = {
@@ -283,6 +292,33 @@ const styles = {
 
 export function Channels() {
   const { setChannel: setActiveUiChannel } = useChannel();
+  const navigate = useNavigate();
+  const { plan, limits, usage, features, refresh: refreshTenantLimits, loading: limitsLoading } =
+    useTenantLimitsContext();
+  const [planLimitModal, setPlanLimitModal] = useState({ open: false, reason: null });
+  const advancedArtifacts = Boolean(features?.advancedArtifacts);
+
+  const atChannelLimit =
+    limits?.maxChannels != null &&
+    Number(limits.maxChannels) > 0 &&
+    Number(usage?.channels ?? 0) >= Number(limits.maxChannels);
+  const canCreateChannels =
+    features?.can_create_channels != null
+      ? Boolean(features.can_create_channels)
+      : !atChannelLimit;
+  const atMessageLimit =
+    limits?.maxMessages != null &&
+    Number(limits.maxMessages) > 0 &&
+    Number(usage?.messages ?? 0) >= Number(limits.maxMessages);
+
+  const openPlanLimit = (reason) => setPlanLimitModal({ open: true, reason: reason ?? null });
+
+  const tryPlanLimit = (err) => {
+    if (!isTenantPlanLimitError(err)) return false;
+    openPlanLimit(tenantPlanLimitReasonFromError(err));
+    refreshTenantLimits();
+    return true;
+  };
 
   const [channels, setChannels] = useState([]);
   const [agents, setAgents] = useState([]);
@@ -301,6 +337,7 @@ export function Channels() {
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [qrModalChannelId, setQrModalChannelId] = useState(null);
   const [qrLoadError, setQrLoadError] = useState(null);
+  const [qrFlowStatus, setQrFlowStatus] = useState('connecting');
   const [loadingCreate, setLoadingCreate] = useState(false);
   const [loadingQr, setLoadingQr] = useState(null);
   const [loadingConnectId, setLoadingConnectId] = useState(null);
@@ -320,6 +357,7 @@ export function Channels() {
   const [loadingToggleId, setLoadingToggleId] = useState(null);
   const [loadingEditId, setLoadingEditId] = useState(null);
   const pollingRefs = useRef({});
+  const qrPollingRef = useRef(null);
   const {
     qrCode: liveQrCode,
     qrFormat: liveQrFormat,
@@ -344,22 +382,37 @@ export function Channels() {
     setAgents(Array.isArray(data) ? data : []);
   }
 
-  async function loadAllowedProviders() {
+  const loadAllowedProviders = useCallback(async () => {
     try {
       const data = await channelsService.getAllowedProviders();
       const list = Array.isArray(data?.allowedProviders) ? data.allowedProviders : [];
       if (list.length > 0) {
         setAllowedProviders(list);
-        if (!list.includes(whatsappProvider)) {
-          setWhatsappProvider(list[0]);
-        }
+        setWhatsappProvider((prev) => (list.includes(prev) ? prev : list[0]));
       }
     } catch (e) {
       console.warn('[channels] allowed providers:', e.message);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    const list = features?.allowed_providers;
+    if (!Array.isArray(list)) return;
+    if (list.length > 0) {
+      setAllowedProviders(list);
+      setWhatsappProvider((prev) => (list.includes(prev) ? prev : list[0]));
+    } else {
+      setAllowedProviders([]);
+    }
+  }, [features?.allowed_providers]);
 
   function resolveProviderErrorMessage(err) {
+    if (err?.code === 'TENANT_FEATURE_BLOCKED') {
+      return mapTenantLimitReason(tenantPlanLimitReasonFromError(err));
+    }
+    if (err?.code === 'TENANT_PLAN_LIMIT') {
+      return mapTenantLimitReason(err.reason);
+    }
     const code = err?.code || err?.error || '';
     const msg = String(err?.message || '');
     if (code === 'PROVIDER_NOT_ALLOWED' || msg.includes('PROVIDER_NOT_ALLOWED')) {
@@ -438,11 +491,13 @@ export function Channels() {
       if (cr?.artifactType && cr?.artifact) {
         applyArtifactPayload(channelId, cr);
       }
-      startArtifactPolling(channelId);
+      if (advancedArtifacts) startArtifactPolling(channelId);
+      else startQrPolling(channelId);
       startPolling(channelId);
       await loadChannels();
     } catch (err) {
       console.error(err);
+      if (tryPlanLimit(err)) return;
       toast.error(resolveProviderErrorMessage(err));
     } finally {
       setLoadingProvisionId(null);
@@ -451,6 +506,7 @@ export function Channels() {
   }
 
   function startArtifactPolling(channelId) {
+    if (!advancedArtifacts) return;
     if (artifactPollRefs.current[channelId]) return;
     artifactPollRefs.current[channelId] = setInterval(async () => {
       try {
@@ -530,6 +586,7 @@ export function Channels() {
       setWhatsappAdvanced(false);
 
       await loadChannels();
+      refreshTenantLimits();
 
       setCreateSuccessKind(createdAsWhatsapp ? 'whatsapp' : 'other');
       toast.success(
@@ -539,6 +596,7 @@ export function Channels() {
       );
     } catch (err) {
       console.error(err);
+      if (tryPlanLimit(err)) return;
       toast.error(resolveProviderErrorMessage(err));
     } finally {
       setLoadingCreate(false);
@@ -621,12 +679,19 @@ export function Channels() {
   async function handleGetQr(channelId) {
     setLoadingQr(channelId);
     setQrLoadError(null);
+    setQrFlowStatus('connecting');
     setQrModalChannelId(channelId);
     setQrModalOpen(true);
     try {
       console.log('[Channels] Buscando QR para canal:', channelId);
 
-      const token = agentApi.getToken();
+      const token = agentApi.getToken() || localStorage.getItem('token');
+      if (!token) {
+        const msg = 'Sessão expirada. Faça login novamente para gerar o QR Code.';
+        setQrLoadError(msg);
+        toast.error(msg);
+        return;
+      }
       const base = (getApiBaseUrl() || '').replace(/\/$/, '');
       const path = `/api/channels/${encodeURIComponent(channelId)}/qrcode`;
       const url = base ? `${base}${path}` : path;
@@ -634,8 +699,8 @@ export function Channels() {
       const res = await fetch(url, {
         method: 'GET',
         headers: {
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'x-channel': 'whatsapp',
         },
       });
@@ -659,10 +724,48 @@ export function Channels() {
         return;
       }
 
+      const limitOrProviderCode = data?.code || data?.error;
+      if (
+        limitOrProviderCode === 'TENANT_PLAN_LIMIT' ||
+        limitOrProviderCode === 'PROVIDER_NOT_ALLOWED' ||
+        limitOrProviderCode === 'TENANT_FEATURE_BLOCKED'
+      ) {
+        openPlanLimit(
+          limitOrProviderCode === 'PROVIDER_NOT_ALLOWED'
+            ? 'provider_blocked'
+            : limitOrProviderCode === 'TENANT_FEATURE_BLOCKED'
+              ? tenantPlanLimitReasonFromError({ code: 'TENANT_FEATURE_BLOCKED', feature: data?.feature })
+              : data?.reason,
+        );
+        refreshTenantLimits();
+        setQrLoadError(null);
+        setLoadingQr(null);
+        return;
+      }
+
       if (applyQrFromResponse(data, channelId)) {
         setQrLoadError(null);
+        setQrFlowStatus('ready');
         startPolling(channelId);
+        startQrPolling(channelId);
         return;
+      }
+
+      const qrStatus = String(data?.status || '').toLowerCase();
+      if (qrStatus === 'connected') {
+        setQrFlowStatus('connected');
+        stopQrPolling();
+        setQrCode(null);
+        setQrModalOpen(false);
+        toast.success('Conectado com sucesso');
+        return;
+      }
+
+      if (qrStatus === 'error') {
+        setQrFlowStatus('error');
+        stopQrPolling();
+      } else {
+        setQrFlowStatus('waiting');
       }
 
       const msg =
@@ -675,6 +778,8 @@ export function Channels() {
       console.error('[Channels] Erro ao buscar QR:', err);
       const msg = err?.message || 'Falha ao buscar QR code.';
       setQrLoadError(msg);
+      setQrFlowStatus('error');
+      stopQrPolling();
       toast.error(msg);
     } finally {
       setLoadingQr(null);
@@ -686,6 +791,44 @@ export function Channels() {
     await handleGetQr(channelId);
   }
 
+  function stopQrPolling() {
+    if (qrPollingRef.current) {
+      clearInterval(qrPollingRef.current);
+      qrPollingRef.current = null;
+    }
+  }
+
+  function startQrPolling(channelId) {
+    if (qrPollingRef.current) return;
+    qrPollingRef.current = setInterval(async () => {
+      try {
+        const res = await channelsService.getQrCode(channelId);
+        if (!res) return;
+        const st = String(res.status || '').toLowerCase();
+        if (st === 'ready') {
+          if (applyQrFromResponse(res, channelId)) {
+            setQrFlowStatus('ready');
+          }
+        } else if (st === 'connected') {
+          stopQrPolling();
+          setQrFlowStatus('connected');
+          setQrCode(null);
+          setQrModalOpen(false);
+          setQrModalChannelId(null);
+          toast.success('Conectado com sucesso');
+        } else if (st === 'error') {
+          stopQrPolling();
+          setQrFlowStatus('error');
+        } else {
+          setQrFlowStatus('waiting');
+        }
+      } catch {
+        stopQrPolling();
+        setQrFlowStatus('error');
+      }
+    }, 5000);
+  }
+
   /** Conecta (sem recriar instância) e obtém QR ou código de pareamento. */
   async function connectThenQr(channelId) {
     setLoadingConnectId(channelId);
@@ -694,6 +837,7 @@ export function Channels() {
       toast.success('Aguardando leitura...');
     } catch (err) {
       console.error(err);
+      if (tryPlanLimit(err)) return;
       toast.error(resolveProviderErrorMessage(err));
     } finally {
       setLoadingConnectId(null);
@@ -701,6 +845,10 @@ export function Channels() {
   }
 
   async function refreshArtifact(channelId) {
+    if (!advancedArtifacts) {
+      await handleGetQr(channelId);
+      return;
+    }
     setLoadingQr(channelId);
     setQrLoadError(null);
     setQrModalChannelId(channelId);
@@ -721,6 +869,10 @@ export function Channels() {
       startPolling(channelId);
     } catch (err) {
       console.error(err);
+      if (tryPlanLimit(err)) {
+        setQrLoadError(null);
+        return;
+      }
       const msg = resolveProviderErrorMessage(err);
       setQrLoadError(msg);
       toast.error(msg);
@@ -804,20 +956,41 @@ export function Channels() {
     if (!qrModalOpen || !qrModalChannelId) return;
     const ch = channels.find((c) => c.id === qrModalChannelId);
     if (resolveWhatsappProvider(ch) !== 'waha') return;
+    startQrPolling(qrModalChannelId);
     const tick = async () => {
       try {
         const data = await channelsService.getQrCode(qrModalChannelId);
+        const st = String(data?.status || '').toLowerCase();
+        if (st === 'connected') {
+          setQrFlowStatus('connected');
+          stopQrPolling();
+          setQrModalOpen(false);
+          setQrModalChannelId(null);
+          setQrCode(null);
+          toast.success('Conectado com sucesso');
+          return;
+        }
         const hasQr = data?.qr || data?.qrCode || data?.qrcode;
-        if (hasQr) {
+        if (st === 'ready' && hasQr) {
           applyQrFromResponse(data, qrModalChannelId);
           setQrLoadError(null);
+          setQrFlowStatus('ready');
+        } else if (st === 'error') {
+          stopQrPolling();
+          setQrFlowStatus('error');
+        } else {
+          setQrFlowStatus('waiting');
         }
       } catch {
-        /* silencioso — polling principal trata status */
+        stopQrPolling();
+        setQrFlowStatus('error');
       }
     };
-    const id = setInterval(tick, 15000);
-    return () => clearInterval(id);
+    const id = setInterval(tick, 5000);
+    return () => {
+      clearInterval(id);
+      stopQrPolling();
+    };
   }, [qrModalOpen, qrModalChannelId, channels]);
 
   /** QR emitido pelo backend via captura de logs (sessão única WAHA). */
@@ -851,11 +1024,12 @@ export function Channels() {
 
     return () => {
       stopConnection();
+      stopQrPolling();
       socket.off('channel_status_update');
       Object.values(pollingRefs.current).forEach(clearInterval);
       Object.values(artifactPollRefs.current).forEach(clearInterval);
     };
-  }, [stopConnection]);
+  }, [stopConnection, loadAllowedProviders]);
 
   const agentMap = Object.fromEntries((agents || []).map((a) => [a.id, a]));
   const getAgentName = (id) => agentMap[id]?.name || '—';
@@ -933,11 +1107,13 @@ export function Channels() {
       const phase = ch.flowPhase;
       const st = (ch.status || '').toLowerCase();
       const norm = normalizeChannelStatus(ch.status);
+      const msgBlocked = atMessageLimit || limitsLoading;
       const busy =
         loadingConnectId === ch.id ||
         loadingQr === ch.id ||
         loadingCreate ||
         loadingProvisionId === ch.id ||
+        msgBlocked ||
         (connectionState === CHANNEL_CONNECTION_STATE.GENERATING_QR && loadingConnectId === ch.id);
       const isConnected =
         norm === 'CONNECTED' ||
@@ -952,6 +1128,7 @@ export function Channels() {
             type="button"
             style={{ ...styles.actionButton, ...styles.actionButtonPrimary }}
             disabled={busy}
+            title={msgBlocked ? 'Cota de mensagens do período esgotada' : undefined}
             onClick={() => runSaasProvisionConnect(ch.id)}
           >
             {loadingProvisionId === ch.id
@@ -986,6 +1163,7 @@ export function Channels() {
               type="button"
               style={styles.btnConnectWhatsapp}
               disabled={busy}
+              title={msgBlocked ? 'Cota de mensagens do período esgotada' : undefined}
               onClick={() => {
                 restorePairingOrQr(ch.id);
                 connectThenQr(ch.id);
@@ -1187,6 +1365,7 @@ export function Channels() {
       setChannels((prev) => prev.filter((c) => c.id !== id));
       setDeleteChannel(null);
       toast.success('Canal excluído com sucesso.');
+      refreshTenantLimits();
     } catch (err) {
       console.error(err);
       toast.error(err.message || 'Erro ao excluir canal.');
@@ -1248,7 +1427,10 @@ export function Channels() {
     <div className={chLayout.page}>
       <div className={chLayout.content}>
         <header className={chLayout.header}>
-          <h1 className={chLayout.title}>Canais</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <h1 className={chLayout.title}>Canais</h1>
+            {!limitsLoading && plan != null ? <TenantPlanBadge plan={plan} /> : null}
+          </div>
           <p className={chLayout.subtitle}>
             Centralize o atendimento: veja seus canais à esquerda e crie novos à direita. A conexão (QR, etc.) fica na
             lista — não é automática após criar.
@@ -1450,7 +1632,21 @@ export function Channels() {
                   setWhatsappAdvanced(false);
                 }}
                 providersBlocked={channelType === 'whatsapp' && allowedProviders.length === 0}
+                channelLimitReached={!canCreateChannels}
+                limitsLoading={limitsLoading}
               />
+              {channelType === 'whatsapp' && features?.providerFallback === false ? (
+                <p
+                  style={{
+                    margin: '0.5rem 0 0',
+                    fontSize: '0.78rem',
+                    color: 'var(--text-muted)',
+                    lineHeight: 1.45,
+                  }}
+                >
+                  Seu plano não inclui fallback automático entre providers no provisionamento da instância.
+                </p>
+              ) : null}
             </div>
           </div>
         </div>
@@ -1459,6 +1655,7 @@ export function Channels() {
           <div
             style={styles.modalOverlay}
             onClick={() => {
+              stopQrPolling();
               setQrModalOpen(false);
               setQrModalChannelId(null);
               setQrLoadError(null);
@@ -1472,6 +1669,15 @@ export function Channels() {
             >
               <h2 style={styles.modalTitle}>QR Code WhatsApp</h2>
               <div style={{ textAlign: 'center', marginTop: '0.5rem', minHeight: 120 }}>
+                {qrModalOpen && (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.35rem' }}>
+                    {qrFlowStatus === 'connecting' && 'Conectando...'}
+                    {qrFlowStatus === 'waiting' && 'Aguardando QR...'}
+                    {qrFlowStatus === 'ready' && 'QR pronto para leitura'}
+                    {qrFlowStatus === 'connected' && 'Conectado com sucesso'}
+                    {qrFlowStatus === 'error' && 'Falha temporária ao obter QR'}
+                  </p>
+                )}
                 {loadingQr === qrModalChannelId && !qrCode && (
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Carregando QR…</p>
                 )}
@@ -1521,6 +1727,7 @@ export function Channels() {
                   type="button"
                   style={styles.buttonPrimary}
                   onClick={() => {
+                    stopQrPolling();
                     setQrModalOpen(false);
                     setQrModalChannelId(null);
                     setQrLoadError(null);
@@ -1705,6 +1912,17 @@ export function Channels() {
             </div>
           </div>
         )}
+
+        <UpgradePlanModal
+          open={planLimitModal.open}
+          onClose={() => setPlanLimitModal({ open: false, reason: null })}
+          reason={planLimitModal.reason}
+          plan={plan}
+          onViewPlan={() => {
+            setPlanLimitModal({ open: false, reason: null });
+            navigate('/dashboard');
+          }}
+        />
       </div>
     </div>
   );

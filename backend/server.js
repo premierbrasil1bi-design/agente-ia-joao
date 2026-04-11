@@ -40,6 +40,7 @@ import messagesRoutes from './routes/messages.routes.js';
 import alertsRoutes from './routes/alerts.routes.js';
 import providersRoutes from './routes/providers.routes.js';
 import internalWahaRoutes from './routes/internalWaha.routes.js';
+import monitoringRoutes from './routes/monitoringRoutes.js';
 import globalAdminAuth from './middlewares/globalAdminAuth.js';
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { correlationIdMiddleware } from './middleware/correlationId.middleware.js';
@@ -55,30 +56,65 @@ import { logWahaStartupConfig, testWahaConnection } from './services/wahaHttp.js
 import { logAdminAction } from './services/adminActionsLog.service.js';
 import { getProviderHealthSnapshot } from './services/providerOrchestrator.service.js';
 import { getTenantById } from './repositories/tenant.repository.js';
-import { filterAllowedProvidersForTenant, getAllowedProviders } from './utils/tenantAllowedProviders.js';
+import { getEffectiveProvidersForTenant } from './services/providerPlanAccess.service.js';
 import { startWahaQrLogCapture } from './services/wahaQrCapture.js';
+import { log, overrideConsoleWithStructuredLog } from './utils/logger.js';
+import { requestIdMiddleware } from './middlewares/requestId.js';
+import { getSystemMetrics } from './services/metrics.service.js';
+import {
+  addSnapshot,
+  getLatestSnapshot,
+  getSnapshots,
+  snapshotFromMetrics,
+} from './services/monitoringSnapshotStore.js';
+import {
+  addSnapshot as addSnapshotRedis,
+  getLatestSnapshot as getLatestSnapshotRedis,
+} from './services/redisMonitoringStore.js';
+import { canUseRealtimeMonitoring } from './services/tenantLimits.service.js';
+import agentTenantLimitsRoutes from './routes/agentTenantLimits.routes.js';
+import billingRoutes, { billingWebhookHandler } from './routes/billingRoutes.js';
 
 dotenv.config();
+overrideConsoleWithStructuredLog();
 
 const WAHA_API_URL = process.env.WAHA_API_URL || null;
 
 if (!WAHA_API_URL) {
-  console.warn('[WAHA] Não configurado, integração desativada');
+  log.warn({ event: 'WAHA_NOT_CONFIGURED', context: 'service' });
 }
 
-console.log('[BOOT] WAHA:', WAHA_API_URL || 'NOT CONFIGURED');
+log.info({ event: 'BOOT_WAHA', context: 'service', metadata: { configured: Boolean(WAHA_API_URL) } });
 logWahaStartupConfig();
-console.log('[BOOT] REDIS:', process.env.REDIS_HOST || 'MISSING');
-console.log('[BOOT] DATABASE:', process.env.DATABASE_URL ? 'OK' : 'MISSING');
-console.log('[REDIS CONFIG]', {
-  host: process.env.REDIS_HOST,
-  port: process.env.REDIS_PORT,
+log.info({
+  event: 'BOOT_REDIS',
+  context: 'service',
+  metadata: { hasRedisHost: Boolean(process.env.REDIS_HOST), redisPort: process.env.REDIS_PORT || null },
+});
+log.info({
+  event: 'BOOT_DATABASE',
+  context: 'service',
+  metadata: { hasDatabaseUrl: Boolean(process.env.DATABASE_URL) },
 });
 
 validateChannelProvidersConfig();
 
-process.on('unhandledRejection', console.error);
-process.on('uncaughtException', console.error);
+process.on('unhandledRejection', (err) => {
+  log.error({
+    event: 'UNHANDLED_REJECTION',
+    context: 'service',
+    error: err?.message || String(err),
+    stack: err?.stack,
+  });
+});
+process.on('uncaughtException', (err) => {
+  log.error({
+    event: 'UNCAUGHT_EXCEPTION',
+    context: 'service',
+    error: err?.message || String(err),
+    stack: err?.stack,
+  });
+});
 
 const app = express();
 const PORT = config.port || 3000;
@@ -133,12 +169,32 @@ app.use((req, res, next) => {
 });
 
 // 2) Log de requisições (antes das rotas)
+app.use(requestIdMiddleware);
 app.use((req, res, next) => {
-  console.log(`[REQ] ${req.method} ${req.url}`);
+  log.info({
+    event: 'HTTP_REQUEST',
+    context: 'route',
+    tenantId: req.tenantId ?? req.user?.tenantId ?? null,
+    metadata: {
+      method: req.method,
+      url: req.url,
+      requestId: req.requestId ?? null,
+    },
+  });
   next();
 });
 
-// 3) Body parser (antes das rotas)
+// 3) Webhook de billing — corpo bruto (assinatura Stripe / JSON Asaas)
+app.post(
+  '/api/billing/webhook',
+  express.raw({
+    type: (req) => String(req.headers['content-type'] || '').toLowerCase().includes('application/json'),
+    limit: '2mb',
+  }),
+  billingWebhookHandler,
+);
+
+// 4) Body parser (demais rotas)
 app.use(express.json());
 app.use(correlationIdMiddleware);
 
@@ -181,7 +237,12 @@ app.get('/api/health/providers', async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
-    console.error('[PROVIDER HEALTH] snapshot error:', err?.message || err);
+    log.error({
+      event: 'PROVIDER_HEALTH_SNAPSHOT_ERROR',
+      context: 'service',
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
     return res.status(200).json({
       success: true,
       providers: {},
@@ -253,8 +314,13 @@ app.get('/api/providers/health', globalAdminAuth, async (req, res) => {
     const tenant = await getTenantById(tenantId);
     if (!tenant) return res.status(404).json({ error: 'Tenant não encontrado.' });
     const trackedProviders = Object.keys(health);
-    const allowedProviders = getAllowedProviders(tenant);
-    const availableProviders = filterAllowedProvidersForTenant(tenant, trackedProviders);
+    const allowedProviders = getEffectiveProvidersForTenant(tenant);
+    const effectiveSet = new Set(
+      allowedProviders.map((p) => String(p || '').toLowerCase().trim()).filter(Boolean),
+    );
+    const availableProviders = trackedProviders
+      .map((p) => String(p || '').toLowerCase().trim())
+      .filter((p) => effectiveSet.has(p));
     return res.status(200).json({
       ...base,
       tenantId,
@@ -262,7 +328,12 @@ app.get('/api/providers/health', globalAdminAuth, async (req, res) => {
       availableProviders,
     });
   } catch (err) {
-    console.error('[providers] health:', err.message);
+    log.error({
+      event: 'PROVIDERS_HEALTH_ERROR',
+      context: 'route',
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
     return res.status(500).json({ error: 'Erro ao obter health de providers.' });
   }
 });
@@ -292,6 +363,8 @@ app.use('/admin/tenants', adminTenantRoutes);
 
 app.use('/api/tenant', tenantUsageRoutes);
 
+app.use('/api/billing', billingRoutes);
+
 /* =========================================================
    API MULTI-TENANT ENCAPSULADA
 ========================================================= */
@@ -314,6 +387,7 @@ agentRouter.use('/messages', messagesRoutes);
 agentRouter.use('/alerts', alertsRoutes);
 agentRouter.use('/providers', providersRoutes);
 agentRouter.use('/agents', agentsRoutes);
+agentRouter.use('/tenant', agentTenantLimitsRoutes);
 agentRouter.use(contextRoutes);
 agentRouter.use(inboundRoutes);
 
@@ -327,6 +401,7 @@ apiRouter.use('/channels', agentAuth, requireTenant, channelsRoutes);
 apiRouter.use('/messages', agentAuth, requireTenant, messagesRoutes);
 apiRouter.use('/alerts', agentAuth, requireTenant, alertsRoutes);
 apiRouter.use('/providers', agentAuth, requireTenant, providersRoutes);
+apiRouter.use('/monitoring', agentAuth, requireTenant, monitoringRoutes);
 apiRouter.use('/evolution', evolutionIngressRoutes);
 apiRouter.use('/evolution', evolutionGatewayRoutes);
 apiRouter.use('/context', agentAuth, requireTenant, agentContextRoutes);
@@ -361,7 +436,13 @@ app.use((req, res) => sendNotFound(res, 'Rota não encontrada.'));
 ========================================================= */
 
 app.use((err, req, res, next) => {
-  console.error('Erro global:', err);
+  log.error({
+    event: 'GLOBAL_ERROR_HANDLER',
+    context: 'route',
+    tenantId: req?.tenantId ?? req?.user?.tenantId ?? null,
+    error: err?.message || String(err),
+    stack: err?.stack,
+  });
 
   if (res.headersSent) {
     return next(err);
@@ -442,7 +523,7 @@ io.use((socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  console.log('[socket.io] Cliente conectado', socket.id);
+  log.info({ event: 'SOCKET_CLIENT_CONNECTED', context: 'service', metadata: { socketId: socket.id } });
   const tenantId = socket.data?.tenantId ? String(socket.data.tenantId) : '';
   if (tenantId) {
     socket.join(tenantRoom(tenantId));
@@ -502,25 +583,133 @@ io.on('connection', (socket) => {
   });
 });
 
+let lastHealthSnapshotAt = 0;
+/** @type {Map<string, number>} */
+const realtimeMetricsBlockedLoggedAt = new Map();
+const REALTIME_BLOCKED_LOG_MS = 60_000;
+
+setInterval(async () => {
+  try {
+    const tenantIds = new Set();
+    for (const socket of io.of('/').sockets.values()) {
+      const tenantId = String(socket?.data?.tenantId || '').trim();
+      if (tenantId) tenantIds.add(tenantId);
+    }
+    for (const tenantId of tenantIds) {
+      const metrics = await getSystemMetrics(tenantId);
+      const snap = snapshotFromMetrics(metrics);
+      if (snap) {
+        let stored = false;
+        try {
+          stored = await addSnapshotRedis(tenantId, snap);
+        } catch (err) {
+          log.warn({
+            event: 'REDIS_MONITORING_FALLBACK',
+            context: 'service',
+            tenantId,
+            metadata: { reason: err?.message || 'redis_unavailable' },
+          });
+          log.error({
+            event: 'REDIS_MONITORING_WRITE_FAILED',
+            context: 'service',
+            tenantId,
+            error: err?.message || String(err),
+          });
+          stored = addSnapshot(tenantId, snap);
+        }
+        if (stored) {
+          log.info({
+            event: 'MONITORING_SNAPSHOT_STORED',
+            context: 'service',
+            tenantId,
+            metadata: { bufferSize: getSnapshots(tenantId, 60).length },
+          });
+        }
+      }
+      let latestSnapshot = null;
+      try {
+        latestSnapshot = await getLatestSnapshotRedis(tenantId);
+      } catch (err) {
+        log.warn({
+          event: 'REDIS_MONITORING_FALLBACK',
+          context: 'service',
+          tenantId,
+          metadata: { reason: err?.message || 'redis_read_unavailable' },
+        });
+        latestSnapshot = getLatestSnapshot(tenantId);
+      }
+      const rt = await canUseRealtimeMonitoring(tenantId, { skipFeatureBlockedLog: true });
+      if (rt.allowed) {
+        io.to(`tenant:${tenantId}`).emit('metrics:update', { ...metrics, latestSnapshot });
+        io.to(`tenant:${tenantId}`).emit('queue:update', metrics.queue);
+      } else {
+        const now = Date.now();
+        const last = realtimeMetricsBlockedLoggedAt.get(tenantId) || 0;
+        if (now - last >= REALTIME_BLOCKED_LOG_MS) {
+          realtimeMetricsBlockedLoggedAt.set(tenantId, now);
+          log.warn({
+            event: 'TENANT_FEATURE_BLOCKED',
+            context: 'service',
+            tenantId,
+            plan: rt.limits?.plan ?? null,
+            reason: 'realtime_socket_metrics_skipped',
+            metadata: {
+              limits: rt.limits,
+              usage: rt.usage,
+            },
+          });
+        }
+      }
+    }
+    if (Date.now() - lastHealthSnapshotAt >= 30_000) {
+      lastHealthSnapshotAt = Date.now();
+      const metrics = await getSystemMetrics(null);
+      log.info({
+        event: 'SYSTEM_HEALTH_SNAPSHOT',
+        context: 'service',
+        metadata: { metrics },
+      });
+    }
+  } catch (err) {
+    log.error({
+      event: 'SYSTEM_METRICS_BROADCAST_ERROR',
+      context: 'service',
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
+  }
+}, 5_000);
+
 // O HTTP deve subir e responder mesmo se infra assíncrona (Redis/BullMQ) estiver indisponível.
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server rodando na porta ${PORT}`);
+  log.info({ event: 'SERVER_STARTED', context: 'service', metadata: { port: PORT } });
   (async () => {
     try {
       await pool.query('SELECT 1');
-      console.log('[DB] Connected successfully');
+      log.info({ event: 'DB_CONNECTED', context: 'service' });
     } catch (err) {
-      console.error('[DB] Connection failed:', err?.message || err);
+      log.error({
+        event: 'DB_CONNECTION_FAILED',
+        context: 'service',
+        error: err?.message || String(err),
+        stack: err?.stack,
+      });
     }
   })();
   startChannelMonitor();
   (async () => {
     try {
       await checkProviderHealth('waha');
-      console.log('[PROVIDER HEALTH] WAHA ok');
+      log.info({ event: 'PROVIDER_HEALTH_OK', context: 'service', provider: 'waha' });
       await testWahaConnection();
     } catch (e) {
-      console.error('[PROVIDER HEALTH] WAHA error:', e?.message || e);
+      log.error({
+        event: 'PROVIDER_HEALTH_ERROR',
+        context: 'service',
+        provider: 'waha',
+        error: e?.message || String(e),
+        stack: e?.stack,
+      });
     }
   })();
 });
@@ -535,21 +724,28 @@ server.listen(PORT, '0.0.0.0', () => {
       await pubClient.connect();
       await subClient.connect();
       io.adapter(createAdapter(pubClient, subClient));
-      console.log('[socket.io] Redis adapter ativo');
+      log.info({ event: 'SOCKET_REDIS_ADAPTER_ENABLED', context: 'service' });
     } catch (e) {
-      console.warn('[socket.io] Redis adapter indisponível, seguindo em modo single-instance:', e?.message || e);
+      log.warn({
+        event: 'SOCKET_REDIS_ADAPTER_UNAVAILABLE',
+        context: 'service',
+        error: e?.message || String(e),
+      });
     }
 
     await initEvolutionQueueInfra();
     if (process.env.EVOLUTION_WORKER_IN_PROCESS !== 'false') {
       startEvolutionWorker();
     } else {
-      console.warn(
-        '[server] EVOLUTION_WORKER_IN_PROCESS=false — worker BullMQ deve estar no PM2 (worker-evolution).'
-      );
+      log.warn({ event: 'EVOLUTION_WORKER_EXTERNAL_EXPECTED', context: 'service' });
     }
     await runChannelsSchemaGuard();
   } catch (err) {
-    console.error('[server] Falha ao inicializar infra Redis/BullMQ (servidor HTTP segue ativo):', err?.message || err);
+    log.error({
+      event: 'REDIS_BULLMQ_INIT_FAILED',
+      context: 'service',
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
   }
 })();

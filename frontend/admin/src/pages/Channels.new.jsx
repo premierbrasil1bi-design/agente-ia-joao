@@ -11,6 +11,10 @@ import {
   getStatus as getStatusApi,
 } from '../api/channels.ts';
 import { mapChannelToConnectionState, ConnectionStateBanner } from '@omnia/channel-core';
+import { useTenantLimitsContext } from '../context/TenantLimitsContext.jsx';
+import { TenantPlanBadge } from '../components/tenant/TenantPlanBadge.jsx';
+import { UpgradePlanModal } from '../components/tenant/UpgradePlanModal.jsx';
+import { isTenantPlanLimitError, tenantPlanLimitReasonFromError } from '../utils/mapTenantLimitReason.js';
 
 const CHANNEL_TYPES = [
   { value: 'whatsapp', label: 'WhatsApp' },
@@ -138,6 +142,50 @@ export function Channels() {
   const navigate = useNavigate();
   const channelsApi = useMemo(() => createChannelsApi(getToken, () => { logout(); navigate('/login', { replace: true }); }), [getToken, logout, navigate]);
   const agentsApi = useMemo(() => createAgentsApi(getToken, () => { logout(); navigate('/login', { replace: true }); }), [getToken, logout, navigate]);
+  const { plan, limits, usage, features, refresh: refreshTenantLimits, loading: limitsLoading } =
+    useTenantLimitsContext();
+
+  const [planLimitModal, setPlanLimitModal] = useState({ open: false, reason: null });
+
+  const atChannelLimit =
+    limits?.maxChannels != null &&
+    Number(limits.maxChannels) > 0 &&
+    Number(usage?.channels ?? 0) >= Number(limits.maxChannels);
+  const canCreateChannels =
+    features?.can_create_channels != null
+      ? Boolean(features.can_create_channels)
+      : !atChannelLimit;
+  const atMessageLimit =
+    limits?.maxMessages != null &&
+    Number(limits.maxMessages) > 0 &&
+    Number(usage?.messages ?? 0) >= Number(limits.maxMessages);
+
+  const visibleProviders = useMemo(() => {
+    const allow = features?.allowed_providers;
+    if (Array.isArray(allow) && allow.length > 0) {
+      return PROVIDERS.filter((p) => allow.includes(p.value));
+    }
+    return PROVIDERS;
+  }, [features?.allowed_providers]);
+
+  const openPlanLimit = (reason) => {
+    setPlanLimitModal({ open: true, reason: reason ?? null });
+  };
+
+  const tryPlanLimit = (err) => {
+    if (!isTenantPlanLimitError(err)) return false;
+    openPlanLimit(tenantPlanLimitReasonFromError(err));
+    refreshTenantLimits();
+    return true;
+  };
+
+  useEffect(() => {
+    setCreateForm((s) => {
+      if (visibleProviders.some((p) => p.value === s.provider)) return s;
+      const next = visibleProviders[0]?.value || 'waha';
+      return { ...s, provider: next };
+    });
+  }, [visibleProviders]);
 
   const [cards, setCards] = useState([]);
   const [agents, setAgents] = useState([]);
@@ -407,6 +455,10 @@ export function Channels() {
     try {
       setCreateError('');
       setSaving(true);
+      if (!canCreateChannels) {
+        setCreateError('Limite do plano atingido.');
+        return;
+      }
       if (!createForm.name.trim()) throw new Error('Informe o nome do canal.');
       if (!createForm.agent_id) throw new Error('Selecione um agente.');
       const provider_config = buildProviderConfig(createForm);
@@ -427,7 +479,12 @@ export function Channels() {
       setCreateForm(makeEmptyForm());
       setToast('Canal criado com sucesso.');
       refresh();
+      refreshTenantLimits();
     } catch (err) {
+      if (tryPlanLimit(err)) {
+        setCreateError('');
+        return;
+      }
       setCreateError(err.message || 'Erro ao criar canal.');
     } finally {
       setSaving(false);
@@ -451,6 +508,10 @@ export function Channels() {
       setToast('Gerando QR Code...');
       refresh();
     } catch (err) {
+      if (tryPlanLimit(err)) {
+        setConnectionError(null);
+        return;
+      }
       setConnectionError(err?.message || 'Erro ao conectar');
       setToast(formatApiError(err));
     } finally {
@@ -503,10 +564,29 @@ export function Channels() {
     <>
       <div style={styles.header}>
         <div>
-          <h2 style={styles.title}>Canais</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <h2 style={styles.title}>Canais</h2>
+            {!limitsLoading && plan != null ? <TenantPlanBadge plan={plan} /> : null}
+          </div>
           <p style={styles.subtitle}>Monitoramento e gestão de canais omnichannel</p>
         </div>
-        <button style={styles.primaryBtn} onClick={() => { setCreateOpen(true); setCreateError(''); }}>+ Novo canal</button>
+        <button
+          type="button"
+          style={{
+            ...styles.primaryBtn,
+            opacity: !canCreateChannels || limitsLoading ? 0.55 : 1,
+            cursor: !canCreateChannels || limitsLoading ? 'not-allowed' : 'pointer',
+          }}
+          title={!canCreateChannels ? 'Seu plano atingiu o limite de canais' : ''}
+          disabled={!canCreateChannels || limitsLoading}
+          onClick={() => {
+            if (!canCreateChannels) return;
+            setCreateOpen(true);
+            setCreateError('');
+          }}
+        >
+          + Novo canal
+        </button>
       </div>
 
       {error && <div style={styles.error}>{error}</div>}
@@ -522,7 +602,15 @@ export function Channels() {
       {cards.length === 0 ? (
         <div style={styles.empty}>
           <p>Nenhum canal conectado ainda</p>
-          <button style={styles.primaryBtn} onClick={() => setCreateOpen(true)}>+ Criar canal</button>
+          <button
+            type="button"
+            style={{ ...styles.primaryBtn, opacity: !canCreateChannels || limitsLoading ? 0.55 : 1 }}
+            title={!canCreateChannels ? 'Seu plano atingiu o limite de canais' : ''}
+            disabled={!canCreateChannels || limitsLoading}
+            onClick={() => canCreateChannels && setCreateOpen(true)}
+          >
+            + Criar canal
+          </button>
         </div>
       ) : (
         <div style={styles.cardsGrid}>
@@ -543,11 +631,48 @@ export function Channels() {
                   {card.lastError ? <div style={{ color: '#c0392b' }}><b>Último erro:</b> {card.lastError}</div> : null}
                 </div>
                 <div style={styles.actions}>
-                  {card.status === 'offline' && <button style={styles.primaryBtn} onClick={() => connectChannel(card)} disabled={Boolean(connectingMap[card.id])}>{connectingMap[card.id] ? 'Conectando...' : 'Conectar WhatsApp'}</button>}
-                  {card.status === 'instavel' && <button style={styles.primaryBtn} onClick={() => connectChannel(card)} disabled={Boolean(connectingMap[card.id])}>{connectingMap[card.id] ? 'Conectando...' : 'Reconectar WhatsApp'}</button>}
+                  {card.status === 'offline' && (
+                    <button
+                      type="button"
+                      style={{ ...styles.primaryBtn, opacity: atMessageLimit || limitsLoading ? 0.55 : 1 }}
+                      title={atMessageLimit ? 'Cota de mensagens do período esgotada' : ''}
+                      onClick={() => connectChannel(card)}
+                      disabled={Boolean(connectingMap[card.id]) || atMessageLimit || limitsLoading}
+                    >
+                      {connectingMap[card.id] ? 'Conectando...' : 'Conectar WhatsApp'}
+                    </button>
+                  )}
+                  {card.status === 'instavel' && (
+                    <button
+                      type="button"
+                      style={{ ...styles.primaryBtn, opacity: atMessageLimit || limitsLoading ? 0.55 : 1 }}
+                      title={atMessageLimit ? 'Cota de mensagens do período esgotada' : ''}
+                      onClick={() => connectChannel(card)}
+                      disabled={Boolean(connectingMap[card.id]) || atMessageLimit || limitsLoading}
+                    >
+                      {connectingMap[card.id] ? 'Conectando...' : 'Reconectar WhatsApp'}
+                    </button>
+                  )}
                   {card.status === 'online' && <button style={styles.btn} disabled>Conectado</button>}
                   {card.status === 'online' && <button style={styles.primaryBtn} onClick={() => setDetail(card)}>Gerenciar</button>}
-                  <button style={styles.btn} onClick={() => setSwitchTarget({ ...card, providerDraft: card.api, evolutionInstanceName: card.raw?.provider_config?.instanceName || '', zapiInstanceId: card.raw?.provider_config?.instanceId || '', zapiToken: card.raw?.provider_config?.token || '' })}>Trocar API</button>
+                  <button
+                    style={styles.btn}
+                    onClick={() => {
+                      const cur = String(card.api || '').toLowerCase();
+                      const draft = visibleProviders.some((p) => p.value === cur)
+                        ? cur
+                        : (visibleProviders[0]?.value || cur);
+                      setSwitchTarget({
+                        ...card,
+                        providerDraft: draft,
+                        evolutionInstanceName: card.raw?.provider_config?.instanceName || '',
+                        zapiInstanceId: card.raw?.provider_config?.instanceId || '',
+                        zapiToken: card.raw?.provider_config?.token || '',
+                      });
+                    }}
+                  >
+                    Trocar API
+                  </button>
                   {card.status === 'online' && <button style={styles.btnDanger} onClick={() => disconnectChannel(card)}>Desconectar</button>}
                   <button style={styles.btn} onClick={() => setDetail(card)}>Ver detalhes</button>
                 </div>
@@ -564,7 +689,7 @@ export function Channels() {
             <form onSubmit={createChannel}>
               <div style={styles.field}><label style={styles.label}>Nome do canal</label><input style={styles.input} value={createForm.name} onChange={(e) => setCreateForm((s) => ({ ...s, name: e.target.value }))} /></div>
               <div style={styles.field}><label style={styles.label}>Tipo de canal</label><select style={styles.input} value={createForm.type} onChange={(e) => setCreateForm((s) => ({ ...s, type: e.target.value }))}>{CHANNEL_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</select></div>
-              <div style={styles.field}><label style={styles.label}>API</label><select style={styles.input} value={createForm.provider} onChange={(e) => setCreateForm((s) => ({ ...s, provider: e.target.value }))}>{PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</select></div>
+              <div style={styles.field}><label style={styles.label}>API</label><select style={styles.input} value={createForm.provider} onChange={(e) => setCreateForm((s) => ({ ...s, provider: e.target.value }))}>{visibleProviders.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</select></div>
               {createForm.provider === 'waha' && <div style={styles.field}><label style={styles.label}>Sessão WAHA</label><input style={styles.input} value="default" disabled /></div>}
               {createForm.provider === 'evolution' && (
                 <div style={styles.field}>
@@ -589,7 +714,7 @@ export function Channels() {
               {createError && <div style={styles.error}>{createError}</div>}
               <div style={styles.formActions}>
                 <button type="button" style={styles.btn} onClick={() => setCreateOpen(false)}>Cancelar</button>
-                <button type="submit" style={styles.primaryBtn} disabled={saving}>{saving ? 'Criando...' : 'Criar canal'}</button>
+                <button type="submit" style={styles.primaryBtn} disabled={saving || !canCreateChannels}>{saving ? 'Criando...' : 'Criar canal'}</button>
               </div>
             </form>
           </div>
@@ -600,7 +725,7 @@ export function Channels() {
         <div style={styles.overlay} onClick={() => setSwitchTarget(null)}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h3 style={styles.modalTitle}>Trocar API</h3>
-            <div style={styles.field}><label style={styles.label}>API</label><select style={styles.input} value={switchTarget.providerDraft} onChange={(e) => setSwitchTarget((s) => ({ ...s, providerDraft: e.target.value }))}>{PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</select></div>
+            <div style={styles.field}><label style={styles.label}>API</label><select style={styles.input} value={switchTarget.providerDraft} onChange={(e) => setSwitchTarget((s) => ({ ...s, providerDraft: e.target.value }))}>{visibleProviders.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</select></div>
             {(switchTarget.providerDraft === 'evolution') && <div style={styles.field}><label style={styles.label}>Instance Name</label><input style={styles.input} value={switchTarget.evolutionInstanceName} onChange={(e) => setSwitchTarget((s) => ({ ...s, evolutionInstanceName: e.target.value }))} /></div>}
             {(switchTarget.providerDraft === 'zapi' || switchTarget.providerDraft === 'official') && (
               <>
@@ -638,6 +763,17 @@ export function Channels() {
           </div>
         </div>
       )}
+
+      <UpgradePlanModal
+        open={planLimitModal.open}
+        onClose={() => setPlanLimitModal({ open: false, reason: null })}
+        reason={planLimitModal.reason}
+        plan={plan}
+        onViewPlan={() => {
+          setPlanLimitModal({ open: false, reason: null });
+          navigate('/');
+        }}
+      />
 
       {toast && <div style={{ position: 'fixed', right: 16, bottom: 16, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', borderRadius: 8, padding: '10px 12px', zIndex: 300 }}>{toast}</div>}
     </>

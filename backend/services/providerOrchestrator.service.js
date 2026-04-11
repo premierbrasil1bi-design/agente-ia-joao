@@ -6,8 +6,10 @@ import {
   tryConsumeTenantMessageQuota,
   refundTenantMessageQuota,
 } from '../repositories/tenant.repository.js';
-import { filterAllowedProvidersForTenant, getAllowedProviders } from '../utils/tenantAllowedProviders.js';
 import { BILLING_CYCLE_DAYS } from './tenantMessageLimit.service.js';
+import { getEffectiveProvidersForTenant } from './providerPlanAccess.service.js';
+import { assertCanSendMessage, TenantPlanLimitBlockedError } from './tenantLimitsGuard.js';
+import { log } from '../utils/logger.js';
 import {
   logTenantMessageUsageAsync,
   extractProviderMessageIdForAudit,
@@ -116,15 +118,33 @@ export async function sendMessageWithFallback(channel, payload) {
   if (tenant && channel?.tenant_id) {
     tenant = await refreshTenantAfterBillingCycleCheck(channel.tenant_id, BILLING_CYCLE_DAYS);
   }
-  const providersFiltered = tenant ? filterAllowedProvidersForTenant(tenant, providers) : providers;
-  if (tenant) {
-    console.info('[ORCHESTRATOR] filtered providers by tenant plan', {
-      tenantId: channel.tenant_id,
-      requested: providers,
-      filtered: providersFiltered,
-      allowedProviders: getAllowedProviders(tenant),
-    });
+
+  if (channel?.tenant_id) {
+    try {
+      await assertCanSendMessage(channel.tenant_id);
+    } catch (e) {
+      if (e instanceof TenantPlanLimitBlockedError) {
+        log.warn({
+          event: 'TENANT_LIMIT_BLOCKED',
+          context: 'orchestrator',
+          tenantId: channel.tenant_id,
+          metadata: { check: 'assertCanSendMessage', reason: e.reason },
+        });
+        const err = new Error(e.message || 'Limite do plano atingido');
+        err.code = 'TENANT_PLAN_LIMIT';
+        err.reason = e.reason;
+        err.httpStatus = 429;
+        throw err;
+      }
+      throw e;
+    }
   }
+
+  const effective = tenant ? getEffectiveProvidersForTenant(tenant) : [];
+  const allowedSet = new Set(effective);
+  const providersFiltered = tenant
+    ? providers.filter((p) => allowedSet.has(String(p || '').toLowerCase().trim()))
+    : providers;
   if (providersFiltered.length === 0) {
     const e = new Error('Nenhum provider permitido disponível para este tenant/plano.');
     e.code = 'NO_ALLOWED_PROVIDER_AVAILABLE';
@@ -133,7 +153,7 @@ export async function sendMessageWithFallback(channel, payload) {
       tried: [],
       requestedProvider: providers[0] || null,
       fallbackProviders: providers.slice(1),
-      allowedProviders: tenant ? getAllowedProviders(tenant) : [],
+      allowedProviders: effective,
     };
     throw e;
   }
@@ -148,8 +168,15 @@ export async function sendMessageWithFallback(channel, payload) {
       }
       const max = Number(t.max_messages ?? 0);
       const used = Math.max(0, Number(t.messages_used_current_period ?? 0));
+      log.warn({
+        event: 'TENANT_LIMIT_BLOCKED',
+        context: 'orchestrator',
+        tenantId: channel.tenant_id,
+        metadata: { check: 'tryConsumeTenantMessageQuota', max_messages: max, used },
+      });
       const e = new Error('Limite de mensagens do período excedido para este tenant.');
-      e.code = 'MESSAGE_LIMIT_EXCEEDED';
+      e.code = 'TENANT_PLAN_LIMIT';
+      e.reason = 'Cota de mensagens do período esgotada';
       e.httpStatus = 429;
       e.details = {
         max_messages: max,
@@ -227,7 +254,7 @@ export async function sendMessageWithFallback(channel, payload) {
     errors,
     requestedProvider: providers[0] || null,
     fallbackProviders: providers.slice(1),
-    allowedProviders: tenant ? getAllowedProviders(tenant) : providersFiltered,
+    allowedProviders: tenant ? getEffectiveProvidersForTenant(tenant) : providersFiltered,
   };
   throw e;
 }

@@ -1,9 +1,12 @@
-const KNOWN_WHATSAPP_PROVIDERS = ['evolution', 'waha', 'zapi'];
+const KNOWN_WHATSAPP_PROVIDERS = ['evolution', 'waha', 'zapi', 'official'];
 
 export function sanitizeAllowedProviders(input) {
   if (!Array.isArray(input)) return [];
   const cleaned = input
-    .map((p) => String(p || '').toLowerCase().trim())
+    .map((p) => {
+      const s = String(p || '').toLowerCase().trim();
+      return s === 'whatsapp_oficial' ? 'official' : s;
+    })
     .filter((p) => KNOWN_WHATSAPP_PROVIDERS.includes(p));
   return [...new Set(cleaned)];
 }

@@ -121,3 +121,99 @@
   font-weight: 600;
   color: var(--text);
 }
+
+.featureCardSpacer {
+  margin-top: var(--space-5);
+}
+
+.featureRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.featureRow:last-child {
+  border-bottom: none;
+}
+
+.featureRowBlock {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.featureRowBlock:last-of-type {
+  border-bottom: none;
+}
+
+.featureRowMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.featureTitle {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: var(--space-2);
+  color: var(--text);
+}
+
+.featureMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.historySummary {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+  max-width: 28rem;
+}
+
+.historySummaryLine {
+  font-family: ui-monospace, monospace;
+}
+
+.toast {
+  position: fixed;
+  bottom: 1.25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+  padding: 0.65rem 1.25rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  max-width: min(420px, calc(100vw - 2rem));
+  text-align: center;
+}
+
+.toastInfo {
+  background: var(--surface, #1e293b);
+  color: var(--text, #f8fafc);
+  border: 1px solid var(--border, #334155);
+}
+
+.historyBadgeWrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.featureSwitch {
+  width: 2.75rem;
+  height: 1.5rem;
+  accent-color: var(--accent, #2563eb);
+  cursor: pointer;
+}

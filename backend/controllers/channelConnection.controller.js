@@ -25,6 +25,10 @@ import {
   emitChannelSocketEvent,
 } from '../utils/channelRealtime.js';
 import { ProviderAccessError } from '../services/providerAccess.service.js';
+import * as tenantLimits from '../services/tenantLimits.service.js';
+import { sendTenantPlanLimit } from '../utils/tenantPlanLimitHttp.js';
+import { assertTenantFeature, TenantFeatureBlockedError } from '../services/tenantFeatures.service.js';
+import { sendTenantFeatureForbidden } from '../utils/tenantFeatureHttp.js';
 
 async function getChannelFromReq(req, res) {
   const tenantId = req.tenantId || req.user?.tenantId;
@@ -101,6 +105,13 @@ export async function connectChannel(req, res) {
     const channel = await getChannelFromReq(req, res);
     if (!channel) return;
     channelRef = channel;
+
+    const planOk = await tenantLimits.canConnectChannel(channel.tenant_id, {
+      requestId: req.requestId ?? req.correlationId ?? null,
+    });
+    if (!planOk.allowed) {
+      return sendTenantPlanLimit(res, planOk);
+    }
 
     const providerLc = resolveProvider(channel);
     const result = await channelConnectionService.connectWhatsAppChannel(channel, {
@@ -473,6 +484,9 @@ export async function getConnectionArtifact(req, res) {
 
     res.status(200).json({ success: true, ...out });
   } catch (err) {
+    if (err instanceof TenantFeatureBlockedError) {
+      return sendTenantFeatureForbidden(res, err);
+    }
     if (err instanceof ProviderAccessError || err?.code === 'NO_ALLOWED_PROVIDER_AVAILABLE') {
       return res.status(err.httpStatus || 403).json({
         success: false,

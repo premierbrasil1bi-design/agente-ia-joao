@@ -13,6 +13,8 @@ import {
   transitionEvolutionChannelConnection,
 } from './channelEvolutionState.service.js';
 import { logger } from '../utils/logger.js';
+import { validateProviderAccessForTenant } from './providerAccess.service.js';
+import { hasTenantFeature } from './tenantFeatures.service.js';
 
 const INTERVAL_MS = 60 * 1000;
 
@@ -79,6 +81,25 @@ export async function runMonitorCycle() {
       });
 
       if (normalizedStatus === 'disconnected' && ch.active === true) {
+        const healOk = await hasTenantFeature(ch.tenant_id, 'autoHealing');
+        if (!healOk) {
+          console.warn(
+            '[EVOLUTION] auto-reconnect ignorado (autoHealing desligado no plano) channel=%s tenant=%s',
+            ch.id,
+            ch.tenant_id,
+          );
+          continue;
+        }
+        try {
+          await validateProviderAccessForTenant(ch.tenant_id, ch.provider);
+        } catch {
+          console.warn(
+            '[EVOLUTION] auto-reconnect ignorado (provider não permitido no plano) channel=%s tenant=%s',
+            ch.id,
+            ch.tenant_id,
+          );
+          continue;
+        }
         try {
           await evolutionService.connectInstance(instanceName);
           logger.reconnect(instanceName, ch.id);

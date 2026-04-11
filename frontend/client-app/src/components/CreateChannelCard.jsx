@@ -25,6 +25,8 @@ export function CreateChannelCard({
   onSubmit,
   onClear,
   providersBlocked,
+  channelLimitReached,
+  limitsLoading,
 }) {
   return (
     <section className={styles.card} aria-labelledby="create-channel-title">
@@ -41,6 +43,12 @@ export function CreateChannelCard({
       {providersBlocked ? (
         <p className={styles.warning}>
           Nenhum provider de WhatsApp está liberado para seu plano. Entre em contato para habilitar.
+        </p>
+      ) : null}
+
+      {channelLimitReached ? (
+        <p className={styles.warning}>
+          Seu plano atingiu o limite de canais. Faça upgrade para criar novos canais.
         </p>
       ) : null}
 
@@ -191,7 +199,13 @@ export function CreateChannelCard({
           <button
             type="submit"
             className={styles.btnPrimary}
-            disabled={loadingCreate || (channelType === 'whatsapp' && allowedProviders.length === 0)}
+            title={channelLimitReached ? 'Seu plano atingiu o limite de canais' : undefined}
+            disabled={
+              loadingCreate ||
+              limitsLoading ||
+              channelLimitReached ||
+              (channelType === 'whatsapp' && allowedProviders.length === 0)
+            }
           >
             {loadingCreate
               ? channelType === 'whatsapp'

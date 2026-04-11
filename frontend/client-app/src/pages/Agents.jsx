@@ -7,6 +7,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAgentAuth } from '../context/AgentAuthContext';
 import { createAgentsApi } from '../api/agents';
+import { useTenantLimitsContext } from '../context/TenantLimitsContext.jsx';
+import { UpgradePlanModal } from '../components/tenant/UpgradePlanModal.jsx';
+import { isTenantPlanLimitError, tenantPlanLimitReasonFromError } from '../utils/mapTenantLimitReason.js';
+import { TenantPlanBadge } from '../components/tenant/TenantPlanBadge.jsx';
 
 const DEFAULT_MODEL = 'gpt-4o-mini';
 
@@ -177,6 +181,17 @@ export function Agents() {
   const [toast, setToast] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const { plan, limits, usage, features, refresh, loading: limitsLoading } = useTenantLimitsContext();
+  const [planLimitModal, setPlanLimitModal] = useState({ open: false, reason: null });
+
+  const atAgentLimit =
+    limits?.maxAgents != null &&
+    Number(limits.maxAgents) > 0 &&
+    Number(usage?.agents ?? 0) >= Number(limits.maxAgents);
+  const canCreateAgents =
+    features?.can_create_agents != null
+      ? Boolean(features.can_create_agents)
+      : !atAgentLimit;
 
   const onUnauthorized = useCallback(() => {
     logout();
@@ -265,12 +280,20 @@ export function Agents() {
         .then(() => {
           closeModal();
           fetchAgents();
+          refresh();
           setToast('Agente criado.');
         })
-        .catch((err) => setFormError(err.message || 'Não foi possível criar o agente.'))
+        .catch((err) => {
+          if (isTenantPlanLimitError(err)) {
+            setPlanLimitModal({ open: true, reason: tenantPlanLimitReasonFromError(err) });
+            refresh();
+            return;
+          }
+          setFormError(err.message || 'Não foi possível criar o agente.');
+        })
         .finally(() => setSaving(false));
     },
-    [modal, api, closeModal, fetchAgents, buildPayload]
+    [modal, api, closeModal, fetchAgents, buildPayload, refresh]
   );
 
   const handleEdit = useCallback(
@@ -322,11 +345,12 @@ export function Agents() {
       .then(() => {
         setDeleteTarget(null);
         fetchAgents();
+        refresh();
         setToast('Agente excluído.');
       })
       .catch(() => setToast('Erro ao excluir agente.'))
       .finally(() => setDeleting(false));
-  }, [deleteTarget, api, fetchAgents]);
+  }, [deleteTarget, api, fetchAgents, refresh]);
 
   if (error) {
     return (
@@ -360,8 +384,22 @@ export function Agents() {
   return (
     <>
       <div style={styles.header}>
-        <h2 style={styles.title}>Agents</h2>
-        <button type="button" style={{ ...styles.btn, ...styles.btnPrimary }} onClick={openCreate}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <h2 style={styles.title}>Agents</h2>
+          {!limitsLoading && plan != null ? <TenantPlanBadge plan={plan} /> : null}
+        </div>
+        <button
+          type="button"
+          style={{
+            ...styles.btn,
+            ...styles.btnPrimary,
+            opacity: !canCreateAgents || limitsLoading ? 0.55 : 1,
+            cursor: !canCreateAgents || limitsLoading ? 'not-allowed' : 'pointer',
+          }}
+          title={!canCreateAgents ? 'Seu plano atingiu o limite de agentes' : undefined}
+          disabled={!canCreateAgents || limitsLoading}
+          onClick={() => canCreateAgents && openCreate()}
+        >
           Create Agent
         </button>
       </div>
@@ -540,6 +578,18 @@ export function Agents() {
           </div>
         </div>
       )}
+
+      <UpgradePlanModal
+        open={planLimitModal.open}
+        onClose={() => setPlanLimitModal({ open: false, reason: null })}
+        reason={planLimitModal.reason}
+        plan={plan}
+        blockedFeature="Agentes"
+        onViewPlan={() => {
+          setPlanLimitModal({ open: false, reason: null });
+          navigate('/dashboard');
+        }}
+      />
 
       {toast && (
         <div style={{ ...styles.toast, ...styles.toastSuccess }} role="status">
