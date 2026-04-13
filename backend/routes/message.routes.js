@@ -83,6 +83,56 @@ router.get('/messages', async (req, res) => {
   }
 });
 
+router.get('/messages/metrics', async (req, res) => {
+  try {
+    const now = Date.now();
+    const defaultFrom = new Date(now - 7 * 86_400_000).toISOString();
+    const defaultTo = new Date(now).toISOString();
+    const from = String(req.query?.from || '').trim() || defaultFrom;
+    const to = String(req.query?.to || '').trim() || defaultTo;
+    const channelIdRaw = req.query?.channelId;
+    const channelId = channelIdRaw != null && String(channelIdRaw).trim() !== ''
+      ? String(channelIdRaw).trim()
+      : undefined;
+
+    console.log(JSON.stringify({
+      event: 'MESSAGES_METRICS_FETCH',
+      timestamp: new Date().toISOString(),
+      from,
+      to,
+      channelId: channelId || null,
+    }));
+
+    const stats = getMessageStats();
+    const telemetryData = getTelemetry();
+    const tm = telemetryData?.messages || {};
+
+    const sent = Number(stats?.sent || 0);
+    const failed = Number(stats?.failed || 0);
+    const received = Number(tm.received || 0);
+    const totalMessages = Number(stats?.total || 0);
+
+    const data = {
+      totalMessages,
+      sent,
+      received,
+      failed,
+      period: { from, to },
+      ...(channelId ? { channelId } : {}),
+    };
+
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao carregar métricas.',
+    });
+  }
+});
+
 router.get('/messages/:messageId', async (req, res) => {
   try {
     const { messageId } = req.params;
