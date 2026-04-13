@@ -1,3 +1,5 @@
+import { getRedis } from '../services/redisClient.js';
+
 function getIo() {
   return globalThis.io || null;
 }
@@ -8,9 +10,12 @@ const throttleMap = new Map();
 const METRIC_KEY_EVENTS = 'socket:metrics:events';
 const METRIC_KEY_ERRORS = 'socket:metrics:errors';
 
-function getRedis() {
+/** Singleton centralizado; null enquanto não estiver `ready` (evita comandos e erros em cascata). */
+function redisForChannels() {
   try {
-    return globalThis.redisMain || null;
+    const redis = getRedis();
+    if (redis.status !== 'ready') return null;
+    return redis;
   } catch {
     return null;
   }
@@ -33,7 +38,7 @@ function shouldEmitThrottled(key, minIntervalMs) {
 }
 
 async function shouldEmitDistributed(key, minIntervalMs) {
-  const redis = getRedis();
+  const redis = redisForChannels();
   if (!redis) return true;
   try {
     const ok = await redis.set(`socket:throttle:${key}`, '1', 'PX', minIntervalMs, 'NX');
@@ -44,7 +49,7 @@ async function shouldEmitDistributed(key, minIntervalMs) {
 }
 
 async function observeEvent(payload, type = 'updated') {
-  const redis = getRedis();
+  const redis = redisForChannels();
   const tenantId = String(payload?.tenantId || 'unknown');
   const provider = String(payload?.provider || 'unknown');
   const date = new Date().toISOString().slice(0, 10);
@@ -61,7 +66,7 @@ async function observeEvent(payload, type = 'updated') {
 }
 
 async function observeError(payload) {
-  const redis = getRedis();
+  const redis = redisForChannels();
   const tenantId = String(payload?.tenantId || 'unknown');
   const provider = String(payload?.provider || 'unknown');
   const date = new Date().toISOString().slice(0, 10);
