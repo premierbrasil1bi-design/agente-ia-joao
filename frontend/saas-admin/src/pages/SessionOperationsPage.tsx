@@ -91,21 +91,6 @@ function coerceData(raw: SessionOperationsPayload): OperationsData {
   };
 }
 
-type _LegacyDebug = {
-  sessions: SessionRow[];
-  backoff: Array<{ key: string; attemptsInWindow: number; failures: number; nextAllowedAt: number }>;
-  metrics: { statusByProvider: Record<string, Record<string, number>> };
-  monitor: {
-    lastRunAt: string | null;
-    lastDurationMs: number;
-    lastChecked: number;
-    lastRecovered: number;
-  };
-  providers: { failures: [string, { count: number; blockedUntil: number }][] };
-  locks: { active: number };
-  cache: { size: number };
-};
-
 function normalizeStatus(status: string) {
   const s = String(status || "").toUpperCase();
   if (s === "WORKING") return "WORKING";
