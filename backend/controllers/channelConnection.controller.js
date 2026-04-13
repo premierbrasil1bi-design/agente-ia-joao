@@ -73,6 +73,22 @@ function resolveChannelSessionName(channel, provider) {
   );
 }
 
+const CONNECTION_ARTIFACT_BUDGET_MS = 5000;
+
+function raceWithSessionTimeout(promise, budgetMs) {
+  const ms = Math.max(1, Math.min(5000, Number(budgetMs) || CONNECTION_ARTIFACT_BUDGET_MS));
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('SESSION_TIMEOUT')), ms);
+    }),
+  ]);
+}
+
+async function safeEnsureSession(payload, budgetMs) {
+  return raceWithSessionTimeout(ensureSession(payload), budgetMs);
+}
+
 export async function sendChannelMessage(req, res) {
   try {
     const channel = await getChannelFromReq(req, res);
@@ -572,11 +588,102 @@ export async function getConnectionArtifact(req, res) {
     const channel = await getChannelFromReq(req, res);
     if (!channel) return;
 
+    const providerLc = String(resolveProvider(channel) || '').toLowerCase();
+    const sessionName = resolveChannelSessionName(channel, providerLc);
+
     console.log('[WHATSAPP_ARTIFACT] GET handler', {
       channelId: channel.id,
       tenantId: channel.tenant_id,
     });
-    const out = await channelConnectionService.getChannelConnectionArtifact(channel);
+
+    const artifactDeadline = Date.now() + CONNECTION_ARTIFACT_BUDGET_MS;
+
+    try {
+      const result = await safeEnsureSession(
+        {
+          provider: providerLc,
+          sessionName,
+          channelId: channel.id,
+          tenantId: channel.tenant_id,
+        },
+        artifactDeadline - Date.now(),
+      );
+      if (result?.status === 'WORKING') {
+        return res.status(200).json({
+          success: true,
+          status: 'connected',
+        });
+      }
+      if (result?.qr) {
+        return res.status(200).json({
+          success: true,
+          status: 'qr',
+          qr: result.qr,
+        });
+      }
+    } catch (err) {
+      const msg = err?.message || String(err || '');
+      if (msg === 'SESSION_TIMEOUT') {
+        console.log(JSON.stringify({
+          event: 'SESSION_TIMEOUT',
+          timestamp: new Date().toISOString(),
+          channelId: channel.id,
+          tenantId: channel.tenant_id,
+        }));
+        console.log(JSON.stringify({
+          event: 'CONNECTION_ARTIFACT_FALLBACK',
+          timestamp: new Date().toISOString(),
+          channelId: channel.id,
+          tenantId: channel.tenant_id,
+          reason: 'ensure_session_timeout',
+        }));
+        return res.status(200).json({
+          success: true,
+          status: 'processing',
+          message: 'Sessão em inicialização, tente novamente.',
+        });
+      }
+      console.log(JSON.stringify({
+        event: 'CONNECTION_ARTIFACT_FALLBACK',
+        timestamp: new Date().toISOString(),
+        channelId: channel.id,
+        tenantId: channel.tenant_id,
+        reason: 'ensure_session_error',
+        error: msg,
+      }));
+    }
+
+    let out;
+    try {
+      out = await raceWithSessionTimeout(
+        channelConnectionService.getChannelConnectionArtifact(channel),
+        artifactDeadline - Date.now(),
+      );
+    } catch (e2) {
+      const m2 = e2?.message || String(e2 || '');
+      if (m2 === 'SESSION_TIMEOUT') {
+        console.log(JSON.stringify({
+          event: 'SESSION_TIMEOUT',
+          timestamp: new Date().toISOString(),
+          channelId: channel.id,
+          tenantId: channel.tenant_id,
+          scope: 'connection_artifact_fetch',
+        }));
+        console.log(JSON.stringify({
+          event: 'CONNECTION_ARTIFACT_FALLBACK',
+          timestamp: new Date().toISOString(),
+          channelId: channel.id,
+          tenantId: channel.tenant_id,
+          reason: 'artifact_fetch_timeout',
+        }));
+        return res.status(200).json({
+          success: true,
+          status: 'processing',
+          message: 'Sessão em inicialização, tente novamente.',
+        });
+      }
+      throw e2;
+    }
 
     if (out.status === 'connected') {
       return res.status(200).json({
