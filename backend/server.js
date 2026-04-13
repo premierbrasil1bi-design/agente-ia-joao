@@ -58,6 +58,7 @@ import { getProviderHealthSnapshot } from './services/providerOrchestrator.servi
 import { getTenantById } from './repositories/tenant.repository.js';
 import { getEffectiveProvidersForTenant } from './services/providerPlanAccess.service.js';
 import { startWahaQrLogCapture } from './services/wahaQrCapture.js';
+import bootstrapWahaSession from './services/wahaBootstrap.js';
 import { log, overrideConsoleWithStructuredLog } from './utils/logger.js';
 import { requestIdMiddleware } from './middlewares/requestId.js';
 import { getSystemMetrics } from './services/metrics.service.js';
@@ -702,6 +703,7 @@ server.listen(PORT, '0.0.0.0', () => {
       await checkProviderHealth('waha');
       log.info({ event: 'PROVIDER_HEALTH_OK', context: 'service', provider: 'waha' });
       await testWahaConnection();
+      await bootstrapWahaSession();
     } catch (e) {
       log.error({
         event: 'PROVIDER_HEALTH_ERROR',
