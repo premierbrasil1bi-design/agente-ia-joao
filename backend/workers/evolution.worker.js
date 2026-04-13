@@ -119,10 +119,6 @@ function isExecutedDirectly() {
 async function bootstrapStandaloneWorker() {
   console.log('Worker evolution iniciado');
   const url = getRedisUrl();
-  if (!process.env.REDIS_HOST || !process.env.REDIS_PORT) {
-    console.error('[evolution-worker] REDIS_HOST/REDIS_PORT ausentes — configure no ambiente');
-    process.exit(1);
-  }
   console.log('[evolution-worker] Redis endpoint:', url);
   await initEvolutionQueueInfra();
   await getRedisConnection().ping();

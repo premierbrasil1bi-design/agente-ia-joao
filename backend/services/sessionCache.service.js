@@ -1,4 +1,4 @@
-import { getRedis, isRedisConnected } from './redisClient.js';
+import { getRedis, getRedisRuntime } from './redisClient.js';
 
 const TTL = 5;
 
@@ -41,7 +41,7 @@ export async function invalidateSessionCache(sessionName) {
 
 export function getSessionCacheRuntime() {
   return {
-    connected: isRedisConnected(),
+    ...getRedisRuntime(),
     ttlSeconds: TTL,
   };
 }

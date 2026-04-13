@@ -1,8 +1,13 @@
-import { getRedis } from '../services/redisClient.js';
+import { createBullMQConnection } from '../services/redisClient.js';
+
+/** @type {import('ioredis').default | null} */
+let bullConnection = null;
 
 export function getQueueConnection() {
-  const redis = getRedis();
+  if (!bullConnection) {
+    bullConnection = createBullMQConnection();
+  }
   return {
-    connection: redis,
+    connection: bullConnection,
   };
 }

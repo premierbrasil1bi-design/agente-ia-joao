@@ -1,5 +1,8 @@
 import { Queue, QueueEvents } from 'bullmq';
 import IORedis from 'ioredis';
+import { getRedisConfig } from '../services/redisClient.js';
+
+export { getRedisConfig, getRedisUrl } from '../services/redisClient.js';
 
 export const EVOLUTION_JOB = {
   CREATE: 'CREATE',
@@ -21,31 +24,27 @@ let evolutionQueue = null;
 /** @type {QueueEvents | null} */
 let queueEvents = null;
 
-export function getRedisConfig() {
-  const host = String(process.env.REDIS_HOST || '').trim();
-  const port = parseInt(process.env.REDIS_PORT || '6379', 10);
-  if (!host) {
-    throw new Error('REDIS_HOST não definido.');
-  }
-  return {
-    host,
-    port: Number.isNaN(port) ? 6379 : port,
-  };
-}
-
-export function getRedisUrl() {
-  const cfg = getRedisConfig();
-  return `redis://${cfg.host}:${cfg.port}`;
-}
+const sharedConnectionOptions = {
+  maxRetriesPerRequest: null,
+  lazyConnect: false,
+  connectTimeout: 5000,
+  retryStrategy(times) {
+    return Math.min(times * 200, 2000);
+  },
+};
 
 export function getRedisConnection() {
   if (!redis) {
     const cfg = getRedisConfig();
-    redis = new IORedis({
-      host: cfg.host,
-      port: cfg.port,
-      maxRetriesPerRequest: null,
-    });
+    if (cfg.url) {
+      redis = new IORedis(cfg.url, sharedConnectionOptions);
+    } else {
+      redis = new IORedis({
+        host: cfg.host,
+        port: cfg.port,
+        ...sharedConnectionOptions,
+      });
+    }
     redis.on('error', (err) => {
       console.error('Redis error:', err?.message || err);
     });

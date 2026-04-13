@@ -9,7 +9,6 @@ import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { createAdapter } from '@socket.io/redis-adapter';
-import { createClient } from 'redis';
 
 import { config, validateChannelProvidersConfig } from './config/env.js';
 import { isDbConnected } from './db/connection.js';
@@ -49,7 +48,8 @@ import { channelContext, setChannelActiveHeader } from './middleware/channelCont
 import { correlationIdMiddleware } from './middleware/correlationId.middleware.js';
 import { startChannelMonitor } from './services/channelMonitor.service.js';
 import { agentAuth } from './middleware/agentAuth.js';
-import { getRedisConnection, getRedisUrl, initEvolutionQueueInfra } from './queues/evolution.queue.js';
+import { getRedisConnection, initEvolutionQueueInfra } from './queues/evolution.queue.js';
+import { createRedisPubSubPair } from './services/redisClient.js';
 import { startEvolutionWorker } from './workers/evolution.worker.js';
 import { runChannelsSchemaGuard } from './services/channelsSchemaGuard.service.js';
 import * as evolutionService from './services/evolutionService.js';
@@ -728,20 +728,31 @@ server.listen(PORT, '0.0.0.0', () => {
 (async () => {
   try {
     globalThis.redisMain = getRedisConnection();
-    const redisUrl = getRedisUrl();
+    let pubClient = null;
+    let subClient = null;
     try {
-      const pubClient = createClient({ url: redisUrl });
-      const subClient = pubClient.duplicate();
-      await pubClient.connect();
-      await subClient.connect();
+      const pair = createRedisPubSubPair();
+      pubClient = pair.pubClient;
+      subClient = pair.subClient;
+      await Promise.all([pubClient.ping(), subClient.ping()]);
       io.adapter(createAdapter(pubClient, subClient));
       log.info({ event: 'SOCKET_REDIS_ADAPTER_ENABLED', context: 'service' });
     } catch (e) {
       log.warn({
-        event: 'SOCKET_REDIS_ADAPTER_UNAVAILABLE',
+        event: 'SOCKET_REDIS_ADAPTER_DISABLED',
         context: 'service',
         error: e?.message || String(e),
       });
+      try {
+        await pubClient?.quit();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await subClient?.quit();
+      } catch {
+        /* ignore */
+      }
     }
 
     await initEvolutionQueueInfra();
