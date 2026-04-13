@@ -14,6 +14,11 @@ const telemetry = {
     cleanedMessages: 0,
     evictions: 0,
   },
+  sessionMonitor: {
+    reconnectionAttempts: 0,
+    failovers: 0,
+    recoverySuccess: 0,
+  },
   system: {
     startedAt: Date.now(),
   },
@@ -54,6 +59,12 @@ export function getTelemetry() {
   return clone(telemetry);
 }
 
+export function incrementSessionMonitor(metric) {
+  const key = String(metric || '').trim();
+  if (!Object.prototype.hasOwnProperty.call(telemetry.sessionMonitor, key)) return;
+  telemetry.sessionMonitor[key] += 1;
+}
+
 export function snapshotTelemetry(metadata = {}) {
   const snapshot = {
     data: clone(telemetry),
@@ -86,6 +97,11 @@ export function resetTelemetry(metadata = {}) {
     cleanupRuns: 0,
     cleanedMessages: 0,
     evictions: 0,
+  };
+  telemetry.sessionMonitor = {
+    reconnectionAttempts: 0,
+    failovers: 0,
+    recoverySuccess: 0,
   };
   telemetry.system.startedAt = Date.now();
   console.log(JSON.stringify({ event: 'TELEMETRY_RESET', timestamp: new Date().toISOString() }));

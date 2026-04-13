@@ -18,6 +18,8 @@ import {
 } from '../utils/wahaQrChannelResponse.js';
 import { deriveFlowPhase } from '../utils/whatsappChannelFlow.js';
 import { resolveProvider } from '../providers/provider.factory.js';
+import { resolveSessionName } from '../utils/resolveSessionName.js';
+import { ensureSession } from '../services/sessionOrchestrator.js';
 import {
   deriveHealth,
   emitChannelError,
@@ -57,6 +59,17 @@ function isWahaNotConfiguredMessage(err) {
   return (
     String(err?.message || '').includes('WAHA não configurado') ||
     String(err?.message || '').includes('WAHA_API_URL')
+  );
+}
+
+function resolveChannelSessionName(channel, provider) {
+  const providerLc = String(provider || '').toLowerCase();
+  if (providerLc === 'waha') return resolveSessionName(channel);
+  return (
+    String(channel?.external_id || '').trim() ||
+    String(channel?.instance || '').trim() ||
+    String(channel?.id || '').trim() ||
+    'default'
   );
 }
 
@@ -113,7 +126,68 @@ export async function connectChannel(req, res) {
       return sendTenantPlanLimit(res, planOk);
     }
 
-    const providerLc = resolveProvider(channel);
+    const providerLc = String(resolveProvider(channel) || '').toLowerCase();
+    const sessionName = resolveChannelSessionName(channel, providerLc);
+    console.log(JSON.stringify({
+      event: 'CHANNEL_CONNECT_REQUEST',
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+      provider: providerLc || null,
+      sessionName,
+    }));
+
+    try {
+      const ensured = await ensureSession({
+        provider: providerLc,
+        sessionName,
+        channelId: channel.id,
+        tenantId: channel.tenant_id,
+      });
+      const latencyMs = Date.now() - startedAt;
+      if (ensured?.providerUsed && ensured.providerUsed !== providerLc) {
+        console.log(JSON.stringify({
+          event: 'SESSION_PROVIDER_SWITCH',
+          channelId: channel.id,
+          requestedProvider: providerLc,
+          providerUsed: ensured.providerUsed,
+        }));
+      }
+      if (ensured?.status === 'WORKING') {
+        console.log(JSON.stringify({
+          event: 'CHANNEL_CONNECT_SUCCESS',
+          channelId: channel.id,
+          provider: ensured.providerUsed || providerLc,
+          latencyMs,
+        }));
+        return res.status(200).json({
+          success: true,
+          status: 'connected',
+          provider: ensured.providerUsed || providerLc || null,
+          connected: true,
+          latencyMs,
+        });
+      }
+      if (ensured?.status === 'QR') {
+        console.log(JSON.stringify({
+          event: 'CHANNEL_CONNECT_QR',
+          channelId: channel.id,
+          provider: ensured.providerUsed || providerLc,
+          latencyMs,
+        }));
+        return res.status(200).json({
+          success: true,
+          status: 'waiting_qr',
+          provider: ensured.providerUsed || providerLc || null,
+          qrCode: ensured.qr || null,
+          qr: ensured.qr || null,
+          connected: false,
+          latencyMs,
+        });
+      }
+    } catch (orchestratorErr) {
+      console.warn('[channelConnection] ensureSession fallback legado:', orchestratorErr?.message || orchestratorErr);
+    }
+
     const result = await channelConnectionService.connectWhatsAppChannel(channel, {
       correlationId: req.correlationId ?? null,
     });
@@ -122,7 +196,13 @@ export async function connectChannel(req, res) {
     const flowPhase = deriveFlowPhase(result.channel);
 
     const latencyMs = Date.now() - startedAt;
-    res.status(200).json({
+    console.log(JSON.stringify({
+      event: 'CHANNEL_CONNECT_SUCCESS',
+      channelId: result.channel.id,
+      provider: resolveProvider(result.channel) || providerLc || null,
+      latencyMs,
+    }));
+    return res.status(200).json({
       success: true,
       channelId: result.channel.id,
       provider: resolveProvider(result.channel) || providerLc || null,
@@ -154,6 +234,12 @@ export async function connectChannel(req, res) {
       });
     }
     console.error('[channelConnection] connectChannel:', err.message, err.response?.status || err.code || '');
+    console.log(JSON.stringify({
+      event: 'CHANNEL_CONNECT_FAIL',
+      channelId: channelRef?.id || null,
+      provider: channelRef ? resolveProvider(channelRef) : null,
+      code: err.code || err.response?.status || null,
+    }));
     emitChannelError(channelRef, err, { operation: 'connectChannel' });
     if (err.code === 'INSTANCE_NOT_FOUND') {
       return res.status(200).json({
@@ -185,9 +271,9 @@ export async function connectChannel(req, res) {
         error: 'Evolution API está offline ou inacessível. Verifique o container/serviço e a variável EVOLUTION_API_URL.',
       });
     }
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      error: err.message || 'Erro ao conectar canal.',
+      error: 'Erro ao conectar canal.',
       context: {
         code: err.code || err.response?.status || null,
         timeout: Boolean(err.code === 'ETIMEDOUT' || err.code === 'ECONNABORTED'),
@@ -205,6 +291,41 @@ export async function getQrCode(req, res) {
 
     const provider = resolveProvider(channel);
     const providerLc = String(provider || '').toLowerCase();
+    const sessionName = resolveChannelSessionName(channel, providerLc);
+    const ensured = await ensureSession({
+      provider: providerLc,
+      sessionName,
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+    });
+    if (ensured?.providerUsed && ensured.providerUsed !== providerLc) {
+      console.log(JSON.stringify({
+        event: 'SESSION_PROVIDER_SWITCH',
+        channelId: channel.id,
+        requestedProvider: providerLc,
+        providerUsed: ensured.providerUsed,
+      }));
+    }
+    if (ensured?.status === 'WORKING' && !ensured?.qr) {
+      return res.status(200).json({
+        success: true,
+        provider: ensured.providerUsed || provider,
+        status: 'CONNECTED',
+        connected: true,
+        message: 'Sessão já conectada.',
+      });
+    }
+    if (ensured?.status === 'QR' && ensured?.qr) {
+      return res.status(200).json({
+        success: true,
+        format: String(ensured.qr).startsWith('data:image') ? 'image' : 'ascii',
+        qr: ensured.qr,
+        qrCode: ensured.qr,
+        qrcode: ensured.qr,
+        provider: ensured.providerUsed || provider,
+        status: 'PENDING',
+      });
+    }
 
     const cid = req.correlationId ?? null;
     const qr = await channelConnectionService.getChannelQrCode(channel, { correlationId: cid });

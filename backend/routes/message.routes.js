@@ -1,4 +1,5 @@
 import express from 'express';
+import { pool } from '../db/pool.js';
 import {
   getMessage,
   getRecentMessages,
@@ -7,6 +8,12 @@ import {
   listMessages,
 } from '../services/messageRegistry.js';
 import { getProviderStatus, getProviderRuntimeMetrics } from '../services/providerManager.js';
+import { getSessionMonitorDebug, getSessionMonitorState } from '../services/sessionMonitor.js';
+import { ensureSession, getSessionOrchestratorRuntime } from '../services/sessionOrchestrator.js';
+import { getAdapter } from '../providers/sessionAdapters/index.js';
+import { resolveProvider } from '../providers/resolveProvider.js';
+import { resolveSessionName } from '../utils/resolveSessionName.js';
+import { sessionQueue } from '../queues/session.queue.js';
 import {
   getSnapshots,
   getTelemetry,
@@ -34,6 +41,28 @@ function sanitizeObject(input) {
     out[k] = sanitizeObject(v);
   }
   return out;
+}
+
+function resolveChannelSessionName(channel, provider) {
+  const providerLc = String(provider || '').toLowerCase();
+  if (providerLc === 'waha') return resolveSessionName(channel);
+  return (
+    String(channel?.external_id || '').trim() ||
+    String(channel?.instance || '').trim() ||
+    String(channel?.id || '').trim() ||
+    'default'
+  );
+}
+
+async function findChannelForOperations(channelId) {
+  const { rows } = await pool.query(
+    `SELECT id, tenant_id, provider, external_id, instance, type
+     FROM channels
+     WHERE id = $1
+     LIMIT 1`,
+    [channelId],
+  );
+  return rows[0] ?? null;
 }
 
 router.get('/messages', async (req, res) => {
@@ -124,6 +153,123 @@ router.get('/telemetry', async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ error: err?.message || 'Erro interno' });
+  }
+});
+
+router.get('/debug/sessions', async (req, res) => {
+  try {
+    const debug = await getSessionMonitorDebug();
+    const runtime = getSessionOrchestratorRuntime();
+    let queue = { waiting: 0, active: 0, failed: 0 };
+    try {
+      const [waiting, active, failed] = await Promise.all([
+        sessionQueue.getWaitingCount(),
+        sessionQueue.getActiveCount(),
+        sessionQueue.getFailedCount(),
+      ]);
+      queue = { waiting, active, failed };
+    } catch {
+      queue = { waiting: 0, active: 0, failed: 0 };
+    }
+    return res.json({
+      sessions: debug.sessions,
+      backoff: debug.backoff,
+      metrics: debug.metrics,
+      monitor: getSessionMonitorState(),
+      providers: runtime.providers,
+      locks: runtime.locks,
+      cache: runtime.cache,
+      redis: runtime.redis || { connected: false },
+      queue,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || 'Erro interno' });
+  }
+});
+
+router.post('/sessions/:channelId/reconnect', async (req, res) => {
+  try {
+    const channelId = String(req.params.channelId || '').trim();
+    if (!channelId) return res.status(400).json({ error: 'channelId inválido' });
+    const channel = await findChannelForOperations(channelId);
+    if (!channel) return res.status(404).json({ error: 'Canal não encontrado' });
+    const provider = String(resolveProvider(channel) || '').toLowerCase();
+    if (!provider) return res.status(400).json({ error: 'Provider não definido no canal' });
+    const sessionName = resolveChannelSessionName(channel, provider);
+    const out = await ensureSession({
+      provider,
+      sessionName,
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+    });
+    return res.json({
+      success: true,
+      channelId,
+      providerRequested: provider,
+      providerUsed: out?.providerUsed || provider,
+      status: out?.status || 'UNKNOWN',
+      connected: Boolean(out?.connected),
+      qrCode: out?.qr || null,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Falha ao reconectar sessão.' });
+  }
+});
+
+router.post('/sessions/:channelId/refresh', async (req, res) => {
+  try {
+    const channelId = String(req.params.channelId || '').trim();
+    if (!channelId) return res.status(400).json({ error: 'channelId inválido' });
+    const channel = await findChannelForOperations(channelId);
+    if (!channel) return res.status(404).json({ error: 'Canal não encontrado' });
+    const provider = String(resolveProvider(channel) || '').toLowerCase();
+    if (!provider) return res.status(400).json({ error: 'Provider não definido no canal' });
+    const sessionName = resolveChannelSessionName(channel, provider);
+    const adapter = getAdapter(provider);
+    const session = await adapter.getSession(sessionName);
+    return res.json({
+      success: true,
+      channelId,
+      provider,
+      sessionName,
+      status: String(session?.status || 'UNKNOWN').toUpperCase(),
+      exists: Boolean(session?.exists),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Falha ao atualizar status da sessão.' });
+  }
+});
+
+router.get('/sessions/:channelId/qrcode', async (req, res) => {
+  try {
+    const channelId = String(req.params.channelId || '').trim();
+    if (!channelId) return res.status(400).json({ error: 'channelId inválido' });
+    const channel = await findChannelForOperations(channelId);
+    if (!channel) return res.status(404).json({ error: 'Canal não encontrado' });
+    const provider = String(resolveProvider(channel) || '').toLowerCase();
+    if (!provider) return res.status(400).json({ error: 'Provider não definido no canal' });
+    const sessionName = resolveChannelSessionName(channel, provider);
+    const out = await ensureSession({
+      provider,
+      sessionName,
+      channelId: channel.id,
+      tenantId: channel.tenant_id,
+    });
+    if (out?.status === 'WORKING') {
+      return res.json({ success: true, status: 'connected', connected: true, provider: out.providerUsed || provider });
+    }
+    if (out?.status === 'QR' && out?.qr) {
+      return res.json({
+        success: true,
+        status: 'waiting_qr',
+        provider: out.providerUsed || provider,
+        qrCode: out.qr,
+        qr: out.qr,
+      });
+    }
+    return res.status(404).json({ success: false, error: 'QR não disponível no momento.' });
+  } catch {
+    return res.status(500).json({ error: 'Falha ao obter QR da sessão.' });
   }
 });
 

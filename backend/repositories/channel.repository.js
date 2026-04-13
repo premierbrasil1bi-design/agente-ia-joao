@@ -39,7 +39,7 @@ export async function findById(id, tenantId) {
  */
 export async function findActiveChannels() {
   const { rows } = await pool.query(
-    `SELECT id, type, provider, instance, tenant_id
+    `SELECT id, type, provider, instance, tenant_id, external_id, connection_status, status
      FROM channels
      WHERE status = 'connected'
         OR status = 'active'

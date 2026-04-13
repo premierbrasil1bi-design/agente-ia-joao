@@ -43,6 +43,7 @@ import internalWahaRoutes from './routes/internalWaha.routes.js';
 import monitoringRoutes from './routes/monitoringRoutes.js';
 import healthRoutes from './routes/health.routes.js';
 import messageRoutes from './routes/message.routes.js';
+import operationsRoutes from './routes/operations.routes.js';
 import globalAdminAuth from './middlewares/globalAdminAuth.js';
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { correlationIdMiddleware } from './middleware/correlationId.middleware.js';
@@ -61,6 +62,7 @@ import { getTenantById } from './repositories/tenant.repository.js';
 import { getEffectiveProvidersForTenant } from './services/providerPlanAccess.service.js';
 import { startWahaQrLogCapture } from './services/wahaQrCapture.js';
 import bootstrapWahaSession from './services/wahaBootstrap.js';
+import { startSessionMonitor } from './services/sessionMonitor.js';
 import { log, overrideConsoleWithStructuredLog } from './utils/logger.js';
 import { requestIdMiddleware } from './middlewares/requestId.js';
 import { getSystemMetrics } from './services/metrics.service.js';
@@ -231,6 +233,7 @@ app.get('/api/health/db', async (req, res) => {
 
 app.use('/api', healthRoutes);
 app.use('/api', messageRoutes);
+app.use('/api/operations', operationsRoutes);
 
 app.use('/api/internal', internalWahaRoutes);
 
@@ -703,6 +706,7 @@ server.listen(PORT, '0.0.0.0', () => {
     }
   })();
   startChannelMonitor();
+  startSessionMonitor();
   (async () => {
     try {
       await checkProviderHealth('waha');
