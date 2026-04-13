@@ -363,7 +363,7 @@ export async function canUseRealtimeMonitoring(tenantId, opts = {}) {
     log.warn({
       event: 'TENANT_FEATURE_BLOCKED',
       context: 'service',
-      tenantId: ctx.tenant?.id ?? String(tenantId || '').trim() || null,
+      tenantId: (ctx.tenant?.id ?? String(tenantId || '').trim()) || null,
       plan: ctx.plan,
       reason: 'realtime_monitoring_not_included',
       metadata: {
