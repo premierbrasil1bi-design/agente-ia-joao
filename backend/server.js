@@ -41,6 +41,8 @@ import alertsRoutes from './routes/alerts.routes.js';
 import providersRoutes from './routes/providers.routes.js';
 import internalWahaRoutes from './routes/internalWaha.routes.js';
 import monitoringRoutes from './routes/monitoringRoutes.js';
+import healthRoutes from './routes/health.routes.js';
+import messageRoutes from './routes/message.routes.js';
 import globalAdminAuth from './middlewares/globalAdminAuth.js';
 import { channelContext, setChannelActiveHeader } from './middleware/channelContext.js';
 import { correlationIdMiddleware } from './middleware/correlationId.middleware.js';
@@ -226,6 +228,9 @@ app.get('/api/health/db', async (req, res) => {
     res.status(503).json({ database: 'disconnected', error: 'Unavailable' });
   }
 });
+
+app.use('/api', healthRoutes);
+app.use('/api', messageRoutes);
 
 app.use('/api/internal', internalWahaRoutes);
 
