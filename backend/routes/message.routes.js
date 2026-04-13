@@ -133,6 +133,33 @@ router.get('/messages/metrics', async (req, res) => {
   }
 });
 
+router.get('/messages/alerts', async (req, res) => {
+  try {
+    const channelIdRaw = req.query?.channelId;
+    const channelId = channelIdRaw != null && String(channelIdRaw).trim() !== ''
+      ? String(channelIdRaw).trim()
+      : undefined;
+
+    console.log(JSON.stringify({
+      event: 'MESSAGES_ALERTS_FETCH',
+      timestamp: new Date().toISOString(),
+      channelId: channelId ?? null,
+    }));
+
+    const data = [];
+
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao carregar alertas.',
+    });
+  }
+});
+
 router.get('/messages/:messageId', async (req, res) => {
   try {
     const { messageId } = req.params;
