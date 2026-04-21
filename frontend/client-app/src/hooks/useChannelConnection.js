@@ -167,7 +167,7 @@ export function useChannelConnection() {
 
   const startPolling = useCallback(() => {
     clearTimers();
-    pollingRef.current = setInterval(pollOnce, 2000);
+    pollingRef.current = setInterval(pollOnce, 10000);
     timeoutRef.current = setTimeout(() => {
       stopConnection();
       setStatus('UNKNOWN');
@@ -233,6 +233,13 @@ export function useChannelConnection() {
         if (!evt || String(evt.channelId) !== String(channelIdRef.current)) return;
         realtimeActiveRef.current = true;
         clearTimers();
+        const u = String(evt.status || '').toUpperCase();
+        if (u === 'FAILED') {
+          setLoading(false);
+          setError(evt.error || 'Falha na conexão');
+          setStatus('ERROR');
+          return;
+        }
         const normalized = normalizeChannelStatus(evt.status);
         setStatus(normalized);
         setLoading(false);
@@ -247,6 +254,24 @@ export function useChannelConnection() {
         setLoading(false);
         setError(null);
         stopConnection();
+      });
+
+      socket.on('channel:disconnected', (evt) => {
+        if (!evt || String(evt.channelId) !== String(channelIdRef.current)) return;
+        realtimeActiveRef.current = true;
+        clearTimers();
+        setStatus('DISCONNECTED');
+        setLoading(false);
+        setError(null);
+      });
+
+      socket.on('channel:error', (evt) => {
+        if (!evt || String(evt.channelId) !== String(channelIdRef.current)) return;
+        realtimeActiveRef.current = true;
+        clearTimers();
+        setLoading(false);
+        setError(evt.error || evt.message || 'Erro no canal');
+        setStatus('ERROR');
       });
 
       socket.on('disconnect', () => {

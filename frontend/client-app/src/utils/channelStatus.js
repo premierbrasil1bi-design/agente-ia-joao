@@ -7,6 +7,8 @@ export const getStatusMeta = (status) => {
       return { label: 'Conectado', color: 'green' };
     case 'PENDING':
       return { label: 'Aguardando leitura do QR', color: 'orange' };
+    case 'ERROR':
+      return { label: 'Erro', color: 'red' };
     case 'DISCONNECTED':
       return { label: 'Offline', color: 'red' };
     case 'UNKNOWN':

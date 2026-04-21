@@ -1,4 +1,5 @@
 import { pickUnifiedQrTransportFields } from './whatsappQrContract.js';
+import { resolveSessionName } from './resolveSessionName.js';
 
 /** Resposta HTTP canônica para GET qrcode (WAHA). */
 export function buildWahaQrcodeJsonResponse(result, correlationId) {
@@ -35,6 +36,7 @@ export function buildWahaQrcodeSocketPayload(channel, result, correlationId) {
   return {
     channelId: channel.id,
     tenantId: channel.tenant_id,
+    sessionName: resolveSessionName(channel),
     state: st,
     qr: result.qr ?? null,
     format: result.format ?? null,
@@ -45,5 +47,6 @@ export function buildWahaQrcodeSocketPayload(channel, result, correlationId) {
     qrCode: result.format === 'image' ? result.qr : null,
     qrAscii: result.format === 'ascii' ? result.qr : null,
     connected: st === 'CONNECTED',
+    timestamp: new Date().toISOString(),
   };
 }

@@ -6,6 +6,7 @@
 import * as channelsRepository from '../repositories/channelsRepository.js';
 import { dualStatusFromEvolutionRaw } from '../utils/mapConnectionLifecycle.js';
 import { transitionEvolutionChannelConnection } from './channelEvolutionState.service.js';
+import { publishChannelSessionAfterPersist } from './channelSessionRealtimeSync.service.js';
 
 /**
  * @param {object} body — payload JSON da Evolution
@@ -33,7 +34,7 @@ export async function applyConnectionUpdateFromPayload(body) {
   }
   const { connection_status } = dualStatusFromEvolutionRaw(rawState);
 
-  await transitionEvolutionChannelConnection({
+  const tr = await transitionEvolutionChannelConnection({
     channelId: channel.id,
     tenantId: channel.tenant_id,
     channelRow: channel,
@@ -43,6 +44,18 @@ export async function applyConnectionUpdateFromPayload(body) {
     source: 'webhook',
     trustRemoteState: true,
   });
+
+  if (tr?.applied && tr.channel) {
+    publishChannelSessionAfterPersist({
+      channel: tr.channel,
+      provider: 'evolution',
+      sessionName: inst,
+      connectionStatus: tr.next,
+      evolutionRaw: rawState,
+      qr: null,
+      source: 'webhook_evolution',
+    });
+  }
 
   return true;
 }

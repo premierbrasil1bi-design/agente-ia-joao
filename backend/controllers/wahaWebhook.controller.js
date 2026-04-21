@@ -26,6 +26,7 @@ import {
 import * as inboxRepo from '../repositories/inboxMessages.repository.js';
 import * as messageStatusEventsRepo from '../repositories/messageStatusEvents.repository.js';
 import { emitChannelSocketEvent } from '../utils/channelRealtime.js';
+import { publishChannelSessionAfterPersist } from '../services/channelSessionRealtimeSync.service.js';
 import { normalizeProviderMessageStatus } from '../utils/normalizeProviderMessageStatus.js';
 import { normalizeChannelType, buildConversationId } from '../utils/inboxNormalization.js';
 
@@ -277,6 +278,18 @@ export async function handleWahaWebhook(req, res) {
 
       if (tr?.applied) {
         logger.statusChange(session, channel.id, prevConn, nextConn);
+      }
+
+      if (tr?.applied && tr.channel) {
+        publishChannelSessionAfterPersist({
+          channel: tr.channel,
+          provider: 'waha',
+          sessionName: session,
+          connectionStatus: tr.next,
+          evolutionRaw: wahaStatus,
+          qr: null,
+          source: 'webhook_waha',
+        });
       }
 
       console.log('[WAHA] Status atualizado:', { channelId: channel.id, from: prevConn, to: nextConn });

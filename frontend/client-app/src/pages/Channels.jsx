@@ -9,6 +9,7 @@ import StatusBadge from '../components/StatusBadge.jsx';
 import useAutoReconnect from '../hooks/useAutoReconnect.js';
 import { useChannel } from '../context/ChannelContext.jsx';
 import { useChannelConnection } from '../hooks/useChannelConnection.js';
+import { useTenantChannelsSocket, mergeSocketSessionIntoChannelRow } from '../hooks/useRealtimeChannelStatus.js';
 import { ConnectionStateBanner } from '../components/ConnectionStateBanner.jsx';
 import { CHANNEL_CONNECTION_STATE, normalizeChannelStatus } from '../utils/channelCore.js';
 import { CreateChannelCard } from '../components/CreateChannelCard.jsx';
@@ -358,6 +359,8 @@ export function Channels() {
   const [loadingEditId, setLoadingEditId] = useState(null);
   const pollingRefs = useRef({});
   const qrPollingRef = useRef(null);
+  const qrModalChannelIdRef = useRef(null);
+  qrModalChannelIdRef.current = qrModalChannelId;
   const {
     qrCode: liveQrCode,
     qrFormat: liveQrFormat,
@@ -381,6 +384,50 @@ export function Channels() {
     const data = await agentApi.request('/api/agent/agents');
     setAgents(Array.isArray(data) ? data : []);
   }
+
+  const onChannelSocketSession = useCallback((evt) => {
+    if (!evt?.channelId) return;
+    setChannels((prev) =>
+      prev.map((ch) =>
+        String(ch.id) === String(evt.channelId) ? mergeSocketSessionIntoChannelRow(ch, evt) : ch,
+      ),
+    );
+    const modalId = qrModalChannelIdRef.current;
+    if (modalId == null || String(evt.channelId) !== String(modalId)) return;
+    const c = String(evt.status || '').toUpperCase();
+    const q = evt.qr ?? evt.qrCode ?? evt.qrAscii;
+    if (q != null && String(q).trim() !== '') {
+      const ascii = evt.format === 'ascii' || (evt.qrAscii && !evt.qrCode);
+      if (ascii) {
+        applyQrFromResponse({ format: 'ascii', qr: String(q) }, modalId);
+      } else {
+        applyQrFromResponse({ qr: q, qrCode: q, qrcode: q }, modalId);
+      }
+      setQrFlowStatus('ready');
+      setQrLoadError(null);
+    }
+    if (c === 'CONNECTED') {
+      stopQrPolling();
+      setQrFlowStatus('connected');
+      setQrCode(null);
+      setQrModalOpen(false);
+      setQrModalChannelId(null);
+      setQrLoadError(null);
+      void loadChannels();
+      toast.success('Conectado com sucesso');
+    }
+    if (c === 'DISCONNECTED') {
+      stopQrPolling();
+      setQrFlowStatus('waiting');
+    }
+    if (c === 'FAILED') {
+      stopQrPolling();
+      setQrFlowStatus('error');
+      if (evt.error) setQrLoadError(String(evt.error));
+    }
+  }, []);
+
+  useTenantChannelsSocket(onChannelSocketSession, { enabled: true });
 
   const loadAllowedProviders = useCallback(async () => {
     try {
@@ -917,7 +964,7 @@ export function Channels() {
       } catch (e) {
         console.warn('[channels] polling status:', e.message);
       }
-    }, 3000);
+    }, 15000);
   }, []);
 
   useAutoReconnect(channels, startPolling);
@@ -1058,6 +1105,9 @@ export function Channels() {
       }
       if (normalized === 'DISCONNECTED') {
         return 'Canal desconectado. Use “Conectar WhatsApp” para iniciar de novo.';
+      }
+      if (normalized === 'ERROR') {
+        return 'Erro na conexão do WhatsApp. Tente conectar de novo ou verifique o canal.';
       }
       const fp = ch.flowPhase;
       if (fp === 'draft') {

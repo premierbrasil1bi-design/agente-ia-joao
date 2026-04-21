@@ -5,12 +5,26 @@ import { resolveSessionName } from '../utils/resolveSessionName.js';
 import { ensureSession } from './sessionOrchestrator.js';
 import { incrementSessionMonitor } from './telemetry.service.js';
 import { enqueueSessionRecovery } from '../queues/session.queue.js';
+import { syncChannelSessionFromAdapter } from './channelSessionRealtimeSync.service.js';
+import { normalizeSessionStatus, SESSION_CANONICAL } from '../utils/normalizeSessionStatus.js';
+import { normalizeConnectionStatus, CONNECTION } from './channelEvolutionState.service.js';
 
 const BASE_INTERVAL = 30_000;
 const MAX_ATTEMPTS_PER_MIN = 3;
 const BASE_BACKOFF_MS = 10_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
 const recoveryState = new Map();
+/** @type {Map<string, { status: string, qrKey: string, error: string|null, provider: string }>} */
+const lastMonitorSnapshot = new Map();
+
+const STALE_LAST_SEEN_MS = Number(process.env.CHANNEL_LAST_SEEN_STALE_MS || 900000);
+
+function monitorQrFingerprint(qr) {
+  if (qr == null) return '';
+  const s = typeof qr === 'string' ? qr : String(qr);
+  return s.length > 96 ? s.slice(0, 96) : s;
+}
+
 let monitorState = {
   lastRunAt: null,
   lastDurationMs: 0,
@@ -139,13 +153,75 @@ export async function checkSessions() {
     try {
       const adapter = getAdapter(provider);
       const session = await adapter.getSession(sessionName);
+      const adapterStatus = session?.status || 'OFFLINE';
+      let qr = null;
+      if (String(adapterStatus).toUpperCase() === 'QR' && typeof adapter.getQRCode === 'function') {
+        try {
+          qr = await adapter.getQRCode(sessionName);
+        } catch {
+          qr = null;
+        }
+      }
+
       logEvent({
         event: 'SESSION_MONITOR_CHECK',
         channelId: channel.id,
         provider,
         sessionName,
-        status: session?.status || 'UNKNOWN',
+        status: adapterStatus,
+        hasQr: Boolean(qr),
       });
+
+      const canonical = normalizeSessionStatus(provider, adapterStatus);
+      const nextSnap = {
+        status: adapterStatus,
+        qrKey: monitorQrFingerprint(qr),
+        error: null,
+        provider,
+      };
+      const prevSnap = lastMonitorSnapshot.get(String(channel.id));
+      const snapChanged =
+        !prevSnap ||
+        prevSnap.status !== nextSnap.status ||
+        prevSnap.qrKey !== nextSnap.qrKey ||
+        prevSnap.error !== nextSnap.error ||
+        prevSnap.provider !== nextSnap.provider;
+
+      const conn = normalizeConnectionStatus(channel.connection_status);
+      const lastSeenMs = channel.last_seen_at ? new Date(channel.last_seen_at).getTime() : 0;
+      const staleConnected =
+        conn === CONNECTION.CONNECTED &&
+        lastSeenMs > 0 &&
+        Date.now() - lastSeenMs > STALE_LAST_SEEN_MS &&
+        canonical !== SESSION_CANONICAL.CONNECTED;
+
+      const forceStaleSync = staleConnected;
+      const missingSession = session && session.exists === false;
+
+      if (snapChanged || forceStaleSync || missingSession) {
+        const statusForSync =
+          forceStaleSync || missingSession ? 'OFFLINE' : adapterStatus;
+        try {
+          await syncChannelSessionFromAdapter({
+            channel,
+            provider,
+            sessionName,
+            adapterStatus: statusForSync,
+            qr: forceStaleSync || missingSession ? null : qr,
+            error: null,
+            source: forceStaleSync ? 'session_monitor_stale' : 'session_monitor',
+          });
+        } catch {
+          /* sync best-effort */
+        }
+      }
+
+      const snapToStore =
+        forceStaleSync || missingSession
+          ? { status: 'OFFLINE', qrKey: '', error: null, provider }
+          : nextSnap;
+      lastMonitorSnapshot.set(String(channel.id), snapToStore);
+
       if (!needsRecovery(session?.status)) {
         registerAttempt(provider, sessionName, true);
         continue;
@@ -177,6 +253,25 @@ export async function checkSessions() {
         provider,
         sessionName,
         error: err?.message || String(err),
+      });
+      try {
+        await syncChannelSessionFromAdapter({
+          channel,
+          provider,
+          sessionName,
+          adapterStatus: 'OFFLINE',
+          qr: null,
+          error: err?.message || String(err),
+          source: 'session_monitor_error',
+        });
+      } catch {
+        /* ignore */
+      }
+      lastMonitorSnapshot.set(String(channel.id), {
+        status: 'OFFLINE',
+        qrKey: '',
+        error: err?.message || String(err),
+        provider,
       });
     }
   }

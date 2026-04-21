@@ -151,9 +151,17 @@ export async function transitionEvolutionChannelConnection(p) {
   /** @type {Record<string, unknown>} */
   const data = { ...patch, status: legacy, connection_status: next };
 
+  const now = new Date();
+  if (data.last_seen_at === undefined) data.last_seen_at = now;
+
   if (legacy === 'active' && next === CONNECTION.CONNECTED) {
-    if (data.connected_at === undefined) data.connected_at = new Date();
+    if (data.connected_at === undefined) data.connected_at = now;
     if (data.last_error === undefined) data.last_error = null;
+    if (data.disconnected_at === undefined) data.disconnected_at = null;
+  }
+
+  if (next === CONNECTION.DISCONNECTED) {
+    if (data.disconnected_at === undefined) data.disconnected_at = now;
   }
 
   const updated = await channelRepo.updateConnection(channelId, tenantId, data);

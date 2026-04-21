@@ -31,6 +31,23 @@ import * as tenantLimits from '../services/tenantLimits.service.js';
 import { sendTenantPlanLimit } from '../utils/tenantPlanLimitHttp.js';
 import { assertTenantFeature, TenantFeatureBlockedError } from '../services/tenantFeatures.service.js';
 import { sendTenantFeatureForbidden } from '../utils/tenantFeatureHttp.js';
+import { publishChannelSessionAfterPersist } from '../services/channelSessionRealtimeSync.service.js';
+
+async function publishQrRealtimeSync(channelId, tenantId, providerLc, sessionName, qrRaw, source, socketExtras = {}) {
+  if (!qrRaw) return;
+  const fresh = await channelRepo.findById(channelId, tenantId);
+  if (!fresh) return;
+  publishChannelSessionAfterPersist({
+    channel: fresh,
+    provider: providerLc,
+    sessionName,
+    connectionStatus: fresh.connection_status,
+    evolutionRaw: 'qr',
+    qr: qrRaw,
+    source,
+    socketExtras,
+  });
+}
 
 async function getChannelFromReq(req, res) {
   const tenantId = req.tenantId || req.user?.tenantId;
@@ -332,9 +349,24 @@ export async function getQrCode(req, res) {
       });
     }
     if (ensured?.status === 'QR' && ensured?.qr) {
+      const fmt = String(ensured.qr).startsWith('data:image') ? 'image' : 'ascii';
+      await publishQrRealtimeSync(
+        channel.id,
+        channel.tenant_id,
+        String(ensured.providerUsed || provider || '').toLowerCase(),
+        sessionName,
+        ensured.qr,
+        'ensure_session_qr',
+        {
+          format: fmt,
+          qrCode: fmt === 'image' ? ensured.qr : null,
+          qrAscii: fmt === 'ascii' ? ensured.qr : null,
+          connected: false,
+        },
+      );
       return res.status(200).json({
         success: true,
-        format: String(ensured.qr).startsWith('data:image') ? 'image' : 'ascii',
+        format: fmt,
         qr: ensured.qr,
         qrCode: ensured.qr,
         qrcode: ensured.qr,
@@ -350,22 +382,33 @@ export async function getQrCode(req, res) {
     const socketPayload = {
       channelId: channel.id,
       tenantId: channel.tenant_id,
-      status: 'PENDING',
+      sessionName,
+      provider: providerLc,
+      status: 'QR_READY',
       format: result.format,
       qr: result.qr,
       qrCode: result.format === 'image' ? result.qr : null,
       qrAscii: result.format === 'ascii' ? result.qr : null,
       connected: false,
       correlationId: result.correlationId ?? cid,
+      timestamp: new Date().toISOString(),
       ...pickUnifiedQrTransportFields(result),
     };
 
     if (providerLc === 'waha') {
       const wahaSocket = buildWahaQrcodeSocketPayload(channel, result, cid);
-      emitChannelSocketEvent('channel:qr', wahaSocket);
       console.log('[CHANNEL SOCKET] channel:qr (waha)', {
         id: channel.id,
         state: wahaSocket.state,
+      });
+      await publishQrRealtimeSync(channel.id, channel.tenant_id, providerLc, sessionName, result.qr, 'http_get_qrcode', {
+        state: wahaSocket.state,
+        format: wahaSocket.format,
+        qrAscii: wahaSocket.qrAscii,
+        qrCode: wahaSocket.qrCode,
+        message: wahaSocket.message,
+        correlationId: wahaSocket.correlationId,
+        connected: wahaSocket.connected,
       });
       return res.status(200).json(buildWahaQrcodeJsonResponse(result, cid));
     }
@@ -391,8 +434,15 @@ export async function getQrCode(req, res) {
       status: 'PENDING',
       message: result.message ?? null,
     });
-    emitChannelSocketEvent('channel:qr', socketPayload);
     console.log('[CHANNEL SOCKET] QR emitted', { id: channel.id, tenantId: channel.tenant_id });
+    await publishQrRealtimeSync(channel.id, channel.tenant_id, providerLc, sessionName, outQr, 'http_get_qrcode', {
+      format: socketPayload.format,
+      qrAscii: socketPayload.qrAscii,
+      qrCode: socketPayload.qrCode,
+      correlationId: socketPayload.correlationId,
+      connected: socketPayload.connected,
+      ...pickUnifiedQrTransportFields(result),
+    });
   } catch (err) {
     if (err instanceof ProviderAccessError || err?.code === 'NO_ALLOWED_PROVIDER_AVAILABLE') {
       return res.status(err.httpStatus || 403).json({

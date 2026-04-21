@@ -1,4 +1,5 @@
 import { getAdapter, getProviderFallbackOrder } from '../providers/sessionAdapters/index.js';
+import { normalizeSessionStatus } from '../utils/normalizeSessionStatus.js';
 import * as channelRepository from '../repositories/channel.repository.js';
 import {
   getSessionCache,
@@ -262,6 +263,13 @@ export async function ensureSession({ provider, sessionName, channelId = null, t
           await invalidateAllCache(sessionName);
         }
         const result = await ensureViaProvider(currentProvider, sessionName);
+        logEvent({
+          event: 'SESSION_ORCHESTRATOR_CANONICAL',
+          sessionName,
+          provider: currentProvider,
+          canonicalStatus: normalizeSessionStatus(currentProvider, result?.status),
+          adapterStatus: result?.status ?? null,
+        });
         if (currentProvider !== originalProvider) {
           await invalidateAllCache(sessionName);
           await updateChannelProvider(channelId, tenantId, currentProvider);

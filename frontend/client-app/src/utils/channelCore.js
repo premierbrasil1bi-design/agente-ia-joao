@@ -15,18 +15,24 @@ export const CHANNEL_CONNECTION_STATE = {
 export function normalizeChannelStatus(status) {
   if (!status) return 'UNKNOWN';
   const u = String(status).trim().toUpperCase();
-  if (u === 'CONNECTED' || u === 'PENDING' || u === 'DISCONNECTED') return u;
+  if (u === 'CONNECTED' || u === 'PENDING' || u === 'DISCONNECTED' || u === 'ERROR') return u;
+  if (u === 'QR_READY' || u === 'CONNECTING') return 'PENDING';
+  if (u === 'FAILED') return 'ERROR';
   const s = String(status).trim().toLowerCase();
   if (['connected', 'online', 'open', 'working'].includes(s)) return 'CONNECTED';
-  if (['connecting', 'pending', 'qr', 'created', 'awaiting_connection', 'starting'].includes(s)) return 'PENDING';
-  if (['disconnected', 'closed', 'close', 'inactive', 'offline', 'error', 'unstable', 'unavailable'].includes(s)) {
+  if (['connecting', 'pending', 'qr', 'qrcode', 'qr_ready', 'created', 'awaiting_connection', 'starting'].includes(s)) {
+    return 'PENDING';
+  }
+  if (['failed'].includes(s)) return 'ERROR';
+  if (['disconnected', 'closed', 'close', 'inactive', 'offline', 'unstable', 'unavailable'].includes(s)) {
     return 'DISCONNECTED';
   }
+  if (['error'].includes(s)) return 'ERROR';
   return 'UNKNOWN';
 }
 
 export function mapChannelToConnectionState({ status, loading = false, timeout = false, error = null } = {}) {
-  if (error) return CHANNEL_CONNECTION_STATE.ERROR;
+  if (error || normalizeChannelStatus(status) === 'ERROR') return CHANNEL_CONNECTION_STATE.ERROR;
   if (timeout) return CHANNEL_CONNECTION_STATE.TIMEOUT;
   if (loading) return CHANNEL_CONNECTION_STATE.GENERATING_QR;
   const normalized = normalizeChannelStatus(status);

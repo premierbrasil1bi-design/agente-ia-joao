@@ -7,7 +7,7 @@ import { pool } from '../db/pool.js';
 import { emitChannelUpdated } from '../utils/channelRealtime.js';
 
 const CHANNEL_SELECT = `id, tenant_id, agent_id, name, type, instance, is_active AS active,
-  provider, fallback_providers, config, provider_config, external_id, connected_at, last_error, status, connection_status,
+  provider, fallback_providers, config, provider_config, external_id, connected_at, disconnected_at, last_seen_at, last_error, status, connection_status,
   created_at, updated_at`;
 
 function withProviderConfigFallback(row) {
@@ -39,7 +39,8 @@ export async function findById(id, tenantId) {
  */
 export async function findActiveChannels() {
   const { rows } = await pool.query(
-    `SELECT id, type, provider, instance, tenant_id, external_id, connection_status, status
+    `SELECT id, type, provider, instance, tenant_id, external_id, connection_status, status,
+            last_seen_at, connected_at
      FROM channels
      WHERE status = 'connected'
         OR status = 'active'
@@ -164,6 +165,16 @@ export async function updateConnection(id, tenantId, data) {
   if (data.connected_at !== undefined) {
     updates.push(`connected_at = $${pos}`);
     values.push(data.connected_at);
+    pos += 1;
+  }
+  if (data.disconnected_at !== undefined) {
+    updates.push(`disconnected_at = $${pos}`);
+    values.push(data.disconnected_at);
+    pos += 1;
+  }
+  if (data.last_seen_at !== undefined) {
+    updates.push(`last_seen_at = $${pos}`);
+    values.push(data.last_seen_at);
     pos += 1;
   }
   if (data.last_error !== undefined) {

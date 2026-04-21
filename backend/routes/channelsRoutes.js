@@ -46,8 +46,92 @@ import {
   assertCanCreateChannel,
   TenantPlanLimitBlockedError,
 } from '../services/tenantLimitsGuard.js';
+import { publishChannelSessionAfterPersist } from '../services/channelSessionRealtimeSync.service.js';
+import { ensureSession } from '../services/sessionOrchestrator.js';
+import { resolveProvider } from '../providers/resolveProvider.js';
 
 const router = Router();
+
+function logAsyncChannelSession(event, extra = {}) {
+  console.log(JSON.stringify({ event, timestamp: new Date().toISOString(), ...extra }));
+}
+
+async function persistConnectingAndPublish(channelRow, reasonText) {
+  if (!channelRow?.id || !channelRow?.tenant_id) return null;
+  const tr = await transitionEvolutionChannelConnection({
+    channelId: channelRow.id,
+    tenantId: channelRow.tenant_id,
+    channelRow,
+    nextConnectionStatus: CONNECTION.CONNECTING,
+    evolutionRaw: 'channel_create',
+    reason: reasonText,
+    source: 'user',
+    trustRemoteState: true,
+  });
+  const updated = tr?.channel || channelRow;
+  const prov = String(resolveProvider(updated) || '').toLowerCase().trim();
+  let sessionName = '';
+  try {
+    sessionName =
+      prov === 'waha'
+        ? resolveSessionName(updated)
+        : String(updated.external_id || updated.instance || updated.id || '').trim();
+  } catch {
+    /* ignore */
+  }
+  publishChannelSessionAfterPersist({
+    channel: updated,
+    provider: prov,
+    sessionName,
+    connectionStatus: updated.connection_status,
+    evolutionRaw: 'channel_create',
+    qr: null,
+    source: 'channel_create',
+  });
+  return updated;
+}
+
+function scheduleDeferredChannelSetup(channelRowSnapshot) {
+  const id = channelRowSnapshot?.id;
+  const tenantId = channelRowSnapshot?.tenant_id;
+  if (!id || !tenantId) return;
+  setImmediate(() => {
+    void (async () => {
+      logAsyncChannelSession('ASYNC_SESSION_START', { channelId: id, tenantId });
+      try {
+        let row = await channelRepo.findById(id, tenantId);
+        if (!row) return;
+        await autoProvisionChannel(row);
+        row = await channelRepo.findById(id, tenantId);
+        if (!row) return;
+        const provider = String(resolveProvider(row) || '').toLowerCase().trim();
+        if (!['waha', 'evolution'].includes(provider)) return;
+        let sessionName = '';
+        try {
+          sessionName =
+            provider === 'waha'
+              ? resolveSessionName(row)
+              : String(row.external_id || row.instance || row.id || '').trim();
+        } catch {
+          return;
+        }
+        if (!sessionName) return;
+        await ensureSession({
+          provider,
+          sessionName,
+          channelId: row.id,
+          tenantId: row.tenant_id,
+        });
+      } catch (err) {
+        logAsyncChannelSession('ASYNC_SESSION_ERROR', {
+          channelId: id,
+          tenantId,
+          error: err?.message || String(err),
+        });
+      }
+    })();
+  });
+}
 
 router.use(agentAuth);
 
@@ -654,14 +738,16 @@ router.post('/', requireActiveTenant, async (req, res) => {
         last_error: null,
       });
       invalidateTenantChannels(tenantId);
+      const rowReady = await channelRepo.findById(channel.id, tenantId);
+      await persistConnectingAndPublish(rowReady, 'user: criação canal WAHA (resposta imediata; provision assíncrono)');
       const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
-      const provisioning = await autoProvisionChannel(full);
+      scheduleDeferredChannelSetup(full);
       return res.status(200).json({
         success: true,
         channel: full,
-        nextAction: provisioning.success ? 'connect' : 'provision_instance',
+        nextAction: 'connect',
         provider: 'waha',
-        provisioning,
+        provisioning: { pending: true },
       });
     }
 
@@ -689,13 +775,13 @@ router.post('/', requireActiveTenant, async (req, res) => {
       });
       invalidateTenantChannels(tenantId);
       const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
-      const provisioning = await autoProvisionChannel(full);
+      scheduleDeferredChannelSetup(full);
       return res.status(200).json({
         success: true,
         channel: full,
         nextAction: 'connect',
         mode: 'legacy_instance',
-        provisioning,
+        provisioning: { pending: true },
       });
     }
 
@@ -732,13 +818,15 @@ router.post('/', requireActiveTenant, async (req, res) => {
     });
 
     invalidateTenantChannels(tenantId);
+    const rowEvolution = await channelRepo.findById(channel.id, tenantId);
+    await persistConnectingAndPublish(rowEvolution, 'user: criação canal Evolution SaaS (resposta imediata)');
     const full = enrichChannelForApi(await channelRepo.findById(channel.id, tenantId));
-    const provisioning = await autoProvisionChannel(full);
+    scheduleDeferredChannelSetup(rowEvolution);
     return res.status(200).json({
       success: true,
       channel: full,
-      nextAction: provisioning.success ? 'connect' : 'provision_instance',
-      provisioning,
+      nextAction: 'connect',
+      provisioning: { pending: true },
     });
   } catch (err) {
     if (err instanceof TenantPlanLimitBlockedError) {
