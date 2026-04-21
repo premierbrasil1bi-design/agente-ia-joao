@@ -38,8 +38,6 @@ services:
     image: redis:7
     container_name: saas_redis
     restart: always
-    ports:
-      - "6379:6379"
 
   # WAHA — WhatsApp HTTP API (provider=waha no OMNIA). Host 3099 evita conflito com API Node na 3000 (PM2).
   # Persistência: volume em ./waha_sessions.
